@@ -13,7 +13,7 @@ class ExternalTools:
         context: list[str] = []
         used: list[str] = []
 
-        if mode in {"coding", "site", "planejamento"}:
+        if mode in {"coding", "site", "planejamento", "documento"}:
             web_context = await self._web_search(prompt)
             if web_context:
                 used.extend(web_context["used"])

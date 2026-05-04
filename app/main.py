@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from mimetypes import guess_type
 from pathlib import Path
 
 import yaml
@@ -42,7 +43,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    public_paths = ("/static/", "/api/auth/", "/favicon.ico")
+    public_paths = ("/static/", "/api/auth/", "/docs", "/redoc", "/openapi.json", "/api/status", "/favicon.ico")
     path = request.url.path
     if path.startswith(public_paths) or path in {"/"}:
         return await call_next(request)
@@ -391,6 +392,28 @@ async def job_status(job_id: str):
     if not job:
         raise HTTPException(404, "Job nao encontrado.")
     return job.model_dump()
+
+
+@app.get("/api/artefatos/{job_id}/{filename}")
+async def baixar_artefato(job_id: str, filename: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job nao encontrado.")
+    session = await _load_session_for_owner(job.session_id, owner)
+    if not session:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if session.get("owner") and session.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    files = (job.resultado or {}).get("files", [])
+    match = next((item for item in files if item.get("name") == filename), None)
+    if not match:
+        raise HTTPException(404, "Arquivo nao encontrado.")
+    path = Path(str(match.get("path") or "")).resolve()
+    if not path.exists() or path.name != filename:
+        raise HTTPException(404, "Arquivo indisponivel.")
+    media_type = match.get("mime_type") or guess_type(filename)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @app.get("/api/agente/listar")

@@ -15,7 +15,7 @@ class ComandoRequest(BaseModel):
     imagem_base64: str | None = None
     anexos: list[AttachmentInput] = Field(default_factory=list, max_length=6)
     session_id: str | None = None
-    modo: Literal["coding", "site", "auditoria", "planejamento", "imagem"] = "coding"
+    modo: Literal["coding", "site", "auditoria", "planejamento", "imagem", "documento"] = "coding"
 
 
 class JobCreateResponse(BaseModel):

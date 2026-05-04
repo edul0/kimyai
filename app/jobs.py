@@ -7,6 +7,7 @@ from typing import Any
 
 from .agents import build_coding_prompt
 from .config import Settings
+from .document_service import DocumentService
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
 from .schemas import JobState
@@ -27,6 +28,7 @@ class JobManager:
         self.pollinations = PollinationsImageService(settings)
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
+        self.documents = DocumentService()
 
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
@@ -82,6 +84,15 @@ class JobManager:
                 self._event(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
                 result = await self.pollinations.generate(job.pedido)
                 result["tools_used"] = ["pollinations"]
+                await self._finish_job(job, result)
+                return
+
+            if job.modo == "documento":
+                self._event(job, "Kemy", "Pedido de documento detectado. Vou estruturar a entrega em DOCX e PDF.", 45)
+                draft = await self.router.generate(prompt, job.modo)
+                self._event(job, "Kemy", "Montando arquivos finais do documento.", 72)
+                result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft)
+                result["tools_used"] = list(dict.fromkeys((draft.get("tools_used") or []) + ["python-docx", "reportlab"]))
                 await self._finish_job(job, result)
                 return
 
@@ -184,6 +195,8 @@ class JobManager:
     def _resolve_mode(self, message: str, current_mode: str) -> str:
         if current_mode == "imagem":
             return "imagem"
+        if current_mode == "documento":
+            return "documento"
         if current_mode != "coding":
             return current_mode
         lowered = message.lower()
@@ -205,6 +218,25 @@ class JobManager:
         ]
         if any(marker in lowered for marker in image_markers):
             return "imagem"
+        document_markers = [
+            ".docx",
+            ".pdf",
+            "word",
+            "documento",
+            "relatorio",
+            "relatório",
+            "proposta",
+            "contrato",
+            "ata",
+            "apostila",
+            "manual",
+            "gerar pdf",
+            "gere pdf",
+            "gerar docx",
+            "gere docx",
+        ]
+        if any(marker in lowered for marker in document_markers):
+            return "documento"
         return current_mode
 
     async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,9 +36,18 @@ class Settings(BaseSettings):
     pollinations_image_model: str = Field(default="flux", alias="POLLINATIONS_IMAGE_MODEL")
     pollinations_image_size: str = Field(default="1024x1024", alias="POLLINATIONS_IMAGE_SIZE")
     pollinations_image_quality: str = Field(default="medium", alias="POLLINATIONS_IMAGE_QUALITY")
-    supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
-    supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
-    supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KIMI_SUPABASE_URL", "SUPABASE_URL"),
+    )
+    supabase_anon_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KIMI_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY"),
+    )
+    supabase_service_role_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KIMI_SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

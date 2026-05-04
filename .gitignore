@@ -21,6 +21,7 @@ logs/
 errors.txt
 progresso_extracao.json
 relatorio_otimizacao.json
+generated_documents/
 
 # Links coletados (podem conter dados sensíveis de conta)
 links_anuncios.txt

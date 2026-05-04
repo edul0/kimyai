@@ -15,6 +15,12 @@ services:
         value: true
       - key: LLM_MODE
         value: mock
+      - key: KIMI_SUPABASE_URL
+        sync: false
+      - key: KIMI_SUPABASE_ANON_KEY
+        sync: false
+      - key: KIMI_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
     
   # Adicionar Redis em Render.com dashboard manualmente
   # ou usar Redis externo (Redis Cloud, Upstash)

@@ -293,6 +293,9 @@ function formatResult(result) {
   if (extractImageSource(result)) {
     return result.raw || result.summary || "Imagem gerada.";
   }
+  if ((result.files || []).some((file) => file.download_url)) {
+    return result.summary || result.raw || "Arquivos gerados com sucesso.";
+  }
   if (result.raw) return result.raw;
   if (result.summary && result.files?.length) {
     return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n${file.content}`).join("\n\n")}`;
@@ -379,6 +382,26 @@ function appendMessage(role, text) {
 function appendResult(result, fallbackText) {
   const imageSource = extractImageSource(result) || extractImageSource({ raw: fallbackText, summary: fallbackText });
   if (!imageSource) {
+    const downloadableFiles = (result.files || []).filter((file) => file.download_url);
+    if (downloadableFiles.length) {
+      const node = document.createElement("div");
+      node.className = "message assistant";
+      node.innerHTML = `
+        <div class="image-result-card">
+          <div class="image-result-meta">
+            <strong>${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
+            <span>${escapeHtml((result.provider || "kimi") + " - " + (result.model || ""))}</span>
+          </div>
+          <div class="image-result-actions">
+            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer">${escapeHtml(file.name)}</a>`).join("")}
+          </div>
+          ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
+        </div>
+      `;
+      $("chatLog").appendChild(node);
+      node.scrollIntoView({ block: "end", behavior: "smooth" });
+      return;
+    }
     appendMessage("assistant", fallbackText);
     return;
   }

@@ -39,7 +39,13 @@ COPY . .
 
 # ─── Criar diretórios necessários ──────────────
 RUN mkdir -p conhecimento logs agentes_customizados && \
-    mkdir -p conhecimento/{brenno_prompt,diego_arquiteto,paulo_front,felipe_backend,bianca_cyber,leonardo_qa}
+    mkdir -p \
+      conhecimento/brenno_prompt \
+      conhecimento/diego_arquiteto \
+      conhecimento/paulo_front \
+      conhecimento/felipe_backend \
+      conhecimento/bianca_cyber \
+      conhecimento/leonardo_qa
 
 # ─── Health Check ─────────────────────────────
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

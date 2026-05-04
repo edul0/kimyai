@@ -22,6 +22,7 @@ class LLMRouter:
         "site": ["gemini", "groq", "cerebras", "openrouter"],
         "auditoria": ["cerebras", "groq", "gemini", "openrouter"],
         "planejamento": ["gemini", "groq", "cerebras", "openrouter"],
+        "documento": ["gemini", "groq", "cerebras", "openrouter"],
     }
 
     MODELS = {
@@ -169,6 +170,29 @@ class LLMRouter:
                 "diff": raw,
                 "tests": ["Abra o preview ao lado para validar o layout base."],
             }
+        if mode == "documento":
+            raw = (
+                "# Documento executivo\n\n"
+                "## Resumo\n"
+                "Este material foi organizado para virar um DOCX profissional e um PDF pronto para envio.\n\n"
+                "## Estrutura sugerida\n"
+                "- Capa com titulo e contexto\n"
+                "- Objetivos e escopo\n"
+                "- Conteudo principal em secoes claras\n"
+                "- Recomendacoes finais e proximos passos\n\n"
+                "## Diretrizes visuais\n"
+                "Use titulos fortes, listas objetivas, texto limpo e acabamento profissional."
+            )
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": raw,
+                "summary": "Estrutura base de documento preparada para DOCX e PDF.",
+                "files": [],
+                "diff": raw,
+                "tests": ["Gerar DOCX e PDF e validar links de download."],
+            }
         files = [
             {
                 "path": "README_IMPLEMENTACAO.md",
@@ -290,6 +314,12 @@ class LLMRouter:
         )
         if provider == "cerebras":
             base = "Voce e um auditor tecnico rapido e preciso. Responda em Markdown claro, sem JSON cru."
+        if mode == "documento":
+            return (
+                f"{base} "
+                "Se o pedido for de documento, entregue conteudo em Markdown estruturado com titulos, subtitulos, listas e texto pronto para montagem em DOCX e PDF. "
+                "Nao devolva JSON cru."
+            )
         if mode != "site":
             return base
         return (
