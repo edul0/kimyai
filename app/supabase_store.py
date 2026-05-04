@@ -61,6 +61,14 @@ class SupabaseStore:
         except Exception:
             return
 
+    async def delete_session(self, session_id: str) -> None:
+        if not self.enabled:
+            return
+        try:
+            await self._delete("sessions", f"id=eq.{session_id}")
+        except Exception:
+            return
+
     async def _insert(self, table: str, payload: dict[str, Any]) -> None:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(f"{self.url}/rest/v1/kemy.{table}", headers=self.headers(), json=payload)
@@ -75,6 +83,11 @@ class SupabaseStore:
                 headers=headers,
                 json=payload,
             )
+            response.raise_for_status()
+
+    async def _delete(self, table: str, query: str) -> None:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.delete(f"{self.url}/rest/v1/kemy.{table}?{query}", headers=self.headers())
             response.raise_for_status()
 
     async def create_auth_user(self, email: str, password: str, name: str = "") -> dict[str, Any] | None:

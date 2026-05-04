@@ -523,14 +523,26 @@ textarea {
 }
 
 .saved-session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  border-radius: 12px;
+}
+
+.saved-session-main,
+.saved-session-delete {
+  border: 0;
+  background: transparent;
+  color: var(--ink-strong);
+}
+
+.saved-session-main {
   width: 100%;
   display: grid;
   gap: 4px;
-  border: 0;
   border-radius: 12px;
   padding: 12px;
-  background: transparent;
-  color: var(--ink-strong);
   text-align: left;
 }
 
@@ -539,14 +551,31 @@ textarea {
   background: var(--accent-soft);
 }
 
-.saved-session strong {
+.saved-session-main strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.saved-session small {
+.saved-session-main small {
   color: var(--muted);
+}
+
+.saved-session-delete {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: 8px 8px 0 0;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.saved-session-delete:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
 }
 
 .conversation {

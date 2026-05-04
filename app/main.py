@@ -239,6 +239,19 @@ async def limpar_sessao(sid: str, request: Request):
     return {"status": "ok"}
 
 
+@app.delete("/api/sessao/{sid}")
+async def excluir_sessao(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    existing = storage.get_json(f"session:{sid}")
+    if not existing:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if existing.get("owner") and existing.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    storage.delete(f"session:{sid}")
+    await jobs.supabase.delete_session(sid)
+    return {"status": "ok", "session_id": sid}
+
+
 @app.post("/api/comando", response_model=JobCreateResponse)
 async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)

@@ -135,14 +135,26 @@ function renderSessions() {
   }
   $("sessionList").innerHTML = state.sessions
     .map((session) => `
-      <button class="saved-session ${session.session_id === state.sessionId ? "active" : ""}" data-session-id="${session.session_id}">
-        <strong>${escapeHtml(session.title || "Nova conversa")}</strong>
-        <small>${escapeHtml(session.preview || "Sem mensagens")}</small>
-      </button>
+      <div class="saved-session ${session.session_id === state.sessionId ? "active" : ""}">
+        <button class="saved-session-main" data-session-id="${session.session_id}">
+          <strong>${escapeHtml(session.title || "Nova conversa")}</strong>
+          <small>${escapeHtml(session.preview || "Sem mensagens")}</small>
+        </button>
+        <button class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir conversa" title="Excluir conversa">×</button>
+      </div>
     `)
     .join("");
   document.querySelectorAll("[data-session-id]").forEach((button) => {
     button.addEventListener("click", () => openSession(button.dataset.sessionId));
+  });
+  document.querySelectorAll("[data-delete-session]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const sessionId = button.dataset.deleteSession;
+      const confirmed = window.confirm("Excluir esta conversa? Esta acao remove o historico salvo.");
+      if (!confirmed) return;
+      await deleteSession(sessionId);
+    });
   });
 }
 
@@ -179,6 +191,19 @@ async function openSession(sessionId, options = {}) {
   resetProgress("Conversa carregada.");
   renderSessions();
   if (!options.stayHome) showChat();
+}
+
+async function deleteSession(sessionId) {
+  await api(`/api/sessao/${sessionId}`, { method: "DELETE" });
+  if (state.sessionId === sessionId) {
+    state.sessionId = null;
+    localStorage.removeItem("kemy.sessionId");
+    $("chatLog").innerHTML = "";
+    $("sessionTitle").textContent = "Nova conversa";
+    resetProgress("Conversa excluida.");
+    showHome();
+  }
+  await loadSessions();
 }
 
 function resetProgress(message) {
