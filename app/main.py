@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import DEFAULT_AGENTS
-from .auth import COOKIE_NAME, MAX_AGE, create_token, verify_token
+from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, verify_password, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
 from .schemas import ComandoRequest, JobCreateResponse, NovoAgente
@@ -81,8 +81,33 @@ async def status():
 async def login(payload: dict, response: Response, request: Request):
     username = str(payload.get("username", ""))
     password = str(payload.get("password", ""))
-    if username != settings.auth_user or password != settings.auth_password:
+    stored_user = find_user(storage, username)
+    valid_local = username == settings.auth_user and password == settings.auth_password
+    valid_registered = bool(stored_user and verify_password(password, stored_user.get("password_hash", "")))
+    if not (valid_local or valid_registered):
         raise HTTPException(401, "Login invalido.")
+    token = create_token(username.lower(), settings)
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=MAX_AGE,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+    )
+    return {"status": "ok", "user": username}
+
+
+@app.post("/api/auth/register")
+async def register(payload: dict, response: Response, request: Request):
+    username = str(payload.get("username", "")).strip().lower()
+    password = str(payload.get("password", ""))
+    name = str(payload.get("name", "")).strip()
+    if len(username) < 3 or len(password) < 8:
+        raise HTTPException(400, "Usuario minimo 3 caracteres e senha minimo 8.")
+    if find_user(storage, username):
+        raise HTTPException(409, "Usuario ja existe.")
+    create_user(storage, username, password, name)
     token = create_token(username, settings)
     response.set_cookie(
         COOKIE_NAME,

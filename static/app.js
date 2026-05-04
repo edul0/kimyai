@@ -2,9 +2,16 @@ const state = {
   sessionId: localStorage.getItem("kemy.sessionId"),
   poll: null,
   lastOutput: "",
+  authMode: "login",
 };
 
 const $ = (id) => document.getElementById(id);
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("kemy.theme", theme);
+  $("themeToggle").textContent = theme === "dark" ? "Claro" : "Escuro";
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -14,6 +21,18 @@ async function api(path, options = {}) {
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
+}
+
+function setAuthMode(mode) {
+  state.authMode = mode;
+  const register = mode === "register";
+  $("nameField").classList.toggle("hidden", !register);
+  $("authTitle").textContent = register ? "Criar sua conta" : "Entrar na Kemy AI";
+  $("authSubtitle").textContent = register
+    ? "Crie um acesso para salvar sessoes, historico e entregas da Kemy."
+    : "Entre no seu workspace privado para criar, revisar e preparar codigo para deploy.";
+  $("authSubmit").textContent = register ? "Criar conta" : "Entrar";
+  $("authModeBtn").textContent = register ? "Ja tenho conta" : "Criar conta";
 }
 
 async function checkAuth() {
@@ -26,17 +45,24 @@ async function checkAuth() {
   }
 }
 
-async function login(event) {
+async function submitAuth(event) {
   event.preventDefault();
   $("loginError").textContent = "";
+  const path = state.authMode === "register" ? "/api/auth/register" : "/api/auth/login";
   try {
-    await api("/api/auth/login", {
+    await api(path, {
       method: "POST",
-      body: JSON.stringify({ username: $("loginUser").value, password: $("loginPass").value }),
+      body: JSON.stringify({
+        name: $("loginName").value,
+        username: $("loginUser").value,
+        password: $("loginPass").value,
+      }),
     });
     await checkAuth();
-  } catch {
-    $("loginError").textContent = "Usuario ou senha invalidos.";
+  } catch (error) {
+    $("loginError").textContent = state.authMode === "register"
+      ? "Nao foi possivel criar a conta. Use senha com 8+ caracteres."
+      : "Usuario ou senha invalidos.";
   }
 }
 
@@ -53,8 +79,8 @@ async function loadStatus() {
   $("statusList").innerHTML = `
     <div><dt>API</dt><dd>${data.status}</dd></div>
     <div><dt>Storage</dt><dd>${data.storage}</dd></div>
+    <div><dt>Supabase</dt><dd>${data.supabase ? "ativo" : "off"}</dd></div>
     <div><dt>Modo</dt><dd>${data.free_only ? "free" : "fallback"}</dd></div>
-    <div><dt>LLM</dt><dd>${data.llm_mode}</dd></div>
   `;
   const tools = data.tools || {};
   $("toolStatus").innerHTML = Object.entries(tools)
@@ -120,7 +146,9 @@ async function runAgents() {
   state.poll = setInterval(() => pollJob(data.job_id).catch(console.error), 900);
 }
 
-$("loginForm").addEventListener("submit", login);
+$("authForm").addEventListener("submit", submitAuth);
+$("authModeBtn").addEventListener("click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
+$("themeToggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
 $("logoutBtn").addEventListener("click", () => logout().catch(console.error));
 $("runBtn").addEventListener("click", () => runAgents().catch((error) => {
   $("runBtn").disabled = false;
@@ -138,6 +166,8 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
   });
 });
 
+setTheme(localStorage.getItem("kemy.theme") || "light");
+setAuthMode("login");
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");

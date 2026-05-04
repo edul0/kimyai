@@ -7,20 +7,31 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema">Tema</button>
+
     <section id="loginView" class="login-view">
-      <form id="loginForm" class="login-card">
-        <span class="brand-mark">K</span>
-        <h1>Entrar na Kemy AI</h1>
-        <p>Acesse seu workspace de agentes para criar, revisar e preparar codigo para deploy.</p>
+      <form id="authForm" class="login-card">
+        <div class="auth-brand">
+          <span class="brand-mark">K</span>
+          <button type="button" id="authModeBtn">Criar conta</button>
+        </div>
+        <h1 id="authTitle">Entrar na Kemy AI</h1>
+        <p id="authSubtitle">Entre no seu workspace privado para criar, revisar e preparar codigo para deploy.</p>
+
+        <label id="nameField" class="hidden">
+          Nome
+          <input id="loginName" autocomplete="name" placeholder="Seu nome" />
+        </label>
         <label>
           Usuario
-          <input id="loginUser" autocomplete="username" value="admin" />
+          <input id="loginUser" autocomplete="username" placeholder="seu_usuario" />
         </label>
         <label>
           Senha
-          <input id="loginPass" type="password" autocomplete="current-password" placeholder="Sua senha" />
+          <input id="loginPass" type="password" autocomplete="current-password" placeholder="Minimo 8 caracteres" />
         </label>
-        <button type="submit">Entrar</button>
+
+        <button id="authSubmit" type="submit">Entrar</button>
         <small id="loginError"></small>
       </form>
     </section>
@@ -39,7 +50,7 @@
 
         <section class="nav-group">
           <div class="group-title">Comece rapido</div>
-          <button class="session-row active" data-prompt="Crie uma API FastAPI com autenticação, healthcheck e deploy gratuito."><span></span> Criar API</button>
+          <button class="session-row active" data-prompt="Crie uma API FastAPI com autenticacao, healthcheck e deploy gratuito."><span></span> Criar API</button>
           <button class="session-row" data-prompt="Audite este codigo contra falhas OWASP e sugira correcoes praticas."><span></span> Auditar codigo</button>
           <button class="session-row" data-prompt="Configure CI/CD no GitHub Actions para testar e publicar este projeto."><span></span> Configurar deploy</button>
           <button class="session-row" data-prompt="Gere testes automatizados para os principais endpoints e fluxos."><span></span> Gerar testes</button>

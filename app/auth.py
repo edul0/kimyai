@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import hmac
+import secrets
 import time
 from hashlib import sha256
 
 from .config import Settings
+from .storage import Storage
 
 
 COOKIE_NAME = "kemy_session"
@@ -33,9 +35,38 @@ def verify_token(token: str | None, settings: Settings) -> bool:
     try:
         padded = encoded + "=" * (-len(encoded) % 4)
         payload = base64.urlsafe_b64decode(padded.encode()).decode()
-        username, exp_raw = payload.rsplit(":", 1)
-        if username != settings.auth_user or int(exp_raw) < int(time.time()):
+        _username, exp_raw = payload.rsplit(":", 1)
+        if int(exp_raw) < int(time.time()):
             return False
         return hmac.compare_digest(signature, _sign(payload, settings.auth_secret))
     except Exception:
         return False
+
+
+def password_hash(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = sha256(f"{salt}:{password}".encode()).hexdigest()
+    return f"{salt}:{digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, digest = stored.split(":", 1)
+        return hmac.compare_digest(password_hash(password, salt).split(":", 1)[1], digest)
+    except Exception:
+        return False
+
+
+def find_user(storage: Storage, username: str) -> dict | None:
+    return storage.get_json(f"user:{username.lower()}")
+
+
+def create_user(storage: Storage, username: str, password: str, name: str = "") -> dict:
+    user = {
+        "username": username.lower(),
+        "name": name or username,
+        "password_hash": password_hash(password),
+        "created_at": int(time.time()),
+    }
+    storage.set_json(f"user:{user['username']}", user)
+    return user
