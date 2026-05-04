@@ -76,6 +76,7 @@ async def status():
         "providers": settings.configured_providers,
         "tools": settings.configured_tools,
         "fallback_routes": jobs.router.ROUTES,
+        "openrouter_free": jobs.router.openrouter_free_state,
     }
 
 

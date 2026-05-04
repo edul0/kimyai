@@ -28,11 +28,16 @@ class LLMRouter:
         "groq": "openai/gpt-oss-120b",
         "gemini": "gemini-2.5-flash",
         "cerebras": "llama3.1-70b",
-        "openrouter": "meta-llama/llama-3-70b-instruct",
+        "openrouter": "openrouter/free",
     }
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.openrouter_free_state = {
+            "available": None,
+            "message": "OpenRouter free ainda nao foi testado nesta sessao.",
+            "last_error": "",
+        }
 
     def choose(self, mode: str = "coding") -> ProviderChoice:
         for provider in self.route_for(mode):
@@ -78,9 +83,11 @@ class LLMRouter:
                     result = await self._openrouter(prompt, current, mode)
                 else:
                     continue
+                result = self._apply_provider_notice(result, provider)
                 result["fallback_chain"] = attempts + [{"provider": provider, "status": "ok"}]
                 return result
             except Exception as exc:
+                self._track_provider_failure(provider, exc)
                 attempts.append(
                     {
                         "provider": provider,
@@ -92,6 +99,7 @@ class LLMRouter:
                 continue
 
         offline = self._mock_response(prompt, mode, ProviderChoice("mock", "local-planner", "free providers exhausted"))
+        offline = self._apply_provider_notice(offline, "mock")
         offline["fallback_chain"] = attempts + [{"provider": "mock", "status": "ok"}]
         return offline
 
@@ -256,3 +264,42 @@ class LLMRouter:
             "Se o pedido for de site, landing page ou interface visual, devolva obrigatoriamente um bloco ```html``` completo e funcional, "
             "de preferencia com CSS e JS inline no mesmo arquivo para permitir live preview imediato."
         )
+
+    def _track_provider_failure(self, provider: str, exc: Exception) -> None:
+        if provider != "openrouter":
+            return
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        message = str(exc)
+        if status_code in {402, 429, 503}:
+            self.openrouter_free_state = {
+                "available": False,
+                "message": self._openrouter_failure_message(status_code),
+                "last_error": message[:240],
+            }
+
+    def _apply_provider_notice(self, result: dict[str, Any], provider: str) -> dict[str, Any]:
+        if provider == "openrouter":
+            previous = self.openrouter_free_state.get("available")
+            if previous is False:
+                notice = "Aviso de sistema: o OpenRouter gratuito voltou a responder agora."
+                result["raw"] = f"{notice}\n\n{result.get('raw', '')}".strip()
+                result["summary"] = f"{notice} {result.get('summary', '')}".strip()
+            self.openrouter_free_state = {
+                "available": True,
+                "message": "OpenRouter free ativo.",
+                "last_error": "",
+            }
+            return result
+        if self.openrouter_free_state.get("available") is False:
+            notice = self.openrouter_free_state.get("message") or "OpenRouter free indisponivel."
+            result["raw"] = f"{notice}\n\n{result.get('raw', '')}".strip()
+            result["summary"] = f"{notice} {result.get('summary', '')}".strip()
+        return result
+
+    def _openrouter_failure_message(self, status_code: int | None) -> str:
+        messages = {
+            402: "Aviso de sistema: o OpenRouter gratuito foi encerrado por falta de creditos ou saldo abaixo de zero. A Kemy segue usando as outras rotas gratuitas.",
+            429: "Aviso de sistema: o OpenRouter gratuito foi encerrado temporariamente por limite de uso. A Kemy segue com as outras rotas e tenta novamente depois.",
+            503: "Aviso de sistema: o OpenRouter gratuito ficou indisponivel agora. A Kemy continua com os outros provedores gratuitos.",
+        }
+        return messages.get(status_code, "Aviso de sistema: o OpenRouter gratuito ficou indisponivel temporariamente.")

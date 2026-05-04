@@ -46,7 +46,7 @@ class Settings(BaseSettings):
             "gemini": bool(self.gemini_api_key),
             "groq": bool(self.groq_api_key),
             "cerebras": bool(self.cerebras_api_key),
-            "openrouter": bool(self.openrouter_api_key) and not self.free_only,
+            "openrouter": bool(self.openrouter_api_key),
         }
 
     @property
