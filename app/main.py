@@ -133,11 +133,20 @@ async def me(request: Request):
 
 
 @app.post("/api/sessao/nova")
-async def nova_sessao():
+async def nova_sessao(request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     sid = str(uuid.uuid4())
+    now = utcnow()
     storage.set_json(
         f"session:{sid}",
-        {"session_id": sid, "historico": [], "created_at": utcnow(), "updated_at": utcnow()},
+        {
+            "session_id": sid,
+            "owner": owner,
+            "title": "Nova conversa",
+            "historico": [],
+            "created_at": now,
+            "updated_at": now,
+        },
         ttl=settings.session_ttl_seconds,
     )
     await jobs.supabase.insert_session(sid)
@@ -145,33 +154,88 @@ async def nova_sessao():
 
 
 @app.get("/api/sessao/{sid}/historico")
-async def historico(sid: str):
+async def historico(sid: str, request: Request):
     data = storage.get_json(f"session:{sid}")
     if not data:
         raise HTTPException(404, "Sessao nao encontrada.")
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
     return data
 
 
+@app.get("/api/sessao/listar")
+async def listar_sessoes(request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    sessions = []
+    for key in storage.keys("session:"):
+        data = storage.get_json(key)
+        if not data or (data.get("owner") and data.get("owner") != owner):
+            continue
+        history = data.get("historico", [])
+        preview = ""
+        for item in reversed(history):
+            preview = item.get("content") or item.get("usuario") or item.get("resumo") or ""
+            if preview:
+                break
+        sessions.append(
+            {
+                "session_id": data.get("session_id"),
+                "title": data.get("title") or "Nova conversa",
+                "preview": preview[:90],
+                "updated_at": data.get("updated_at", ""),
+                "created_at": data.get("created_at", ""),
+            }
+        )
+    sessions.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+    return {"sessions": sessions[:50]}
+
+
 @app.post("/api/sessao/{sid}/limpar")
-async def limpar_sessao(sid: str):
+async def limpar_sessao(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    existing = storage.get_json(f"session:{sid}", {})
+    if existing.get("owner") and existing.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    now = utcnow()
     storage.set_json(
         f"session:{sid}",
-        {"session_id": sid, "historico": [], "created_at": utcnow(), "updated_at": utcnow()},
+        {
+            "session_id": sid,
+            "owner": owner,
+            "title": existing.get("title", "Nova conversa"),
+            "historico": [],
+            "created_at": existing.get("created_at", now),
+            "updated_at": now,
+        },
         ttl=settings.session_ttl_seconds,
     )
     return {"status": "ok"}
 
 
 @app.post("/api/comando", response_model=JobCreateResponse)
-async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks):
+async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     sid = cmd.session_id or str(uuid.uuid4())
     if not storage.get_json(f"session:{sid}"):
+        now = utcnow()
         storage.set_json(
             f"session:{sid}",
-            {"session_id": sid, "historico": [], "created_at": utcnow(), "updated_at": utcnow()},
+            {
+                "session_id": sid,
+                "owner": owner,
+                "title": cmd.mensagem.strip()[:58] or "Nova conversa",
+                "historico": [],
+                "created_at": now,
+                "updated_at": now,
+            },
             ttl=settings.session_ttl_seconds,
         )
         await jobs.supabase.insert_session(sid)
+    else:
+        data = storage.get_json(f"session:{sid}")
+        if data.get("owner") and data.get("owner") != owner:
+            raise HTTPException(403, "Sessao de outro usuario.")
     job = jobs.create(sid, cmd.mensagem, cmd.modo)
     background_tasks.add_task(jobs.run, job.job_id)
     return {

@@ -78,12 +78,38 @@ def _project_context(message: str) -> str:
 
 def build_coding_prompt(message: str, mode: str, history: list[dict[str, Any]] | None = None) -> str:
     recent = history[-6:] if history else []
-    history_text = "\n".join(f"- Usuario: {h.get('usuario')}\n  Kemy: {h.get('resumo')}" for h in recent)
-    casual = len(message.split()) <= 4 and not any(word in message.lower() for word in ["codigo", "código", "api", "erro", "site", "deploy", "app"])
+    history_lines = []
+    for h in recent:
+        if h.get("role") and h.get("content"):
+            history_lines.append(f"- {h.get('role')}: {h.get('content')}")
+        else:
+            history_lines.append(f"- Usuario: {h.get('usuario')}\n  Kemy: {h.get('resumo')}")
+    history_text = "\n".join(history_lines)
+    technical_words = [
+        "codigo",
+        "código",
+        "api",
+        "erro",
+        "site",
+        "deploy",
+        "app",
+        "implemente",
+        "crie",
+        "corrija",
+        "teste",
+        "banco",
+        "supabase",
+        "github",
+        "render",
+    ]
+    casual = len(message.split()) <= 5 and not any(word in message.lower() for word in technical_words)
     return (
         "Voce e a Kemy AI, uma assistente conversacional e agencia multi-agente cloud-free focada em coding.\n"
-        "Comporte-se como chat: mantenha contexto, responda cumprimentos e perguntas simples naturalmente. "
+        "Comporte-se como chat com memoria: entenda a intencao do usuario antes de agir. "
+        "Se for conversa, responda conversa. Se for duvida, explique. Se for tarefa tecnica, planeje e execute mentalmente como agente de coding. "
         "So entregue codigo, arquivos ou patch quando o usuario pedir implementacao, correcao, arquitetura, codigo, auditoria ou deploy.\n"
+        "Classifique internamente a intencao em: conversa, pergunta, coding, pesquisa, imagem, voz, pc, deploy. "
+        "Para imagem, voz ou controle de PC, explique o que ja e possivel pela infraestrutura atual e qual ferramenta precisa ser conectada.\n"
         "Regra absoluta: responda exatamente ao pedido do usuario. Nao substitua a stack pedida por outra. "
         "Se o usuario pedir para melhorar este sistema, analise o contexto da propria Kemy abaixo e proponha patches para ela.\n"
         "Para pedido tecnico, responda em Markdown claro com diagnostico, alteracoes recomendadas, arquivos afetados, patch/codigo quando util, testes e riscos. "

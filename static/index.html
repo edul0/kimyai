@@ -3,20 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kemy AI Cloud</title>
+    <title>Kemy AI</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema">Tema</button>
+    <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema">Escuro</button>
 
     <section id="loginView" class="login-view">
       <form id="authForm" class="login-card">
         <div class="auth-brand">
-          <span class="brand-mark">K</span>
+          <span class="brand-logo">K</span>
           <button type="button" id="authModeBtn">Criar conta</button>
         </div>
-        <h1 id="authTitle">Entrar na Kemy AI</h1>
-        <p id="authSubtitle">Entre no seu workspace privado para criar, revisar e preparar codigo para deploy.</p>
+        <h1 id="authTitle">Entrar na Kemy</h1>
+        <p id="authSubtitle">Use email e senha para acessar suas conversas, tarefas e memoria do workspace.</p>
 
         <label id="nameField" class="hidden">
           Nome
@@ -36,92 +36,113 @@
       </form>
     </section>
 
-    <main id="appView" class="app-shell hidden">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-mark">K</span>
-          <div>
-            <strong>Kemy AI</strong>
-            <small>Workspace privado</small>
-          </div>
+    <main id="appView" class="app hidden">
+      <header class="home-nav">
+        <a class="nav-brand" href="/" aria-label="Kemy home">
+          <span class="brand-symbol">K</span>
+          <strong>kemy</strong>
+        </a>
+        <nav aria-label="Recursos da Kemy">
+          <button type="button" data-nav-prompt="Pesquise e explique as opcoes gratuitas para memoria, voz, imagem e controle de computador na Kemy.">Recursos</button>
+          <button type="button" data-nav-prompt="Planeje a arquitetura da Kemy como uma IA que conversa, lembra contexto e decide quando codar.">Agentes</button>
+          <button type="button" data-nav-prompt="Liste as proximas melhorias tecnicas da Kemy em ordem de impacto.">Roadmap</button>
+        </nav>
+        <div class="nav-actions">
+          <button id="systemToggle" type="button">Sistema</button>
+          <button id="logoutBtn" type="button">Sair</button>
         </div>
+      </header>
 
-        <button id="newSessionBtn" class="new-session">Nova sessao</button>
-
-        <section class="nav-group">
-          <div class="group-title">Comece rapido</div>
-          <button class="session-row active" data-prompt="Crie uma API FastAPI com autenticacao, healthcheck e deploy gratuito."><span></span> Criar API</button>
-          <button class="session-row" data-prompt="Audite este codigo contra falhas OWASP e sugira correcoes praticas."><span></span> Auditar codigo</button>
-          <button class="session-row" data-prompt="Configure CI/CD no GitHub Actions para testar e publicar este projeto."><span></span> Configurar deploy</button>
-          <button class="session-row" data-prompt="Gere testes automatizados para os principais endpoints e fluxos."><span></span> Gerar testes</button>
-        </section>
-
-        <section class="system-mini">
-          <button id="systemToggle">Sistema</button>
-          <button id="logoutBtn">Sair</button>
-        </section>
-      </aside>
-
-      <section class="workspace">
-        <header class="topbar">
-          <div class="topbar-title">
-            <h1>O que vamos construir?</h1>
-            <p>Escreva a tarefa e a Kemy escolhe as APIs e ferramentas certas para coding, pesquisa, auditoria e deploy.</p>
+      <section id="homeView" class="home-view">
+        <div class="announcement">Kemy guarda contexto, conversa e aciona agentes quando a tarefa pede codigo.</div>
+        <section class="hero-composer" aria-label="Nova tarefa">
+          <h1>O que posso fazer por voce?</h1>
+          <div class="hero-input">
+            <textarea id="homePrompt" spellcheck="true" placeholder="Atribua uma tarefa ou pergunte qualquer coisa"></textarea>
+            <div class="hero-actions">
+              <button id="homeAttachBtn" type="button" title="Anexos entram no roadmap">+</button>
+              <button id="homeRunBtn" type="button" aria-label="Enviar mensagem">Enviar</button>
+            </div>
           </div>
-          <span id="apiPill" class="api-pill">Online</span>
-        </header>
-
-        <section class="composer-card">
-          <div id="chatLog" class="chat-log">
-            <div class="message assistant">Oi. Eu sou a Kemy. Posso conversar, revisar codigo, planejar features e preparar deploy.</div>
+          <div class="suggestions" aria-label="Sugestoes">
+            <button data-home-prompt="Crie um site moderno para minha ideia e entregue os arquivos principais.">Criar site</button>
+            <button data-home-prompt="Analise este projeto e diga o que falta para ficar profissional.">Analisar codigo</button>
+            <button data-home-prompt="Planeje um sistema com memoria, voz, imagem e agentes de coding gratuitos.">Planejar IA</button>
+            <button data-home-prompt="Gere testes automatizados e checklist de deploy para este projeto.">Gerar testes</button>
+            <button data-home-prompt="Explique como a Kemy pode lembrar conversas e decidir quando codar.">Memoria</button>
           </div>
-          <textarea id="prompt" spellcheck="true" placeholder="Escreva uma mensagem para a Kemy..."></textarea>
-          <div class="composer-toolbar">
-            <select id="mode" aria-label="Modo da tarefa">
-              <option value="coding">Coding</option>
-              <option value="site">Site</option>
-              <option value="auditoria">Auditoria</option>
-              <option value="planejamento">Planejamento</option>
-            </select>
-            <button id="runBtn" class="run-button">Executar</button>
-          </div>
-        </section>
-
-        <section class="agent-card">
-          <div class="section-head">
-            <h2>Progresso</h2>
-            <span id="jobBadge">sem tarefa</span>
-          </div>
-          <div class="progress"><span id="progressBar"></span></div>
-          <ol class="timeline" id="timeline">
-            <li><span class="step-dot idle"></span><strong>Aguardando pedido</strong><small>A Kemy mostra aqui o que esta fazendo.</small></li>
-          </ol>
         </section>
       </section>
 
-      <aside class="delivery">
-        <div class="delivery-card">
-          <div class="section-head">
-            <h2>Ultima resposta</h2>
-            <button id="copyBtn" class="copy-button">Copiar</button>
+      <section id="chatView" class="chat-view hidden">
+        <aside class="task-sidebar">
+          <button id="newSessionBtn" class="new-task" type="button">Nova tarefa</button>
+          <button id="backHomeBtn" class="side-link" type="button">Inicio</button>
+          <button id="searchBtn" class="side-link" type="button">Pesquisar</button>
+          <button id="memoryBtn" class="side-link" type="button">Memoria</button>
+
+          <div class="task-head">
+            <span>Todas as tarefas</span>
+            <button id="refreshSessionsBtn" type="button" aria-label="Atualizar tarefas">Atualizar</button>
           </div>
-          <pre id="output">A resposta da Kemy aparece aqui.</pre>
-        </div>
-      </aside>
+          <div id="sessionList" class="session-list"></div>
+        </aside>
+
+        <section class="conversation">
+          <div class="conversation-head">
+            <div>
+              <span id="apiPill" class="status-pill">Online</span>
+              <h2 id="sessionTitle">Nova conversa</h2>
+            </div>
+            <div class="conversation-actions">
+              <select id="mode" aria-label="Modo da tarefa">
+                <option value="coding">Auto / Coding</option>
+                <option value="site">Site</option>
+                <option value="auditoria">Auditoria</option>
+                <option value="planejamento">Planejamento</option>
+              </select>
+              <button id="copyBtn" type="button">Copiar ultima</button>
+            </div>
+          </div>
+
+          <div id="chatLog" class="messages" aria-live="polite"></div>
+
+          <section class="agent-progress" aria-label="Progresso dos agentes">
+            <div class="progress-head">
+              <strong>Kemy</strong>
+              <span id="jobBadge">pronta</span>
+            </div>
+            <div class="progress"><span id="progressBar"></span></div>
+            <ol id="timeline" class="timeline">
+              <li><span></span><p>Aguardando sua mensagem.</p></li>
+            </ol>
+          </section>
+
+          <form id="chatForm" class="chat-composer">
+            <textarea id="prompt" spellcheck="true" placeholder="Enviar mensagem para Kemy"></textarea>
+            <div class="composer-actions">
+              <button id="plusBtn" type="button" title="Adicionar contexto">+</button>
+              <button id="voiceBtn" type="button" title="Voz entra na proxima etapa">Voz</button>
+              <button id="runBtn" type="submit" aria-label="Enviar">Enviar</button>
+            </div>
+          </form>
+        </section>
+      </section>
 
       <dialog id="systemDialog">
         <div class="dialog-head">
           <h2>Sistema</h2>
-          <button id="systemClose">Fechar</button>
+          <button id="systemClose" type="button">Fechar</button>
         </div>
         <dl id="statusList">
           <div><dt>API</dt><dd>carregando</dd></div>
           <div><dt>Storage</dt><dd>-</dd></div>
           <div><dt>Modo</dt><dd>-</dd></div>
         </dl>
-        <div class="tool-status" id="toolStatus"></div>
+        <div id="toolStatus" class="tool-status"></div>
       </dialog>
     </main>
+
     <script src="/static/app.js"></script>
   </body>
 </html>

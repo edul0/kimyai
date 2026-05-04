@@ -112,13 +112,20 @@ class JobManager:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
         answer = result.get("raw") or result.get("summary", "")
-        data.setdefault("historico", []).append(
+        now = utcnow()
+        history = data.setdefault("historico", [])
+        if not data.get("title") or data.get("title") == "Nova conversa":
+            data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
+        history.append({"ts": now, "role": "user", "content": pedido})
+        history.append(
             {
-                "ts": utcnow(),
-                "usuario": pedido,
-                "resumo": answer[:1200],
+                "ts": now,
+                "role": "assistant",
+                "content": answer[:8000],
                 "provider": result.get("provider"),
+                "model": result.get("model"),
+                "tools_used": result.get("tools_used", []),
             }
         )
-        data["updated_at"] = utcnow()
+        data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
