@@ -132,9 +132,11 @@ class JobManager:
                 "model": result.get("model"),
                 "tools_used": result.get("tools_used", []),
                 "image_url": result.get("image_url"),
+                "image_data_url": result.get("image_data_url"),
                 "result": {
                     "summary": result.get("summary"),
                     "image_url": result.get("image_url"),
+                    "image_data_url": result.get("image_data_url"),
                     "provider": result.get("provider"),
                     "model": result.get("model"),
                 },
