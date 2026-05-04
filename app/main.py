@@ -5,12 +5,13 @@ import uuid
 from pathlib import Path
 
 import yaml
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import DEFAULT_AGENTS
+from .auth import COOKIE_NAME, MAX_AGE, create_token, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
 from .schemas import ComandoRequest, JobCreateResponse, NovoAgente
@@ -36,6 +37,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    public_paths = ("/static/", "/api/auth/", "/favicon.ico")
+    path = request.url.path
+    if path.startswith(public_paths) or path in {"/"}:
+        return await call_next(request)
+    if path.startswith("/api/") and not verify_token(request.cookies.get(COOKIE_NAME), settings):
+        return JSONResponse({"detail": "Nao autenticado."}, status_code=401)
+    return await call_next(request)
+
 static_dir = Path(__file__).resolve().parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -59,8 +71,39 @@ async def status():
         "llm_mode": settings.llm_mode,
         "storage": storage.backend,
         "providers": settings.configured_providers,
+        "tools": settings.configured_tools,
         "fallback_routes": jobs.router.ROUTES,
     }
+
+
+@app.post("/api/auth/login")
+async def login(payload: dict, response: Response, request: Request):
+    username = str(payload.get("username", ""))
+    password = str(payload.get("password", ""))
+    if username != settings.auth_user or password != settings.auth_password:
+        raise HTTPException(401, "Login invalido.")
+    token = create_token(username, settings)
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=MAX_AGE,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+    )
+    return {"status": "ok", "user": username}
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie(COOKIE_NAME)
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    authenticated = verify_token(request.cookies.get(COOKIE_NAME), settings)
+    return {"authenticated": authenticated, "user": settings.auth_user if authenticated else None}
 
 
 @app.post("/api/sessao/nova")

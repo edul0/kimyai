@@ -10,6 +10,7 @@ from .config import Settings
 from .llm_router import LLMRouter
 from .schemas import JobState
 from .storage import Storage
+from .tools import ExternalTools
 
 
 def utcnow() -> str:
@@ -21,6 +22,7 @@ class JobManager:
         self.storage = storage
         self.settings = settings
         self.router = LLMRouter(settings)
+        self.tools = ExternalTools(settings)
 
     def create(self, session_id: str, message: str, mode: str) -> JobState:
         now = utcnow()
@@ -65,8 +67,14 @@ class JobManager:
             self._event(job, "Brenno", "Convertendo pedido em requisitos tecnicos.", 30)
             prompt = build_coding_prompt(job.pedido, job.modo, history)
 
-            self._event(job, "Diego", "Selecionando motor gratuito e arquitetura de entrega.", 45)
+            self._event(job, "Kemy", "Consultando ferramentas gratuitas configuradas.", 42)
+            tool_context = await self.tools.enrich(job.pedido, job.modo)
+            if tool_context.get("context"):
+                prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
+
+            self._event(job, "Diego", "Selecionando motor gratuito e arquitetura de entrega.", 55)
             result = await self.router.generate(prompt, job.modo)
+            result["tools_used"] = tool_context.get("used", [])
 
             self._event(job, "Bianca", "Aplicando checagens de seguranca e secrets.", 75)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
@@ -107,4 +115,3 @@ class JobManager:
         )
         data["updated_at"] = utcnow()
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
-

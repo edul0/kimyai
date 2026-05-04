@@ -7,96 +7,80 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="app-shell">
+    <section id="loginView" class="login-view">
+      <form id="loginForm" class="login-card">
+        <span class="brand-mark">K</span>
+        <h1>Entrar na Kemy AI</h1>
+        <p>Acesse seu workspace de agentes para criar, revisar e preparar codigo para deploy.</p>
+        <label>
+          Usuario
+          <input id="loginUser" autocomplete="username" value="admin" />
+        </label>
+        <label>
+          Senha
+          <input id="loginPass" type="password" autocomplete="current-password" placeholder="Sua senha" />
+        </label>
+        <button type="submit">Entrar</button>
+        <small id="loginError"></small>
+      </form>
+    </section>
+
+    <main id="appView" class="app-shell hidden">
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-mark">K</span>
           <div>
             <strong>Kemy AI</strong>
-            <small>Agentes para construir, auditar e implantar.</small>
+            <small>Workspace privado</small>
           </div>
         </div>
 
-        <button id="newSessionBtn" class="new-session">+ Nova sessao <span>Ctrl N</span></button>
-
-        <label class="search">
-          <span>Buscar sessoes</span>
-          <input type="search" placeholder="Buscar sessoes..." />
-        </label>
+        <button id="newSessionBtn" class="new-session">Nova sessao</button>
 
         <section class="nav-group">
-          <div class="group-title">Fluxos rapidos</div>
-          <button class="session-row active"><span></span> API FastAPI + Healthcheck <small>Agora</small></button>
-          <button class="session-row"><span></span> Integracao com Redis <small>2h</small></button>
-          <button class="session-row"><span></span> Auditoria de seguranca <small>Ontem</small></button>
-          <button class="session-row"><span></span> Setup CI/CD <small>3d</small></button>
+          <div class="group-title">Comece rapido</div>
+          <button class="session-row active" data-prompt="Crie uma API FastAPI com autenticação, healthcheck e deploy gratuito."><span></span> Criar API</button>
+          <button class="session-row" data-prompt="Audite este codigo contra falhas OWASP e sugira correcoes praticas."><span></span> Auditar codigo</button>
+          <button class="session-row" data-prompt="Configure CI/CD no GitHub Actions para testar e publicar este projeto."><span></span> Configurar deploy</button>
+          <button class="session-row" data-prompt="Gere testes automatizados para os principais endpoints e fluxos."><span></span> Gerar testes</button>
         </section>
 
-        <section class="system-card">
-          <h2>Rotas de IA</h2>
-          <div class="route-list" id="routeList">
-            <div><strong>Coding</strong><span>Groq -> Gemini -> Cerebras</span></div>
-            <div><strong>Site</strong><span>Gemini -> Groq -> Cerebras</span></div>
-            <div><strong>Auditoria</strong><span>Cerebras -> Groq -> Gemini</span></div>
-          </div>
-        </section>
-
-        <section class="system-card">
-          <h2>Ambiente</h2>
-          <dl id="statusList">
-            <div><dt>API</dt><dd>carregando</dd></div>
-            <div><dt>Storage</dt><dd>-</dd></div>
-            <div><dt>Modo</dt><dd>-</dd></div>
-          </dl>
+        <section class="system-mini">
+          <button id="systemToggle">Sistema</button>
+          <button id="logoutBtn">Sair</button>
         </section>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
           <div class="topbar-title">
-            <span class="hello">Workspace cloud</span>
-            <h1>O que vamos construir hoje?</h1>
-            <p>Descreva a ideia, cole codigo ou peca uma auditoria. A Kemy coordena os agentes e entrega arquivos, diffs e checklist.</p>
+            <h1>O que vamos construir?</h1>
+            <p>Escreva a tarefa e a Kemy escolhe as APIs e ferramentas certas para coding, pesquisa, auditoria e deploy.</p>
           </div>
-          <nav class="top-actions">
-            <a href="/docs" target="_blank" rel="noreferrer">Documentacao</a>
-            <span id="apiPill" class="api-pill">API</span>
-          </nav>
+          <span id="apiPill" class="api-pill">Online</span>
         </header>
 
         <section class="composer-card">
           <textarea id="prompt" spellcheck="true">Monte uma API FastAPI com endpoint de healthcheck, persistencia simples e checklist de deploy gratuito.</textarea>
           <div class="composer-toolbar">
-            <div class="toolbar-left">
-              <button class="tool-button" title="Anexar arquivo">Anexar</button>
-              <select id="mode" aria-label="Modo da tarefa">
-                <option value="coding">Coding</option>
-                <option value="site">Site</option>
-                <option value="auditoria">Auditoria</option>
-                <option value="planejamento">Planejamento</option>
-              </select>
-              <button class="tool-button active" title="Usar contexto">Contexto</button>
-            </div>
+            <select id="mode" aria-label="Modo da tarefa">
+              <option value="coding">Coding</option>
+              <option value="site">Site</option>
+              <option value="auditoria">Auditoria</option>
+              <option value="planejamento">Planejamento</option>
+            </select>
             <button id="runBtn" class="run-button">Executar</button>
           </div>
         </section>
 
-        <div class="quick-actions">
-          <button>Criar API REST</button>
-          <button>Auditar codigo</button>
-          <button>Configurar CI/CD</button>
-          <button>Gerar testes</button>
-          <button>Revisar PR</button>
-        </div>
-
         <section class="agent-card">
           <div class="section-head">
-            <h2>Execucao dos agentes</h2>
-            <span id="jobBadge">sem job</span>
+            <h2>Progresso</h2>
+            <span id="jobBadge">sem tarefa</span>
           </div>
           <div class="progress"><span id="progressBar"></span></div>
           <ol class="timeline" id="timeline">
-            <li><span class="step-dot idle"></span><strong>Aguardando pedido</strong><small>Os agentes aparecem aqui durante a execucao.</small></li>
+            <li><span class="step-dot idle"></span><strong>Aguardando pedido</strong><small>A Kemy mostra aqui o que esta fazendo.</small></li>
           </ol>
         </section>
       </section>
@@ -105,25 +89,24 @@
         <div class="delivery-card">
           <div class="section-head">
             <h2>Entrega</h2>
-            <button id="copyBtn" class="copy-button">Copiar tudo</button>
+            <button id="copyBtn" class="copy-button">Copiar</button>
           </div>
-
-          <div class="file-grid" id="fileGrid">
-            <article><strong>README.md</strong><small>Plano inicial</small></article>
-            <article><strong>main.py</strong><small>API FastAPI</small></article>
-            <article><strong>tests.py</strong><small>Testes sugeridos</small></article>
-            <article><strong>deploy.md</strong><small>Checklist</small></article>
-          </div>
-
-          <div class="output-block">
-            <div class="block-head">
-              <span>Resultado principal</span>
-              <button id="compactBtn">JSON</button>
-            </div>
-            <pre id="output">A resposta estruturada dos agentes aparece aqui.</pre>
-          </div>
+          <pre id="output">A resposta da Kemy aparece aqui.</pre>
         </div>
       </aside>
+
+      <dialog id="systemDialog">
+        <div class="dialog-head">
+          <h2>Sistema</h2>
+          <button id="systemClose">Fechar</button>
+        </div>
+        <dl id="statusList">
+          <div><dt>API</dt><dd>carregando</dd></div>
+          <div><dt>Storage</dt><dd>-</dd></div>
+          <div><dt>Modo</dt><dd>-</dd></div>
+        </dl>
+        <div class="tool-status" id="toolStatus"></div>
+      </dialog>
     </main>
     <script src="/static/app.js"></script>
   </body>

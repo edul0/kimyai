@@ -17,11 +17,19 @@ class Settings(BaseSettings):
     max_prompt_chars: int = Field(default=12000, alias="MAX_PROMPT_CHARS")
     default_model: str = Field(default="groq/openai/gpt-oss-120b", alias="DEFAULT_MODEL")
     llm_mode: Literal["mock", "providers"] = Field(default="mock", alias="LLM_MODE")
+    auth_user: str = Field(default="admin", alias="KEMY_AUTH_USER")
+    auth_password: str = Field(default="kemy-ai", alias="KEMY_AUTH_PASSWORD")
+    auth_secret: str = Field(default="change-this-secret", alias="KEMY_AUTH_SECRET")
 
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     cerebras_api_key: str | None = Field(default=None, alias="CEREBRAS_API_KEY")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
+    serper_api_key: str | None = Field(default=None, alias="SERPER_API_KEY")
+    e2b_api_key: str | None = Field(default=None, alias="E2B_API_KEY")
+    browserless_api_key: str | None = Field(default=None, alias="BROWSERLESS_API_KEY")
+    browserless_url: str | None = Field(default=None, alias="BROWSERLESS_URL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -38,8 +46,16 @@ class Settings(BaseSettings):
             "openrouter": bool(self.openrouter_api_key) and not self.free_only,
         }
 
+    @property
+    def configured_tools(self) -> dict[str, bool]:
+        return {
+            "tavily": bool(self.tavily_api_key),
+            "serper": bool(self.serper_api_key),
+            "e2b": bool(self.e2b_api_key),
+            "browserless": bool(self.browserless_api_key or self.browserless_url),
+        }
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
