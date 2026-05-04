@@ -29,7 +29,7 @@ class PollinationsImageService:
             "prompt": clean_prompt,
             "size": self.settings.pollinations_image_size,
             "quality": self.settings.pollinations_image_quality,
-            "response_format": "url",
+            "response_format": "b64_json",
         }
 
         async with httpx.AsyncClient(timeout=120) as client:
@@ -43,15 +43,19 @@ class PollinationsImageService:
             response.raise_for_status()
             data = response.json()
 
-        image_url = ((data.get("data") or [{}])[0]).get("url")
-        if not image_url:
-            raise RuntimeError("Pollinations nao retornou URL de imagem.")
+        image_payload = (data.get("data") or [{}])[0]
+        image_b64 = image_payload.get("b64_json")
+        image_url = image_payload.get("url")
+        if not image_b64 and not image_url:
+            raise RuntimeError("Pollinations nao retornou imagem utilizavel.")
+
+        image_data_url = f"data:image/png;base64,{image_b64}" if image_b64 else None
 
         auth_mode = "key" if self.settings.pollinations_api_key else "anon"
         summary = f'Imagem gerada para: "{clean_prompt}"'
-        raw = f"{summary}\n\nURL: {image_url}"
+        raw = f"{summary}\n\nImagem pronta para preview na conversa."
         if auth_mode == "anon":
-            raw = f"{summary}\n\nGerada em modo gratuito anonimo.\nURL: {image_url}"
+            raw = f"{summary}\n\nGerada em modo gratuito anonimo e pronta para preview."
 
         return {
             "provider": "pollinations",
@@ -59,6 +63,7 @@ class PollinationsImageService:
             "summary": summary,
             "raw": raw,
             "image_url": image_url,
+            "image_data_url": image_data_url,
             "prompt": clean_prompt,
             "auth_mode": auth_mode,
             "files": [],
