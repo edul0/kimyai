@@ -33,14 +33,16 @@ class JobManager:
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
         normalized = attachments or []
+        pedido = self._compose_request(message, normalized)[: self.settings.max_prompt_chars]
+        effective_mode = self._resolve_mode(pedido, mode)
         job = JobState(
             job_id=str(uuid.uuid4()),
             session_id=session_id,
             status="queued",
             etapa="Recebido na fila cloud",
             progresso=5,
-            pedido=self._compose_request(message, normalized)[: self.settings.max_prompt_chars],
-            modo=mode,
+            pedido=pedido,
+            modo=effective_mode,
             created_at=now,
             updated_at=now,
         )

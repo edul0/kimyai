@@ -344,6 +344,36 @@ async function ensureSession() {
   }
 }
 
+function resolveRequestedMode(text) {
+  const selectedMode = $("mode").value;
+  if (selectedMode !== "coding") return selectedMode;
+  const lowered = String(text || "").toLowerCase();
+  const documentMarkers = [
+    ".docx",
+    ".pdf",
+    ".md",
+    "markdown",
+    "word",
+    "documento",
+    "relatorio",
+    "relatório",
+    "proposta",
+    "contrato",
+    "gerar pdf",
+    "gere pdf",
+    "gerar docx",
+    "gere docx",
+    "converter para pdf",
+    "converta para pdf",
+    "transformar em pdf",
+    "transforme em pdf",
+    "gerar arquivo",
+    "gere um arquivo",
+  ];
+  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  return selectedMode;
+}
+
 async function runAgents(prompt, source = "chat") {
   const text = (prompt || "").trim();
   if (!text) return;
@@ -362,17 +392,18 @@ async function runAgents(prompt, source = "chat") {
   $("timeline").innerHTML = `<li><span></span><p>Mensagem recebida. A Kemy vai decidir se responde, pesquisa ou codifica.</p></li>`;
 
   let data;
+  const requestedMode = resolveRequestedMode(text);
   try {
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments }),
     });
   } catch (error) {
     clearPersistedSessionId();
     await ensureSession();
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments }),
     });
   }
   persistSessionId(data.session_id);
@@ -569,8 +600,6 @@ $("openSessionsBtn").addEventListener("click", async () => {
   appendMessage("assistant", "Ainda nao existe conversa salva. Crie a primeira mensagem e eu guardo o historico.");
   showChat();
 });
-$("searchBtn").addEventListener("click", () => setPromptAndMaybeRun("Pesquise contexto atualizado para minha tarefa e traga fontes e proximos passos."));
-$("memoryBtn").addEventListener("click", () => setPromptAndMaybeRun("Resuma o que voce lembra desta conversa e quais decisoes ja tomamos."));
 $("plusBtn").addEventListener("click", () => $("chatFileInput").click());
 $("homeAttachBtn").addEventListener("click", () => $("homeFileInput").click());
 $("voiceBtn").addEventListener("click", () => appendMessage("assistant", "Voz sera ligada em uma etapa propria: entrada por microfone, resposta em audio e historico salvo."));
