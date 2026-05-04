@@ -89,9 +89,11 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                 "model": metadata.get("model"),
                 "tools_used": metadata.get("tools_used", []),
                 "image_url": metadata.get("image_url"),
+                "image_data_url": metadata.get("image_data_url"),
                 "result": {
                     "summary": metadata.get("summary"),
                     "image_url": metadata.get("image_url"),
+                    "image_data_url": metadata.get("image_data_url"),
                     "provider": metadata.get("provider"),
                     "model": metadata.get("model"),
                 },
