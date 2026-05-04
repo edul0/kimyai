@@ -227,6 +227,7 @@ async function openSession(sessionId, options = {}) {
           appendResult(
             {
               image_url: item.image_url || item.result?.image_url,
+              image_data_url: item.image_data_url || item.result?.image_data_url,
               summary: item.result?.summary || item.content,
               provider: item.provider || item.result?.provider,
               model: item.model || item.result?.model,
@@ -289,7 +290,7 @@ function renderJob(job) {
 }
 
 function formatResult(result) {
-  if (extractImageUrl(result)) {
+  if (extractImageSource(result)) {
     return result.raw || result.summary || "Imagem gerada.";
   }
   if (result.raw) return result.raw;
@@ -376,8 +377,8 @@ function appendMessage(role, text) {
 }
 
 function appendResult(result, fallbackText) {
-  const imageUrl = extractImageUrl(result) || extractImageUrl({ raw: fallbackText, summary: fallbackText });
-  if (!imageUrl) {
+  const imageSource = extractImageSource(result) || extractImageSource({ raw: fallbackText, summary: fallbackText });
+  if (!imageSource) {
     appendMessage("assistant", fallbackText);
     return;
   }
@@ -389,15 +390,19 @@ function appendResult(result, fallbackText) {
         <strong>${escapeHtml(result.summary || "Imagem gerada")}</strong>
         <span>${escapeHtml((result.provider || "pollinations") + " - " + (result.model || ""))}</span>
       </div>
-      <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
+      <img src="${escapeHtml(imageSource)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
       <div class="image-result-actions">
-        <a href="${escapeHtml(imageUrl)}" target="_blank" rel="noreferrer">Abrir imagem</a>
+        <a href="${escapeHtml(imageSource)}" target="_blank" rel="noreferrer">Abrir imagem</a>
       </div>
       ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
     </div>
   `;
   $("chatLog").appendChild(node);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+function extractImageSource(result) {
+  return result?.image_data_url || result?.result?.image_data_url || extractImageUrl(result);
 }
 
 function extractImageUrl(result) {
