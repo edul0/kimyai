@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=604800, alias="SESSION_TTL_SECONDS")
     max_prompt_chars: int = Field(default=12000, alias="MAX_PROMPT_CHARS")
     default_model: str = Field(default="groq/openai/gpt-oss-120b", alias="DEFAULT_MODEL")
+    gemini_primary_model: str = Field(default="gemini-2.5-pro", alias="GEMINI_PRIMARY_MODEL")
+    gemini_fallback_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_FALLBACK_MODEL")
     llm_mode: Literal["mock", "providers"] = Field(default="mock", alias="LLM_MODE")
     auth_user: str = Field(default="admin", alias="KEMY_AUTH_USER")
     auth_password: str = Field(default="kemy-ai", alias="KEMY_AUTH_PASSWORD")

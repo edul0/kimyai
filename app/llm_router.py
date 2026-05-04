@@ -26,7 +26,6 @@ class LLMRouter:
 
     MODELS = {
         "groq": "openai/gpt-oss-120b",
-        "gemini": "gemini-2.5-flash",
         "cerebras": "llama3.1-70b",
         "openrouter": "openrouter/free",
     }
@@ -36,6 +35,13 @@ class LLMRouter:
         self.openrouter_free_state = {
             "available": None,
             "message": "OpenRouter free ainda nao foi testado nesta sessao.",
+            "last_error": "",
+        }
+        self.gemini_state = {
+            "active_model": settings.gemini_primary_model,
+            "fallback_model": settings.gemini_fallback_model,
+            "using_fallback": False,
+            "message": f"Tentando {settings.gemini_primary_model} primeiro.",
             "last_error": "",
         }
 
@@ -52,6 +58,8 @@ class LLMRouter:
     def model_for(self, provider: str) -> str:
         if provider == "groq" and self.settings.default_model.startswith("groq/"):
             return self.settings.default_model.replace("groq/", "", 1)
+        if provider == "gemini":
+            return self.gemini_state["active_model"]
         return self.MODELS[provider]
 
     def reason_for(self, provider: str, mode: str) -> str:
@@ -210,8 +218,33 @@ class LLMRouter:
         from google import genai
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
-        response = client.models.generate_content(model=choice.model, contents=f"{self._system_prompt('gemini', mode)}\n\n{prompt}")
-        return {"provider": choice.name, "model": choice.model, "raw": response.text, "files": [], "diff": response.text}
+        system_prompt = f"{self._system_prompt('gemini', mode)}\n\n{prompt}"
+        try:
+            response = client.models.generate_content(model=self.settings.gemini_primary_model, contents=system_prompt)
+            self.gemini_state = {
+                "active_model": self.settings.gemini_primary_model,
+                "fallback_model": self.settings.gemini_fallback_model,
+                "using_fallback": False,
+                "message": f"Gemini usando {self.settings.gemini_primary_model}.",
+                "last_error": "",
+            }
+            return {"provider": choice.name, "model": self.settings.gemini_primary_model, "raw": response.text, "files": [], "diff": response.text}
+        except Exception as exc:
+            error_text = str(exc).lower()
+            blocked = any(marker in error_text for marker in ["not found", "permission", "quota", "unsupported", "access"])
+            if not blocked:
+                raise
+            response = client.models.generate_content(model=self.settings.gemini_fallback_model, contents=system_prompt)
+            self.gemini_state = {
+                "active_model": self.settings.gemini_fallback_model,
+                "fallback_model": self.settings.gemini_fallback_model,
+                "using_fallback": True,
+                "message": f"{self.settings.gemini_primary_model} indisponivel para esta chave; fallback ativo em {self.settings.gemini_fallback_model}.",
+                "last_error": str(exc)[:240],
+            }
+            notice = f"Aviso de sistema: {self.gemini_state['message']}"
+            text = f"{notice}\n\n{response.text}".strip()
+            return {"provider": choice.name, "model": self.settings.gemini_fallback_model, "raw": text, "files": [], "diff": text}
 
     async def _cerebras(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
         import httpx
