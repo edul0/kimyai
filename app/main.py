@@ -16,10 +16,12 @@ from .config import get_settings
 from .jobs import JobManager, utcnow
 from .schemas import ComandoRequest, JobCreateResponse, NovoAgente
 from .storage import Storage
+from .supabase_store import SupabaseStore
 
 settings = get_settings()
 storage = Storage(settings.redis_url)
 jobs = JobManager(storage, settings)
+supabase_auth = SupabaseStore(settings)
 
 app = FastAPI(
     title=settings.app_name,
@@ -84,7 +86,13 @@ async def login(payload: dict, response: Response, request: Request):
     stored_user = find_user(storage, email)
     valid_local = email == settings.auth_user and password == settings.auth_password
     valid_registered = bool(stored_user and verify_password(password, stored_user.get("password_hash", "")))
+    valid_supabase = False
     if not (valid_local or valid_registered):
+        try:
+            valid_supabase = await supabase_auth.sign_in_password(email, password)
+        except Exception:
+            valid_supabase = False
+    if not (valid_local or valid_registered or valid_supabase):
         raise HTTPException(401, "Login invalido.")
     token = create_token(email, settings)
     response.set_cookie(
@@ -105,8 +113,26 @@ async def register(payload: dict, response: Response, request: Request):
     name = str(payload.get("name", "")).strip()
     if "@" not in email or "." not in email.rsplit("@", 1)[-1] or len(password) < 8:
         raise HTTPException(400, "Email invalido ou senha menor que 8 caracteres.")
-    if find_user(storage, email):
-        raise HTTPException(409, "Email ja cadastrado.")
+    existing = find_user(storage, email)
+    if existing:
+        if verify_password(password, existing.get("password_hash", "")):
+            token = create_token(email, settings)
+            response.set_cookie(
+                COOKIE_NAME,
+                token,
+                max_age=MAX_AGE,
+                httponly=True,
+                secure=request.url.scheme == "https",
+                samesite="lax",
+            )
+            return {"status": "ok", "user": email, "message": "Conta existente acessada."}
+        raise HTTPException(409, "Email ja cadastrado. Use entrar ou recupere a senha.")
+    supabase_created = False
+    try:
+        created = await supabase_auth.create_auth_user(email, password, name)
+        supabase_created = bool(created)
+    except Exception:
+        supabase_created = False
     create_user(storage, email, password, name)
     token = create_token(email, settings)
     response.set_cookie(
@@ -117,7 +143,7 @@ async def register(payload: dict, response: Response, request: Request):
         secure=request.url.scheme == "https",
         samesite="lax",
     )
-    return {"status": "ok", "user": email}
+    return {"status": "ok", "user": email, "persistent_auth": supabase_created}
 
 
 @app.post("/api/auth/logout")

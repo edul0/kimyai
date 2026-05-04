@@ -64,10 +64,12 @@ class JobManager:
         try:
             self._event(job, "Kemy", "Lendo a conversa e o contexto.", 15)
             await asyncio.sleep(0)
-            history = self.storage.get_json(f"session:{job.session_id}", {}).get("historico", [])
+            session_data = self.storage.get_json(f"session:{job.session_id}", {})
+            history = session_data.get("historico", [])
+            memory = session_data.get("memoria", [])
 
             self._event(job, "Kemy", "Preparando resposta adequada ao pedido.", 30)
-            prompt = build_coding_prompt(job.pedido, job.modo, history)
+            prompt = build_coding_prompt(job.pedido, job.modo, history, memory)
 
             self._event(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
             tool_context = await self.tools.enrich(job.pedido, job.modo)
@@ -127,5 +129,28 @@ class JobManager:
                 "tools_used": result.get("tools_used", []),
             }
         )
+        memory = data.setdefault("memoria", [])
+        fact = self._memory_fact(pedido)
+        if fact and fact not in memory:
+            memory.append(fact)
+            data["memoria"] = memory[-20:]
         data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
+
+    def _memory_fact(self, pedido: str) -> str | None:
+        text = " ".join(pedido.split())
+        lowered = text.lower()
+        durable_markers = [
+            "quero",
+            "preciso",
+            "meu projeto",
+            "kemy",
+            "lembre",
+            "deve",
+            "tem que",
+            "não pode",
+            "nao pode",
+        ]
+        if len(text) < 18 or not any(marker in lowered for marker in durable_markers):
+            return None
+        return text[:220]

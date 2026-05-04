@@ -67,3 +67,31 @@ class SupabaseStore:
                 json=payload,
             )
             response.raise_for_status()
+
+    async def create_auth_user(self, email: str, password: str, name: str = "") -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+        payload = {
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {"name": name or email},
+        }
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(f"{self.url}/auth/v1/admin/users", headers=self.headers(), json=payload)
+            if response.status_code in {400, 409, 422} and "already" in response.text.lower():
+                return {"email": email, "exists": True}
+            response.raise_for_status()
+            return response.json()
+
+    async def sign_in_password(self, email: str, password: str) -> bool:
+        if not (self.url and self.settings.supabase_anon_key):
+            return False
+        headers = {
+            "apikey": self.settings.supabase_anon_key,
+            "Content-Type": "application/json",
+        }
+        payload = {"email": email, "password": password}
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(f"{self.url}/auth/v1/token?grant_type=password", headers=headers, json=payload)
+            return response.is_success

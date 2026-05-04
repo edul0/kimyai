@@ -7,9 +7,18 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema">Escuro</button>
+    <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema" title="Alternar tema">
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.64 5.64 4.22 4.22M19.78 19.78l-1.42-1.42M18.36 5.64l1.42-1.42M4.22 19.78l1.42-1.42" />
+        <circle cx="12" cy="12" r="4" />
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20.2 14.8A8.6 8.6 0 0 1 9.2 3.8 8.7 8.7 0 1 0 20.2 14.8Z" />
+      </svg>
+    </button>
 
     <section id="loginView" class="login-view">
+      <div class="login-shell">
       <form id="authForm" class="login-card">
         <div class="auth-brand">
           <span class="brand-logo">K</span>
@@ -34,6 +43,16 @@
         <button id="authSubmit" type="submit">Entrar</button>
         <small id="loginError"></small>
       </form>
+      <aside class="login-proof">
+        <span>Workspace inteligente</span>
+        <h2>Memoria, agentes e fallback de APIs no mesmo fluxo.</h2>
+        <ul>
+          <li>Conversa normal quando voce so pergunta.</li>
+          <li>Coding quando a tarefa exige arquitetura, codigo ou deploy.</li>
+          <li>Historico salvo por sessao para a Kemy lembrar o contexto.</li>
+        </ul>
+      </aside>
+      </div>
     </section>
 
     <main id="appView" class="app hidden">

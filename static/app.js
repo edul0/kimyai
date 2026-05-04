@@ -12,7 +12,8 @@ const $ = (id) => document.getElementById(id);
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("kemy.theme", theme);
-  $("themeToggle").textContent = theme === "dark" ? "Claro" : "Escuro";
+  $("themeToggle").setAttribute("aria-label", theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro");
+  $("themeToggle").setAttribute("title", theme === "dark" ? "Modo claro" : "Modo escuro");
 }
 
 async function api(path, options = {}) {
@@ -21,7 +22,16 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    let message = "Nao foi possivel concluir a acao.";
+    try {
+      const payload = await response.json();
+      message = payload.detail || payload.message || message;
+    } catch {
+      message = await response.text();
+    }
+    throw new Error(message);
+  }
   return response.json();
 }
 
@@ -79,9 +89,9 @@ async function submitAuth(event) {
     });
     await checkAuth();
   } catch (error) {
-    $("loginError").textContent = state.authMode === "register"
-      ? "Nao foi possivel criar a conta. Confira email e senha com 8+ caracteres."
-      : "Email ou senha invalidos.";
+    $("loginError").textContent = error.message || (state.authMode === "register"
+      ? "Nao foi possivel criar a conta."
+      : "Email ou senha invalidos.");
   }
 }
 

@@ -76,7 +76,12 @@ def _project_context(message: str) -> str:
     return "\n\n".join(chunks)
 
 
-def build_coding_prompt(message: str, mode: str, history: list[dict[str, Any]] | None = None) -> str:
+def build_coding_prompt(
+    message: str,
+    mode: str,
+    history: list[dict[str, Any]] | None = None,
+    memory: list[str] | None = None,
+) -> str:
     recent = history[-6:] if history else []
     history_lines = []
     for h in recent:
@@ -85,6 +90,7 @@ def build_coding_prompt(message: str, mode: str, history: list[dict[str, Any]] |
         else:
             history_lines.append(f"- Usuario: {h.get('usuario')}\n  Kemy: {h.get('resumo')}")
     history_text = "\n".join(history_lines)
+    memory_text = "\n".join(f"- {item}" for item in (memory or [])[-10:])
     technical_words = [
         "codigo",
         "código",
@@ -118,6 +124,7 @@ def build_coding_prompt(message: str, mode: str, history: list[dict[str, Any]] |
         "Prioridades: gratuito, rapido, nuvem, seguranca de secrets, deploy por GitHub.\n\n"
         f"Modo: {mode}\n"
         f"Conversa casual: {'sim' if casual else 'nao'}\n"
+        f"Memoria duravel desta sessao:\n{memory_text or '- sem memoria duravel ainda'}\n\n"
         f"Historico recente:\n{history_text or '- sem historico'}\n\n"
         f"[CONTEXTO DO PROJETO]\n{_project_context(message)}\n\n"
         f"Pedido do usuario:\n{message}\n"
