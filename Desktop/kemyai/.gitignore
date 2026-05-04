@@ -1,0 +1,32 @@
+# Trakyon.ia — .gitignore
+
+# Ambiente e segredos
+.env
+*.pem
+*.key
+env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Logs e dados de sessão
+logs/
+*.jsonl
+*.log
+progresso_extracao.json
+relatorio_otimizacao.json
+
+# Links coletados (podem conter dados sensíveis de conta)
+links_anuncios.txt
+
+# Perfil de browser
+perfil_robo_ml/
+
+# Node
+node_modules/
+package-lock.json

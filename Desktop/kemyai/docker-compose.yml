@@ -1,0 +1,67 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║         KEMY AI v2.0 — Docker Compose (Dev + Prod)           ║
+# ║   Local: docker-compose up                                   ║
+# ║   Prod:  docker-compose -f docker-compose.yml up -d          ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+version: '3.9'
+
+services:
+  # ─── KEMY AI API ────────────────────────────
+  kemy-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kemy-ai-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - logs:/app/logs
+      - conhecimento:/app/conhecimento
+      - agentes_customizados:/app/agentes_customizados
+    depends_on:
+      - redis
+    command: uvicorn agencia_kemy:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - kemy-network
+    restart: unless-stopped
+
+  # ─── REDIS (Cache + Session Store) ──────────
+  redis:
+    image: redis:7-alpine
+    container_name: kemy-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - kemy-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+  logs:
+    driver: local
+  conhecimento:
+    driver: local
+  agentes_customizados:
+    driver: local
+
+networks:
+  kemy-network:
+    driver: bridge

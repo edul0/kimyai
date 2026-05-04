@@ -1,0 +1,15 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║         KEMY AI — Configuração Render.com                     ║
+# ║   Conectar GitHub e Render detecta este arquivo auto          ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+services:
+  - type: web
+    name: kemy-ai
+    runtime: docker
+    region: ohio
+    plan: standard
+    healthCheckPath: /api/status
+    
+  # Adicionar Redis em Render.com dashboard manualmente
+  # ou usar Redis externo (Redis Cloud, Upstash)
