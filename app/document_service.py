@@ -45,7 +45,10 @@ class DocumentService:
         self._build_pdf(pdf_path, title, blocks, user_request)
 
         summary = "Documento organizado em DOCX e PDF gerado com sucesso."
-        raw = draft.get("raw") or draft.get("summary") or summary
+        raw = (
+            f"Arquivos gerados com sucesso: `{docx_name}` e `{pdf_name}`.\n\n"
+            "Use os links do chat para abrir ou baixar o DOCX e o PDF."
+        )
         return {
             "provider": draft.get("provider", "kimi-documento"),
             "model": draft.get("model", "python-docx+reportlab"),

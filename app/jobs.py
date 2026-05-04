@@ -144,12 +144,15 @@ class JobManager:
                 "tools_used": result.get("tools_used", []),
                 "image_url": result.get("image_url"),
                 "image_data_url": result.get("image_data_url"),
+                "files": result.get("files", []),
                 "result": {
                     "summary": result.get("summary"),
                     "image_url": result.get("image_url"),
                     "image_data_url": result.get("image_data_url"),
                     "provider": result.get("provider"),
                     "model": result.get("model"),
+                    "files": result.get("files", []),
+                    "document_title": result.get("document_title"),
                 },
             }
         )
@@ -221,6 +224,8 @@ class JobManager:
         document_markers = [
             ".docx",
             ".pdf",
+            ".md",
+            "markdown",
             "word",
             "documento",
             "relatorio",
@@ -234,6 +239,12 @@ class JobManager:
             "gere pdf",
             "gerar docx",
             "gere docx",
+            "converter para pdf",
+            "converta para pdf",
+            "transformar em pdf",
+            "transforme em pdf",
+            "gerar arquivo",
+            "gere arquivo",
         ]
         if any(marker in lowered for marker in document_markers):
             return "documento"

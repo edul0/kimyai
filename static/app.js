@@ -223,7 +223,18 @@ async function openSession(sessionId, options = {}) {
   } else {
     history.forEach((item) => {
       if (item.role && item.content) {
-        if (item.role === "assistant" && (item.image_url || item.result?.image_url || extractImageUrl(item))) {
+        if (item.role === "assistant" && ((item.files || item.result?.files || []).length || item.result?.document_title)) {
+          appendResult(
+            {
+              files: item.files || item.result?.files || [],
+              document_title: item.result?.document_title,
+              summary: item.result?.summary || item.content,
+              provider: item.provider || item.result?.provider,
+              model: item.model || item.result?.model,
+            },
+            item.content,
+          );
+        } else if (item.role === "assistant" && (item.image_url || item.result?.image_url || extractImageUrl(item))) {
           appendResult(
             {
               image_url: item.image_url || item.result?.image_url,
