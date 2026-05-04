@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -17,6 +18,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .config import Settings
+
 
 @dataclass
 class Block:
@@ -26,7 +29,8 @@ class Block:
 
 
 class DocumentService:
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.output_root = Path("generated_documents")
 
     def generate(self, session_id: str, job_id: str, user_request: str, draft: dict[str, Any]) -> dict[str, Any]:
@@ -42,7 +46,7 @@ class DocumentService:
         pdf_path = folder / pdf_name
 
         self._build_docx(docx_path, title, blocks, user_request)
-        self._build_pdf(pdf_path, title, blocks, user_request)
+        pdf_provider = self._build_pdf(pdf_path, title, blocks, user_request, session_id)
 
         summary = "Documento organizado em DOCX e PDF gerado com sucesso."
         raw = (
@@ -51,7 +55,7 @@ class DocumentService:
         )
         return {
             "provider": draft.get("provider", "kimi-documento"),
-            "model": draft.get("model", "python-docx+reportlab"),
+            "model": f"{draft.get('model', 'kimi-documento')} + {pdf_provider}",
             "summary": summary,
             "raw": raw,
             "document_title": title,
@@ -188,7 +192,19 @@ class DocumentService:
 
         doc.save(path)
 
-    def _build_pdf(self, path: Path, title: str, blocks: list[Block], user_request: str) -> None:
+    def _build_pdf(self, path: Path, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
+        html = self._build_html(title, blocks, user_request, session_id)
+        if self.settings.gotenberg_url:
+            try:
+                self._build_pdf_with_gotenberg(path, title, html)
+                return "gotenberg"
+            except Exception:
+                pass
+
+        self._build_pdf_with_reportlab(path, title, blocks, user_request)
+        return "reportlab"
+
+    def _build_pdf_with_reportlab(self, path: Path, title: str, blocks: list[Block], user_request: str) -> None:
         styles = getSampleStyleSheet()
         body = ParagraphStyle(
             "KimiBody",
@@ -268,6 +284,151 @@ class DocumentService:
 
         pdf = SimpleDocTemplate(str(path), pagesize=LETTER, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch)
         pdf.build(story)
+
+    def _build_pdf_with_gotenberg(self, path: Path, title: str, html: str) -> None:
+        base_url = (self.settings.gotenberg_url or "").rstrip("/")
+        if not base_url:
+            raise ValueError("Gotenberg URL nao configurada.")
+        headers = {"Gotenberg-Output-Filename": self._safe_filename(title, "").strip(".-") or "documento-kimi-ai"}
+        data = {
+            "printBackground": "true",
+            "generateDocumentOutline": "true",
+        }
+        files = [("files", ("index.html", html.encode("utf-8"), "text/html; charset=utf-8"))]
+        with httpx.Client(timeout=self.settings.gotenberg_timeout_seconds) as client:
+            response = client.post(f"{base_url}/forms/chromium/convert/html", headers=headers, data=data, files=files)
+            response.raise_for_status()
+        path.write_bytes(response.content)
+
+    def _build_html(self, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
+        content_parts = []
+        if user_request.strip():
+            content_parts.append(
+                f'<section class="request"><p><strong>Pedido original:</strong> {self._escape_html(" ".join(user_request.split())[:800])}</p></section>'
+            )
+        open_list: str | None = None
+        for block in blocks:
+            if block.kind in {"bullet", "numbered"}:
+                tag = "ul" if block.kind == "bullet" else "ol"
+                if open_list != tag:
+                    if open_list:
+                        content_parts.append(f"</{open_list}>")
+                    content_parts.append(f"<{tag}>")
+                    open_list = tag
+                content_parts.append(f"<li>{self._escape_html(block.text)}</li>")
+                continue
+            if open_list:
+                content_parts.append(f"</{open_list}>")
+                open_list = None
+            if block.kind == "heading":
+                level = min(max(block.level, 1), 3)
+                content_parts.append(f"<h{level}>{self._escape_html(block.text)}</h{level}>")
+            else:
+                content_parts.append(f"<p>{self._escape_html(block.text)}</p>")
+        if open_list:
+            content_parts.append(f"</{open_list}>")
+
+        generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>{self._escape_html(title)}</title>
+  <style>
+    @page {{
+      size: A4;
+      margin: 24mm 18mm 22mm 18mm;
+    }}
+    body {{
+      font-family: Arial, Helvetica, sans-serif;
+      color: #243240;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.6;
+      background: #ffffff;
+    }}
+    header {{
+      border-bottom: 1px solid #d7dde5;
+      padding-bottom: 10px;
+      margin-bottom: 24px;
+    }}
+    .eyebrow {{
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #667085;
+      font-size: 10px;
+      font-weight: 700;
+    }}
+    h1 {{
+      font-size: 28px;
+      line-height: 1.15;
+      margin: 8px 0 6px;
+      color: #0f172a;
+    }}
+    h2 {{
+      font-size: 18px;
+      margin: 24px 0 8px;
+      color: #14213d;
+    }}
+    h3 {{
+      font-size: 15px;
+      margin: 18px 0 6px;
+      color: #223b63;
+    }}
+    p {{
+      margin: 0 0 10px;
+    }}
+    .meta {{
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      border: 1px solid #d7dde5;
+      border-bottom: 0;
+      margin: 0 0 18px;
+    }}
+    .meta div {{
+      padding: 9px 10px;
+      border-bottom: 1px solid #d7dde5;
+    }}
+    .meta div:nth-child(4n+1),
+    .meta div:nth-child(4n+2) {{
+      background: #eef3f8;
+      font-weight: 700;
+    }}
+    ul, ol {{
+      margin: 0 0 12px 22px;
+      padding: 0;
+    }}
+    li {{
+      margin: 0 0 8px;
+    }}
+    .request {{
+      margin-bottom: 16px;
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="eyebrow">Kimi AI Documento</div>
+    <h1>{self._escape_html(title)}</h1>
+    <p>Entrega automatica em DOCX e PDF pelo Kimi AI.</p>
+  </header>
+  <section class="meta">
+    <div>Solicitacao</div><div>Documento gerado</div>
+    <div>Sessao</div><div>{self._escape_html(session_id)}</div>
+    <div>Gerado em</div><div>{generated_at}</div>
+  </section>
+  {''.join(content_parts)}
+</body>
+</html>"""
+
+    def _escape_html(self, value: str) -> str:
+        return (
+            str(value)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
 
     def _configure_styles(self, doc: Document) -> None:
         normal = doc.styles["Normal"]

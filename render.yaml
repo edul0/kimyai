@@ -21,6 +21,8 @@ services:
         sync: false
       - key: KIMI_SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: GOTENBERG_URL
+        sync: false
     
   # Adicionar Redis em Render.com dashboard manualmente
   # ou usar Redis externo (Redis Cloud, Upstash)

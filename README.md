@@ -84,6 +84,11 @@ Acesse:
 - `CEREBRAS_API_KEY`
 - `OPENROUTER_API_KEY`
 
+### PDF via Gotenberg
+
+- `GOTENBERG_URL`
+- `GOTENBERG_TIMEOUT_SECONDS`
+
 ### Supabase do Kimi AI
 
 Prefira estas variaveis no Render:
@@ -109,7 +114,8 @@ Para subir o schema do Kimi AI:
 2. Conecte o repositorio no Render
 3. Use o `render.yaml` da raiz
 4. Configure as secrets no painel do Render
-5. Valide `GET /api/status` e depois o fluxo de login, sessao e jobs
+5. Se quiser PDF via Gotenberg, aponte `GOTENBERG_URL` para sua instancia
+6. Valide `GET /api/status` e depois o fluxo de login, sessao e jobs
 
 ## Endpoints principais
 

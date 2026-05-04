@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     pollinations_image_model: str = Field(default="flux", alias="POLLINATIONS_IMAGE_MODEL")
     pollinations_image_size: str = Field(default="1024x1024", alias="POLLINATIONS_IMAGE_SIZE")
     pollinations_image_quality: str = Field(default="medium", alias="POLLINATIONS_IMAGE_QUALITY")
+    gotenberg_url: str | None = Field(default=None, alias="GOTENBERG_URL")
+    gotenberg_timeout_seconds: int = Field(default=90, alias="GOTENBERG_TIMEOUT_SECONDS")
     supabase_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("KIMI_SUPABASE_URL", "SUPABASE_URL"),
@@ -72,6 +74,7 @@ class Settings(BaseSettings):
             "e2b": bool(self.e2b_api_key),
             "browserless": bool(self.browserless_api_key or self.browserless_url),
             "pollinations": bool(self.pollinations_api_key),
+            "gotenberg": bool(self.gotenberg_url),
         }
 
     @property

@@ -28,7 +28,7 @@ class JobManager:
         self.pollinations = PollinationsImageService(settings)
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
-        self.documents = DocumentService()
+        self.documents = DocumentService(settings)
 
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
