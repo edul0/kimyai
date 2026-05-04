@@ -26,15 +26,16 @@ class JobManager:
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
 
-    def create(self, session_id: str, message: str, mode: str) -> JobState:
+    def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
+        normalized = attachments or []
         job = JobState(
             job_id=str(uuid.uuid4()),
             session_id=session_id,
             status="queued",
             etapa="Recebido na fila cloud",
             progresso=5,
-            pedido=message[: self.settings.max_prompt_chars],
+            pedido=self._compose_request(message, normalized)[: self.settings.max_prompt_chars],
             modo=mode,
             created_at=now,
             updated_at=now,
@@ -154,3 +155,15 @@ class JobManager:
         if len(text) < 18 or not any(marker in lowered for marker in durable_markers):
             return None
         return text[:220]
+
+    def _compose_request(self, message: str, attachments: list[dict[str, Any]]) -> str:
+        if not attachments:
+            return message
+        chunks = [message.strip(), "\n\n[ANEXOS DO USUARIO]"]
+        for item in attachments[:6]:
+            name = item.get("name", "anexo")
+            mime_type = item.get("mime_type", "text/plain")
+            kind = item.get("kind", "text")
+            content = str(item.get("content", ""))[:12000]
+            chunks.append(f"\n## {name} ({kind} | {mime_type})\n{content}")
+        return "".join(chunks)

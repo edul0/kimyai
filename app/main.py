@@ -275,7 +275,12 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
         data = storage.get_json(f"session:{sid}")
         if data.get("owner") and data.get("owner") != owner:
             raise HTTPException(403, "Sessao de outro usuario.")
-    job = jobs.create(sid, cmd.mensagem, cmd.modo)
+    job = jobs.create(
+        sid,
+        cmd.mensagem,
+        cmd.modo,
+        attachments=[item.model_dump() for item in cmd.anexos],
+    )
     background_tasks.add_task(jobs.run, job.job_id)
     return {
         "status": "queued",

@@ -5,6 +5,7 @@ const state = {
   authMode: "login",
   sessions: [],
   renderedJobs: new Set(),
+  attachments: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -36,6 +37,7 @@ async function api(path, options = {}) {
 }
 
 function showHome() {
+  hidePreview();
   $("homeView").classList.remove("hidden");
   $("chatView").classList.add("hidden");
 }
@@ -43,6 +45,19 @@ function showHome() {
 function showChat() {
   $("homeView").classList.add("hidden");
   $("chatView").classList.remove("hidden");
+}
+
+function showPreview(html) {
+  if (!html) return;
+  $("previewFrame").srcdoc = html;
+  $("previewPanel").classList.remove("hidden");
+  $("chatView").classList.add("has-preview");
+}
+
+function hidePreview() {
+  $("previewFrame").srcdoc = "";
+  $("previewPanel").classList.add("hidden");
+  $("chatView").classList.remove("has-preview");
 }
 
 function setAuthMode(mode) {
@@ -164,6 +179,7 @@ async function newSession({ openChat = false } = {}) {
   localStorage.setItem("kemy.sessionId", state.sessionId);
   $("sessionTitle").textContent = "Nova conversa";
   $("chatLog").innerHTML = "";
+  hidePreview();
   resetProgress(data.mensagem || "Nova conversa iniciada.");
   await loadSessions();
   if (openChat) showChat();
@@ -188,6 +204,10 @@ async function openSession(sessionId, options = {}) {
       if (item.resumo) appendMessage("assistant", item.resumo);
     });
   }
+  const lastAssistant = [...history].reverse().find((item) => item.role === "assistant" && item.content);
+  const previewHtml = lastAssistant ? extractPreviewHtml({}, lastAssistant.content) : "";
+  if (previewHtml) showPreview(previewHtml);
+  else hidePreview();
   resetProgress("Conversa carregada.");
   renderSessions();
   if (!options.stayHome) showChat();
@@ -223,6 +243,8 @@ function renderJob(job) {
     state.lastOutput = formatResult(job.resultado);
     appendMessage("assistant", state.lastOutput);
     state.renderedJobs.add(job.job_id);
+    const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
+    if (previewHtml) showPreview(previewHtml);
   }
   if (job.erro) {
     appendMessage("assistant", `Erro: ${job.erro}`);
@@ -276,8 +298,10 @@ async function runAgents(prompt, source = "chat") {
   $("runBtn").disabled = true;
   $("homeRunBtn").disabled = true;
   appendMessage("user", text);
+  const attachments = [...state.attachments];
   $("prompt").value = "";
   $("homePrompt").value = "";
+  clearAttachments();
   $("sessionTitle").textContent = titleFromPrompt(text);
   $("jobBadge").textContent = "enviando";
   $("progressBar").style.width = "4%";
@@ -287,7 +311,7 @@ async function runAgents(prompt, source = "chat") {
   try {
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
     });
   } catch (error) {
     state.sessionId = null;
@@ -295,7 +319,7 @@ async function runAgents(prompt, source = "chat") {
     await ensureSession();
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
     });
   }
   state.sessionId = data.session_id;
@@ -338,6 +362,80 @@ function showRunError(error) {
   appendMessage("assistant", `Erro: ${error.message}`);
 }
 
+function extractPreviewHtml(result, fallbackText = "") {
+  const files = result?.files || [];
+  const htmlFile = files.find((file) => String(file.path || "").toLowerCase().endsWith(".html"));
+  if (htmlFile?.content) return htmlFile.content;
+  const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
+  return match ? match[1].trim() : "";
+}
+
+async function handleFileSelection(fileList) {
+  const files = Array.from(fileList || []).slice(0, 6);
+  const parsed = [];
+  for (const file of files) {
+    const attachment = await readAttachment(file);
+    if (attachment) parsed.push(attachment);
+  }
+  state.attachments = parsed;
+  renderAttachments();
+}
+
+function readAttachment(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const raw = typeof reader.result === "string" ? reader.result : "";
+      const isImage = file.type.startsWith("image/");
+      const content = isImage
+        ? raw
+        : raw.slice(0, 40000);
+      resolve({
+        name: file.name,
+        mime_type: file.type || "text/plain",
+        content,
+        kind: isImage ? "image" : "text",
+      });
+    };
+    reader.onerror = () => resolve(null);
+    if (file.type.startsWith("image/")) reader.readAsDataURL(file);
+    else reader.readAsText(file);
+  });
+}
+
+function renderAttachments() {
+  const targets = [$("homeAttachments"), $("chatAttachments")];
+  for (const target of targets) {
+    if (!state.attachments.length) {
+      target.innerHTML = "";
+      target.classList.add("hidden");
+      continue;
+    }
+    target.classList.remove("hidden");
+    target.innerHTML = state.attachments
+      .map((item, index) => `
+        <span class="attachment-chip">
+          ${escapeHtml(item.name)}
+          <button type="button" data-remove-attachment="${index}" aria-label="Remover anexo">×</button>
+        </span>
+      `)
+      .join("");
+  }
+  document.querySelectorAll("[data-remove-attachment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.attachments.splice(Number(button.dataset.removeAttachment), 1);
+      renderAttachments();
+    });
+  });
+}
+
+function clearAttachments() {
+  state.attachments = [];
+  $("homeFileInput").value = "";
+  $("chatFileInput").value = "";
+  renderAttachments();
+}
+
 $("authForm").addEventListener("submit", submitAuth);
 $("authModeBtn").addEventListener("click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
 $("themeToggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
@@ -355,9 +453,12 @@ $("chatForm").addEventListener("submit", (event) => {
 $("homeRunBtn").addEventListener("click", () => runAgents($("homePrompt").value, "home").catch(showRunError));
 $("searchBtn").addEventListener("click", () => setPromptAndMaybeRun("Pesquise contexto atualizado para minha tarefa e traga fontes e proximos passos."));
 $("memoryBtn").addEventListener("click", () => setPromptAndMaybeRun("Resuma o que voce lembra desta conversa e quais decisoes ja tomamos."));
-$("plusBtn").addEventListener("click", () => appendMessage("assistant", "Anexos e acesso ao PC entram na proxima etapa com Browserless/E2B. Por enquanto cole o contexto aqui."));
-$("homeAttachBtn").addEventListener("click", () => setPromptAndMaybeRun("Quero anexar contexto ao projeto. Me diga o melhor formato para colar arquivos, imagens ou logs aqui."));
+$("plusBtn").addEventListener("click", () => $("chatFileInput").click());
+$("homeAttachBtn").addEventListener("click", () => $("homeFileInput").click());
 $("voiceBtn").addEventListener("click", () => appendMessage("assistant", "Voz sera ligada em uma etapa propria: entrada por microfone, resposta em audio e historico salvo."));
+$("closePreviewBtn").addEventListener("click", hidePreview);
+$("homeFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
+$("chatFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
 
 document.querySelectorAll("[data-home-prompt]").forEach((button) => {
   button.addEventListener("click", () => setPromptAndMaybeRun(button.dataset.homePrompt, false));

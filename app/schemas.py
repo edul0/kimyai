@@ -3,9 +3,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class AttachmentInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=180)
+    mime_type: str = Field(default="text/plain", max_length=120)
+    content: str = Field(..., min_length=1, max_length=40000)
+    kind: Literal["text", "image"] = "text"
+
+
 class ComandoRequest(BaseModel):
     mensagem: str = Field(..., min_length=1, max_length=12000)
     imagem_base64: str | None = None
+    anexos: list[AttachmentInput] = Field(default_factory=list, max_length=6)
     session_id: str | None = None
     modo: Literal["coding", "site", "auditoria", "planejamento"] = "coding"
 

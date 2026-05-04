@@ -78,6 +78,8 @@
           <h1>O que posso fazer por voce?</h1>
           <div class="hero-input">
             <textarea id="homePrompt" spellcheck="true" placeholder="Atribua uma tarefa ou pergunte qualquer coisa"></textarea>
+            <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
+            <div id="homeAttachments" class="attachment-list hidden"></div>
             <div class="hero-actions">
               <button id="homeAttachBtn" type="button" title="Anexos entram no roadmap">+</button>
               <button id="homeRunBtn" type="button" aria-label="Enviar mensagem">Enviar</button>
@@ -139,6 +141,8 @@
 
           <form id="chatForm" class="chat-composer">
             <textarea id="prompt" spellcheck="true" placeholder="Enviar mensagem para Kemy"></textarea>
+            <input id="chatFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
+            <div id="chatAttachments" class="attachment-list hidden"></div>
             <div class="composer-actions">
               <button id="plusBtn" type="button" title="Adicionar contexto">+</button>
               <button id="voiceBtn" type="button" title="Voz entra na proxima etapa">Voz</button>
@@ -146,6 +150,14 @@
             </div>
           </form>
         </section>
+
+        <aside id="previewPanel" class="preview-panel hidden">
+          <div class="preview-head">
+            <strong>Live preview</strong>
+            <button id="closePreviewBtn" type="button">Fechar</button>
+          </div>
+          <iframe id="previewFrame" title="Preview do site gerado"></iframe>
+        </aside>
       </section>
 
       <dialog id="systemDialog">

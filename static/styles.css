@@ -432,6 +432,37 @@ textarea {
   color: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.attachment-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
 .hero-actions {
   justify-content: space-between;
 }
@@ -586,6 +617,10 @@ textarea {
   background: var(--bg);
 }
 
+.chat-view.has-preview {
+  grid-template-columns: 300px minmax(0, 1fr) 420px;
+}
+
 .conversation-head {
   gap: 18px;
   padding-bottom: 24px;
@@ -736,6 +771,37 @@ textarea {
   box-shadow: var(--shadow);
 }
 
+.preview-panel {
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: calc(100vh - 52px);
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-head button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-strong);
+  padding: 8px 12px;
+}
+
+.preview-panel iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
 .chat-composer textarea {
   min-height: 56px;
   max-height: 180px;
@@ -829,6 +895,10 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  .chat-view.has-preview {
+    grid-template-columns: 1fr;
+  }
+
   .task-sidebar {
     position: static;
     height: auto;
@@ -840,6 +910,12 @@ dd {
   .conversation-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .preview-panel {
+    min-height: 420px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
   }
 }
 

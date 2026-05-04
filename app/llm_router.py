@@ -69,13 +69,13 @@ class LLMRouter:
             current = ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
             try:
                 if provider == "groq":
-                    result = await self._groq(prompt, current)
+                    result = await self._groq(prompt, current, mode)
                 elif provider == "gemini":
-                    result = await self._gemini(prompt, current)
+                    result = await self._gemini(prompt, current, mode)
                 elif provider == "cerebras":
-                    result = await self._cerebras(prompt, current)
+                    result = await self._cerebras(prompt, current, mode)
                 elif provider == "openrouter":
-                    result = await self._openrouter(prompt, current)
+                    result = await self._openrouter(prompt, current, mode)
                 else:
                     continue
                 result["fallback_chain"] = attempts + [{"provider": provider, "status": "ok"}]
@@ -109,6 +109,50 @@ class LLMRouter:
                 "diff": "",
                 "tests": [],
             }
+        if mode == "site":
+            html = (
+                "<!doctype html>\n"
+                "<html lang=\"pt-BR\">\n"
+                "<head>\n"
+                "  <meta charset=\"utf-8\" />\n"
+                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+                "  <title>Kemy Preview</title>\n"
+                "  <style>\n"
+                "    body { margin: 0; font-family: Georgia, serif; background: #f7f4ee; color: #151515; }\n"
+                "    main { min-height: 100vh; display: grid; place-items: center; padding: 48px; }\n"
+                "    section { max-width: 920px; background: white; border-radius: 28px; padding: 48px; box-shadow: 0 24px 80px rgba(0,0,0,.08); }\n"
+                "    h1 { font-size: 64px; line-height: 1; margin: 0 0 18px; }\n"
+                "    p { font: 18px/1.6 ui-sans-serif, system-ui, sans-serif; color: #4a4a4a; }\n"
+                "    button { margin-top: 18px; border: 0; border-radius: 999px; padding: 14px 22px; background: #151515; color: #fff; font-weight: 700; }\n"
+                "  </style>\n"
+                "</head>\n"
+                "<body>\n"
+                "  <main>\n"
+                "    <section>\n"
+                "      <h1>Site funcional em preview</h1>\n"
+                "      <p>Este mock local mostra como a Kemy pode devolver um HTML completo para live preview e depois refinar para estilo Manus ou Firebase Studio.</p>\n"
+                "      <button>Continuar refinando</button>\n"
+                "    </section>\n"
+                "  </main>\n"
+                "</body>\n"
+                "</html>"
+            )
+            raw = (
+                "Segue um `index.html` inicial para preview imediato.\n\n"
+                "```html\n"
+                f"{html}\n"
+                "```"
+            )
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": raw,
+                "summary": "Preview HTML inicial criado.",
+                "files": [{"path": "index.html", "language": "html", "content": html}],
+                "diff": raw,
+                "tests": ["Abra o preview ao lado para validar o layout base."],
+            }
         files = [
             {
                 "path": "README_IMPLEMENTACAO.md",
@@ -135,15 +179,11 @@ class LLMRouter:
             "security_report": "Modo mock: nenhuma chamada externa feita e nenhum segredo lido.",
         }
 
-    async def _groq(self, prompt: str, choice: ProviderChoice) -> dict[str, Any]:
+    async def _groq(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
         import httpx
 
         headers = {"Authorization": f"Bearer {self.settings.groq_api_key}"}
-        system = (
-            "Voce e um engenheiro senior de produto e coding. Responda em Markdown, nunca em JSON cru. "
-            "Nao invente preset. Nao troque FastAPI por Flask, React por Vue, ou outra stack salvo se o usuario pedir. "
-            "Entregue diagnostico, arquivos afetados, codigo/patch e testes."
-        )
+        system = self._system_prompt("groq", mode)
         payload = {
             "model": choice.model,
             "messages": [
@@ -158,21 +198,21 @@ class LLMRouter:
             content = response.json()["choices"][0]["message"]["content"]
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
 
-    async def _gemini(self, prompt: str, choice: ProviderChoice) -> dict[str, Any]:
+    async def _gemini(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
         from google import genai
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
-        response = client.models.generate_content(model=choice.model, contents=prompt)
+        response = client.models.generate_content(model=choice.model, contents=f"{self._system_prompt('gemini', mode)}\n\n{prompt}")
         return {"provider": choice.name, "model": choice.model, "raw": response.text, "files": [], "diff": response.text}
 
-    async def _cerebras(self, prompt: str, choice: ProviderChoice) -> dict[str, Any]:
+    async def _cerebras(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
         import httpx
 
         headers = {"Authorization": f"Bearer {self.settings.cerebras_api_key}"}
         payload = {
             "model": choice.model,
             "messages": [
-                {"role": "system", "content": "Voce e um auditor tecnico rapido e preciso. Responda em Markdown claro, sem JSON cru."},
+                {"role": "system", "content": self._system_prompt("cerebras", mode)},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -183,14 +223,14 @@ class LLMRouter:
             content = response.json()["choices"][0]["message"]["content"]
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
 
-    async def _openrouter(self, prompt: str, choice: ProviderChoice) -> dict[str, Any]:
+    async def _openrouter(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
         import httpx
 
         headers = {"Authorization": f"Bearer {self.settings.openrouter_api_key}"}
         payload = {
             "model": choice.model,
             "messages": [
-                {"role": "system", "content": "Voce e um agente senior focado em coding. Responda em Markdown claro, sem JSON cru."},
+                {"role": "system", "content": self._system_prompt("openrouter", mode)},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -200,3 +240,19 @@ class LLMRouter:
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
+
+    def _system_prompt(self, provider: str, mode: str) -> str:
+        base = (
+            "Voce e um engenheiro senior de produto e coding. Responda em Markdown, nunca em JSON cru. "
+            "Nao invente preset. Nao troque FastAPI por Flask, React por Vue, ou outra stack salvo se o usuario pedir. "
+            "Entregue diagnostico, arquivos afetados, codigo/patch e testes."
+        )
+        if provider == "cerebras":
+            base = "Voce e um auditor tecnico rapido e preciso. Responda em Markdown claro, sem JSON cru."
+        if mode != "site":
+            return base
+        return (
+            f"{base} "
+            "Se o pedido for de site, landing page ou interface visual, devolva obrigatoriamente um bloco ```html``` completo e funcional, "
+            "de preferencia com CSS e JS inline no mesmo arquivo para permitir live preview imediato."
+        )
