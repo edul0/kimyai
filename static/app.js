@@ -79,11 +79,18 @@ async function checkAuth() {
   if (data.authenticated) {
     await loadStatus();
     await loadSessions();
+    const latestSessionId = state.sessionId || state.sessions[0]?.session_id || null;
+    if (!state.sessionId && latestSessionId) {
+      state.sessionId = latestSessionId;
+      localStorage.setItem("kemy.sessionId", latestSessionId);
+    }
     if (state.sessionId) {
-      await openSession(state.sessionId, { stayHome: true }).catch(() => {
+      const opened = await openSession(state.sessionId, { stayHome: false }).then(() => true).catch(() => {
         state.sessionId = null;
         localStorage.removeItem("kemy.sessionId");
+        return false;
       });
+      if (opened) return;
     }
     showHome();
   }
@@ -451,6 +458,15 @@ $("chatForm").addEventListener("submit", (event) => {
   runAgents($("prompt").value, "chat").catch(showRunError);
 });
 $("homeRunBtn").addEventListener("click", () => runAgents($("homePrompt").value, "home").catch(showRunError));
+$("openSessionsBtn").addEventListener("click", async () => {
+  await loadSessions();
+  if (state.sessions[0]?.session_id) {
+    await openSession(state.sessions[0].session_id).catch(showRunError);
+    return;
+  }
+  appendMessage("assistant", "Ainda nao existe conversa salva. Crie a primeira mensagem e eu guardo o historico.");
+  showChat();
+});
 $("searchBtn").addEventListener("click", () => setPromptAndMaybeRun("Pesquise contexto atualizado para minha tarefa e traga fontes e proximos passos."));
 $("memoryBtn").addEventListener("click", () => setPromptAndMaybeRun("Resuma o que voce lembra desta conversa e quais decisoes ja tomamos."));
 $("plusBtn").addEventListener("click", () => $("chatFileInput").click());
