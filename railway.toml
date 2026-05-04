@@ -1,0 +1,15 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║         KEMY AI — Configuração Railway.app                    ║
+# ║   Conectar GitHub e Railway detecta este arquivo auto         ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Usar Docker (já temos Dockerfile)
+[build]
+builder = "dockerfile"
+
+# Start command
+[deploy]
+startCommand = "python -m uvicorn agencia_kemy:app --host 0.0.0.0 --port $PORT"
+
+# Redis service automático
+# Configurar em railway.app dashboard
