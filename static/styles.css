@@ -380,15 +380,19 @@ dialog button {
 
 .home-view {
   min-height: calc(100vh - 52px);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 80%, transparent), transparent 20%),
+    var(--bg);
 }
 
 .hero-composer {
+  width: min(1260px, 100%);
   min-height: calc(100vh - 106px);
   display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 24px;
-  padding: 44px 20px 140px;
+  align-content: start;
+  gap: 22px;
+  padding: 36px 20px 80px;
+  margin: 0 auto;
 }
 
 .home-sessions-link {
@@ -400,24 +404,127 @@ dialog button {
   font-weight: 650;
 }
 
+.hero-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.hero-copy,
+.hero-stats,
+.home-command-deck,
+.home-panel {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.hero-copy {
+  padding: 28px;
+}
+
+.eyebrow,
+.panel-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .hero-composer h1 {
   margin: 0;
   color: var(--ink-strong);
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(40px, 5.6vw, 58px);
+  font-size: clamp(38px, 5vw, 60px);
   line-height: 1.08;
   font-weight: 500;
   letter-spacing: 0;
-  text-align: center;
+  text-align: left;
+}
+
+.hero-copy p {
+  max-width: 62ch;
+  margin: 16px 0 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.hero-stats {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.hero-stats article,
+.home-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.hero-stats article {
+  padding: 14px 14px 16px;
+  border-radius: 18px;
+  background: var(--surface-2);
+}
+
+.hero-stats strong,
+.home-panel strong {
+  color: var(--ink-strong);
+  font-size: 16px;
+}
+
+.hero-stats span,
+.home-panel p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.home-command-deck {
+  padding: 18px;
+}
+
+.hero-toolbar,
+.hero-tags {
+  display: flex;
+  align-items: center;
+}
+
+.hero-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.hero-tags {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hero-tags span {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .hero-input {
-  width: min(960px, 100%);
+  width: 100%;
   min-height: 160px;
   border: 1px solid var(--line);
   border-radius: 24px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 65%, transparent), var(--surface));
   padding: 18px;
 }
 
@@ -494,13 +601,22 @@ textarea {
 .suggestions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 10px;
-  width: min(880px, 100%);
+  width: 100%;
 }
 
 .suggestions button {
-  background: var(--bg);
+  background: transparent;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.home-panel {
+  padding: 20px;
 }
 
 .chat-view {
@@ -969,6 +1085,11 @@ dd {
     flex-direction: column;
   }
 
+  .hero-intro,
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
+
   .preview-panel {
     min-height: 420px;
     border-left: 0;
@@ -997,12 +1118,16 @@ dd {
   }
 
   .hero-composer {
-    align-content: start;
     padding-top: 72px;
   }
 
   .hero-composer h1 {
     font-size: 38px;
+  }
+
+  .hero-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .hero-input {

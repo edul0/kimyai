@@ -55,6 +55,69 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+def _cache_session_payload(payload: dict) -> dict:
+    session_id = payload.get("session_id") or payload.get("id")
+    data = {
+        "session_id": session_id,
+        "owner": payload.get("owner") or payload.get("owner_email"),
+        "title": payload.get("title") or "Nova conversa",
+        "historico": payload.get("historico", []),
+        "memoria": payload.get("memoria", []),
+        "created_at": payload.get("created_at") or utcnow(),
+        "updated_at": payload.get("updated_at") or payload.get("created_at") or utcnow(),
+    }
+    storage.set_json(f"session:{session_id}", data, ttl=settings.session_ttl_seconds)
+    return data
+
+
+async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> dict | None:
+    if not owner:
+        return None
+    session = await supabase_auth.get_session(session_id, owner)
+    if not session:
+        return None
+    messages = await supabase_auth.list_messages(session_id)
+    historico = []
+    for item in messages:
+        metadata = item.get("metadata") or {}
+        historico.append(
+            {
+                "ts": item.get("created_at") or utcnow(),
+                "role": item.get("role"),
+                "content": item.get("content", ""),
+                "provider": metadata.get("provider"),
+                "model": metadata.get("model"),
+                "tools_used": metadata.get("tools_used", []),
+                "image_url": metadata.get("image_url"),
+                "result": {
+                    "summary": metadata.get("summary"),
+                    "image_url": metadata.get("image_url"),
+                    "provider": metadata.get("provider"),
+                    "model": metadata.get("model"),
+                },
+            }
+        )
+    return _cache_session_payload(
+        {
+            "session_id": session.get("id"),
+            "owner": session.get("owner_email") or owner,
+            "title": session.get("title") or "Nova conversa",
+            "historico": historico,
+            "created_at": session.get("created_at"),
+            "updated_at": session.get("updated_at"),
+        }
+    )
+
+
+async def _load_session_for_owner(session_id: str, owner: str | None) -> dict | None:
+    data = storage.get_json(f"session:{session_id}")
+    if data:
+        if data.get("owner") and owner and data.get("owner") != owner:
+            return None
+        return data
+    return await _hydrate_session_from_supabase(session_id, owner)
+
+
 @app.get("/")
 async def root_page():
     index = static_dir / "index.html"
@@ -165,8 +228,7 @@ async def nova_sessao(request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     sid = str(uuid.uuid4())
     now = utcnow()
-    storage.set_json(
-        f"session:{sid}",
+    _cache_session_payload(
         {
             "session_id": sid,
             "owner": owner,
@@ -174,19 +236,18 @@ async def nova_sessao(request: Request):
             "historico": [],
             "created_at": now,
             "updated_at": now,
-        },
-        ttl=settings.session_ttl_seconds,
+        }
     )
-    await jobs.supabase.insert_session(sid)
+    await jobs.supabase.insert_session(sid, owner_email=owner, title="Nova conversa", created_at=now, updated_at=now)
     return {"session_id": sid, "mensagem": "Kemy AI pronta para codar na nuvem."}
 
 
 @app.get("/api/sessao/{sid}/historico")
 async def historico(sid: str, request: Request):
-    data = storage.get_json(f"session:{sid}")
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    data = await _load_session_for_owner(sid, owner)
     if not data:
         raise HTTPException(404, "Sessao nao encontrada.")
-    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     if data.get("owner") and data.get("owner") != owner:
         raise HTTPException(403, "Sessao de outro usuario.")
     return data
@@ -195,7 +256,7 @@ async def historico(sid: str, request: Request):
 @app.get("/api/sessao/listar")
 async def listar_sessoes(request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    sessions = []
+    sessions_by_id = {}
     for key in storage.keys("session:"):
         data = storage.get_json(key)
         if not data or (data.get("owner") and data.get("owner") != owner):
@@ -206,28 +267,48 @@ async def listar_sessoes(request: Request):
             preview = item.get("content") or item.get("usuario") or item.get("resumo") or ""
             if preview:
                 break
-        sessions.append(
-            {
-                "session_id": data.get("session_id"),
-                "title": data.get("title") or "Nova conversa",
-                "preview": preview[:90],
-                "updated_at": data.get("updated_at", ""),
-                "created_at": data.get("created_at", ""),
-            }
-        )
-    sessions.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+        sessions_by_id[data.get("session_id")] = {
+            "session_id": data.get("session_id"),
+            "title": data.get("title") or "Nova conversa",
+            "preview": preview[:90],
+            "updated_at": data.get("updated_at", ""),
+            "created_at": data.get("created_at", ""),
+        }
+    remote_sessions = await supabase_auth.list_sessions(owner or "")
+    for session in remote_sessions:
+        session_id = session.get("id")
+        had_local = session_id in sessions_by_id
+        existing = sessions_by_id.get(session_id, {})
+        sessions_by_id[session_id] = {
+            "session_id": session_id,
+            "title": existing.get("title") or session.get("title") or "Nova conversa",
+            "preview": existing.get("preview", ""),
+            "updated_at": existing.get("updated_at") or session.get("updated_at", ""),
+            "created_at": existing.get("created_at") or session.get("created_at", ""),
+        }
+        if session_id and not had_local:
+            _cache_session_payload(
+                {
+                    "session_id": session_id,
+                    "owner": session.get("owner_email") or owner,
+                    "title": session.get("title") or "Nova conversa",
+                    "historico": [],
+                    "created_at": session.get("created_at"),
+                    "updated_at": session.get("updated_at"),
+                }
+            )
+    sessions = sorted(sessions_by_id.values(), key=lambda item: item.get("updated_at", ""), reverse=True)
     return {"sessions": sessions[:50]}
 
 
 @app.post("/api/sessao/{sid}/limpar")
 async def limpar_sessao(sid: str, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    existing = storage.get_json(f"session:{sid}", {})
+    existing = await _load_session_for_owner(sid, owner) or {}
     if existing.get("owner") and existing.get("owner") != owner:
         raise HTTPException(403, "Sessao de outro usuario.")
     now = utcnow()
-    storage.set_json(
-        f"session:{sid}",
+    _cache_session_payload(
         {
             "session_id": sid,
             "owner": owner,
@@ -235,8 +316,14 @@ async def limpar_sessao(sid: str, request: Request):
             "historico": [],
             "created_at": existing.get("created_at", now),
             "updated_at": now,
-        },
-        ttl=settings.session_ttl_seconds,
+        }
+    )
+    await jobs.supabase.insert_session(
+        sid,
+        owner_email=owner,
+        title=existing.get("title", "Nova conversa"),
+        created_at=existing.get("created_at", now),
+        updated_at=now,
     )
     return {"status": "ok"}
 
@@ -244,7 +331,7 @@ async def limpar_sessao(sid: str, request: Request):
 @app.delete("/api/sessao/{sid}")
 async def excluir_sessao(sid: str, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    existing = storage.get_json(f"session:{sid}")
+    existing = await _load_session_for_owner(sid, owner)
     if not existing:
         raise HTTPException(404, "Sessao nao encontrada.")
     if existing.get("owner") and existing.get("owner") != owner:
@@ -258,23 +345,22 @@ async def excluir_sessao(sid: str, request: Request):
 async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     sid = cmd.session_id or str(uuid.uuid4())
-    if not storage.get_json(f"session:{sid}"):
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
         now = utcnow()
-        storage.set_json(
-            f"session:{sid}",
+        title = cmd.mensagem.strip()[:58] or "Nova conversa"
+        _cache_session_payload(
             {
                 "session_id": sid,
                 "owner": owner,
-                "title": cmd.mensagem.strip()[:58] or "Nova conversa",
+                "title": title,
                 "historico": [],
                 "created_at": now,
                 "updated_at": now,
-            },
-            ttl=settings.session_ttl_seconds,
+            }
         )
-        await jobs.supabase.insert_session(sid)
+        await jobs.supabase.insert_session(sid, owner_email=owner, title=title, created_at=now, updated_at=now)
     else:
-        data = storage.get_json(f"session:{sid}")
         if data.get("owner") and data.get("owner") != owner:
             raise HTTPException(403, "Sessao de outro usuario.")
     job = jobs.create(

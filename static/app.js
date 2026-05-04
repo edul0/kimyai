@@ -1,11 +1,12 @@
 const state = {
-  sessionId: localStorage.getItem("kemy.sessionId"),
+  sessionId: null,
   poll: null,
   lastOutput: "",
   authMode: "login",
   sessions: [],
   renderedJobs: new Set(),
   attachments: [],
+  currentUser: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -15,6 +16,27 @@ function setTheme(theme) {
   localStorage.setItem("kemy.theme", theme);
   $("themeToggle").setAttribute("aria-label", theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro");
   $("themeToggle").setAttribute("title", theme === "dark" ? "Modo claro" : "Modo escuro");
+}
+
+function sessionStorageKey(user = state.currentUser) {
+  return user ? `kemy.sessionId:${user}` : null;
+}
+
+function restoreSessionIdForUser(user) {
+  const key = sessionStorageKey(user);
+  state.sessionId = key ? localStorage.getItem(key) : null;
+}
+
+function persistSessionId(sessionId) {
+  state.sessionId = sessionId;
+  const key = sessionStorageKey();
+  if (key && sessionId) localStorage.setItem(key, sessionId);
+}
+
+function clearPersistedSessionId(user = state.currentUser) {
+  const key = sessionStorageKey(user);
+  if (key) localStorage.removeItem(key);
+  state.sessionId = null;
 }
 
 async function api(path, options = {}) {
@@ -74,20 +96,20 @@ function setAuthMode(mode) {
 
 async function checkAuth() {
   const data = await api("/api/auth/me");
+  state.currentUser = data.user || null;
   $("loginView").classList.toggle("hidden", data.authenticated);
   $("appView").classList.toggle("hidden", !data.authenticated);
   if (data.authenticated) {
+    restoreSessionIdForUser(state.currentUser);
     await loadStatus();
     await loadSessions();
     const latestSessionId = state.sessionId || state.sessions[0]?.session_id || null;
     if (!state.sessionId && latestSessionId) {
-      state.sessionId = latestSessionId;
-      localStorage.setItem("kemy.sessionId", latestSessionId);
+      persistSessionId(latestSessionId);
     }
     if (state.sessionId) {
       const opened = await openSession(state.sessionId, { stayHome: false }).then(() => true).catch(() => {
-        state.sessionId = null;
-        localStorage.removeItem("kemy.sessionId");
+        clearPersistedSessionId();
         return false;
       });
       if (opened) return;
@@ -119,8 +141,7 @@ async function submitAuth(event) {
 
 async function logout() {
   await api("/api/auth/logout", { method: "POST", body: "{}" });
-  state.sessionId = null;
-  localStorage.removeItem("kemy.sessionId");
+  clearPersistedSessionId();
   $("chatLog").innerHTML = "";
   showHome();
   await checkAuth();
@@ -182,8 +203,7 @@ function renderSessions() {
 
 async function newSession({ openChat = false } = {}) {
   const data = await api("/api/sessao/nova", { method: "POST", body: "{}" });
-  state.sessionId = data.session_id;
-  localStorage.setItem("kemy.sessionId", state.sessionId);
+  persistSessionId(data.session_id);
   $("sessionTitle").textContent = "Nova conversa";
   $("chatLog").innerHTML = "";
   hidePreview();
@@ -194,8 +214,7 @@ async function newSession({ openChat = false } = {}) {
 
 async function openSession(sessionId, options = {}) {
   const data = await api(`/api/sessao/${sessionId}/historico`);
-  state.sessionId = sessionId;
-  localStorage.setItem("kemy.sessionId", sessionId);
+  persistSessionId(sessionId);
   $("sessionTitle").textContent = data.title || "Nova conversa";
   $("chatLog").innerHTML = "";
   const history = data.historico || [];
@@ -204,7 +223,7 @@ async function openSession(sessionId, options = {}) {
   } else {
     history.forEach((item) => {
       if (item.role && item.content) {
-        if (item.role === "assistant" && (item.image_url || item.result?.image_url)) {
+        if (item.role === "assistant" && (item.image_url || item.result?.image_url || extractImageUrl(item))) {
           appendResult(
             {
               image_url: item.image_url || item.result?.image_url,
@@ -235,8 +254,7 @@ async function openSession(sessionId, options = {}) {
 async function deleteSession(sessionId) {
   await api(`/api/sessao/${sessionId}`, { method: "DELETE" });
   if (state.sessionId === sessionId) {
-    state.sessionId = null;
-    localStorage.removeItem("kemy.sessionId");
+    clearPersistedSessionId();
     $("chatLog").innerHTML = "";
     $("sessionTitle").textContent = "Nova conversa";
     resetProgress("Conversa excluida.");
@@ -271,7 +289,7 @@ function renderJob(job) {
 }
 
 function formatResult(result) {
-  if (result.image_url) {
+  if (extractImageUrl(result)) {
     return result.raw || result.summary || "Imagem gerada.";
   }
   if (result.raw) return result.raw;
@@ -306,8 +324,7 @@ async function ensureSession() {
   try {
     await api(`/api/sessao/${state.sessionId}/historico`);
   } catch {
-    state.sessionId = null;
-    localStorage.removeItem("kemy.sessionId");
+    clearPersistedSessionId();
     await newSession();
   }
 }
@@ -336,16 +353,14 @@ async function runAgents(prompt, source = "chat") {
       body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
     });
   } catch (error) {
-    state.sessionId = null;
-    localStorage.removeItem("kemy.sessionId");
+    clearPersistedSessionId();
     await ensureSession();
     data = await api("/api/comando", {
       method: "POST",
       body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value, anexos: attachments }),
     });
   }
-  state.sessionId = data.session_id;
-  localStorage.setItem("kemy.sessionId", state.sessionId);
+  persistSessionId(data.session_id);
   const done = await pollJob(data.job_id);
   clearInterval(state.poll);
   if (!done) state.poll = setInterval(() => pollJob(data.job_id).catch(console.error), 900);
@@ -361,7 +376,8 @@ function appendMessage(role, text) {
 }
 
 function appendResult(result, fallbackText) {
-  if (!result?.image_url) {
+  const imageUrl = extractImageUrl(result) || extractImageUrl({ raw: fallbackText, summary: fallbackText });
+  if (!imageUrl) {
     appendMessage("assistant", fallbackText);
     return;
   }
@@ -371,17 +387,25 @@ function appendResult(result, fallbackText) {
     <div class="image-result-card">
       <div class="image-result-meta">
         <strong>${escapeHtml(result.summary || "Imagem gerada")}</strong>
-        <span>${escapeHtml((result.provider || "pollinations") + " · " + (result.model || ""))}</span>
+        <span>${escapeHtml((result.provider || "pollinations") + " - " + (result.model || ""))}</span>
       </div>
-      <img src="${escapeHtml(result.image_url)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
+      <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
       <div class="image-result-actions">
-        <a href="${escapeHtml(result.image_url)}" target="_blank" rel="noreferrer">Abrir imagem</a>
+        <a href="${escapeHtml(imageUrl)}" target="_blank" rel="noreferrer">Abrir imagem</a>
       </div>
       ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
     </div>
   `;
   $("chatLog").appendChild(node);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+function extractImageUrl(result) {
+  const direct = result?.image_url || result?.result?.image_url;
+  if (direct) return direct;
+  const text = [result?.raw, result?.summary, result?.content].filter(Boolean).join("\n");
+  const match = text.match(/https?:\/\/\S+/i);
+  return match ? match[0].replace(/[)\],.]+$/, "") : "";
 }
 
 function titleFromPrompt(text) {

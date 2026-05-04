@@ -114,7 +114,7 @@ class JobManager:
         job.eventos.append({"ts": job.updated_at, "agente": agente, "msg": msg, "progresso": progresso})
         self.save(job)
 
-    def _append_history(self, session_id: str, pedido: str, result: dict[str, Any]) -> None:
+    def _append_history(self, session_id: str, pedido: str, result: dict[str, Any]) -> dict[str, Any]:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
         answer = result.get("raw") or result.get("summary", "")
@@ -147,6 +147,7 @@ class JobManager:
             data["memoria"] = memory[-20:]
         data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
+        return data
 
     def _memory_fact(self, pedido: str) -> str | None:
         text = " ".join(pedido.split())
@@ -213,6 +214,13 @@ class JobManager:
         job.updated_at = utcnow()
         self.save(job)
         await self.supabase.insert_job(job.model_dump())
-        self._append_history(job.session_id, job.pedido, result)
+        session_data = self._append_history(job.session_id, job.pedido, result)
+        await self.supabase.insert_session(
+            job.session_id,
+            owner_email=session_data.get("owner"),
+            title=session_data.get("title") or "Nova sessao",
+            created_at=session_data.get("created_at"),
+            updated_at=session_data.get("updated_at"),
+        )
         await self.supabase.insert_message(job.session_id, "user", job.pedido)
         await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), result)

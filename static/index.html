@@ -75,15 +75,44 @@
       <section id="homeView" class="home-view">
         <div class="announcement">Kemy guarda contexto, conversa e aciona agentes quando a tarefa pede codigo.</div>
         <section class="hero-composer" aria-label="Nova tarefa">
-          <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
-          <h1>O que posso fazer por voce?</h1>
-          <div class="hero-input">
-            <textarea id="homePrompt" spellcheck="true" placeholder="Atribua uma tarefa ou pergunte qualquer coisa"></textarea>
-            <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
-            <div id="homeAttachments" class="attachment-list hidden"></div>
-            <div class="hero-actions">
-              <button id="homeAttachBtn" type="button" title="Anexos entram no roadmap">+</button>
-              <button id="homeRunBtn" type="button" aria-label="Enviar mensagem">Enviar</button>
+          <div class="hero-intro">
+            <div class="hero-copy">
+              <span class="eyebrow">Kemy workspace</span>
+              <h1>Coordene, crie e entregue com memoria por perfil.</h1>
+              <p>Uma central de operacao para coding, imagem, pesquisa e deploy. Cada conversa fica presa ao perfil certo e volta mesmo depois do refresh.</p>
+            </div>
+            <div class="hero-stats">
+              <article>
+                <strong>Chat com contexto</strong>
+                <span>Conversa normal, execucao quando a tarefa pede.</span>
+              </article>
+              <article>
+                <strong>Rotas especializadas</strong>
+                <span>Gemini, Groq, Cerebras e imagem por Pollinations.</span>
+              </article>
+              <article>
+                <strong>Sessoes privadas</strong>
+                <span>Historico separado por conta, sem misturar perfis.</span>
+              </article>
+            </div>
+          </div>
+          <div class="home-command-deck">
+            <div class="hero-toolbar">
+              <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
+              <div class="hero-tags">
+                <span>coding</span>
+                <span>imagem</span>
+                <span>deploy</span>
+              </div>
+            </div>
+            <div class="hero-input">
+              <textarea id="homePrompt" spellcheck="true" placeholder="Descreva uma ideia, cole codigo, peça uma imagem ou continue uma conversa existente"></textarea>
+              <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
+              <div id="homeAttachments" class="attachment-list hidden"></div>
+              <div class="hero-actions">
+                <button id="homeAttachBtn" type="button" title="Adicionar anexos">+</button>
+                <button id="homeRunBtn" type="button" aria-label="Enviar mensagem">Executar tarefa</button>
+              </div>
             </div>
           </div>
           <div class="suggestions" aria-label="Sugestoes">
@@ -93,6 +122,23 @@
             <button data-home-prompt="Planeje um sistema com memoria, voz, imagem e agentes de coding gratuitos.">Planejar IA</button>
             <button data-home-prompt="Gere testes automatizados e checklist de deploy para este projeto.">Gerar testes</button>
             <button data-home-prompt="Explique como a Kemy pode lembrar conversas e decidir quando codar.">Memoria</button>
+          </div>
+          <div class="home-grid">
+            <article class="home-panel">
+              <span class="panel-label">Fluxo sugerido</span>
+              <strong>Fale com naturalidade</strong>
+              <p>A Kemy identifica quando deve conversar, quando deve pesquisar e quando precisa abrir a rota de codigo ou imagem.</p>
+            </article>
+            <article class="home-panel">
+              <span class="panel-label">Entrega</span>
+              <strong>Arquivos, preview e historico</strong>
+              <p>Sites abrem em live preview. Imagens aparecem no chat. Conversas ficam salvas por conta para continuar depois.</p>
+            </article>
+            <article class="home-panel">
+              <span class="panel-label">Operacao</span>
+              <strong>Nuvem com fallback</strong>
+              <p>Quando uma rota falha, a Kemy troca de provedor e preserva o contexto da sessao.</p>
+            </article>
           </div>
         </section>
       </section>
