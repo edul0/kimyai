@@ -23,14 +23,25 @@ async function loadStatus() {
     <div><dt>API</dt><dd>${data.status}</dd></div>
     <div><dt>Storage</dt><dd>${data.storage}</dd></div>
     <div><dt>Modo</dt><dd>${data.free_only ? "free" : "fallback"}</dd></div>
+    <div><dt>LLM</dt><dd>${data.llm_mode}</dd></div>
   `;
+  $("apiPill").textContent = data.status === "online" ? "Online" : "Offline";
+  if (data.fallback_routes) {
+    const renderRoute = (name, label) => {
+      const route = data.fallback_routes[name] || [];
+      return `<div><strong>${label}</strong><span>${route.filter((item) => item !== "openrouter").join(" -> ")}</span></div>`;
+    };
+    $("routeList").innerHTML = [
+      renderRoute("coding", "Coding"),
+      renderRoute("site", "Site"),
+      renderRoute("auditoria", "Auditoria"),
+      renderRoute("planejamento", "Planejamento"),
+    ].join("");
+  }
 }
 
 async function loadAgents() {
-  const data = await api("/api/agente/listar");
-  $("agentList").innerHTML = data.agentes_fixos
-    .map((agent) => `<li><strong>${agent.nome}</strong><span>${agent.cargo}</span></li>`)
-    .join("");
+  return Promise.resolve();
 }
 
 async function newSession() {
@@ -100,4 +111,3 @@ $("copyBtn").addEventListener("click", () => navigator.clipboard.writeText(state
 loadStatus().catch(console.error);
 loadAgents().catch(console.error);
 if (!state.sessionId) newSession().catch(console.error);
-
