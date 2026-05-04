@@ -611,10 +611,6 @@ document.querySelectorAll("[data-home-prompt]").forEach((button) => {
   button.addEventListener("click", () => setPromptAndMaybeRun(button.dataset.homePrompt, false));
 });
 
-document.querySelectorAll("[data-nav-prompt]").forEach((button) => {
-  button.addEventListener("click", () => setPromptAndMaybeRun(button.dataset.navPrompt, true));
-});
-
 $("homePrompt").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
