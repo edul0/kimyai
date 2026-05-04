@@ -30,13 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── Python Dependencies ──────────────────────
-COPY requirements.txt .
+COPY requirements-cloud.txt .
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt
-
-# ─── Playwright (Automação de Browser) ────────
-RUN playwright install chromium && \
-    playwright install-deps
+    pip install -r requirements-cloud.txt
 
 # ─── App Files ────────────────────────────────
 COPY . .
@@ -53,4 +49,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000
 
 # ─── Entry Point ──────────────────────────────
-CMD ["python", "-m", "uvicorn", "agencia_kemy:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m uvicorn agencia_kemy:app --host 0.0.0.0 --port ${PORT:-8000}"]

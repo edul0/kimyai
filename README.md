@@ -390,3 +390,33 @@ motor: groq
 - [ ] **RAG Customizado**: upload de pastas de código do próprio usuário
 - [ ] **Drag-and-Drop de PDFs**: além de imagens, aceitar documentos de spec
 - [ ] **Dashboard de Monitoramento**: visualização de custo/token por sessão
+# Kemy AI - Agencia Multi-Agente v3 Cloud-Free
+
+Kemy AI e uma agencia multi-agente focada em coding, desenhada para rodar em nuvem usando cotas gratuitas sempre que possivel.
+
+## O que mudou na v3
+
+- Backend modular em `app/`, mantendo `agencia_kemy.py` como entrypoint compativel.
+- Painel web estatico servido em `/`.
+- Execucao assincrona por jobs: `POST /api/comando` enfileira e `GET /api/jobs/{id}` acompanha.
+- Fallback inteligente por tarefa: coding usa Groq primeiro, site/planejamento usa Gemini primeiro, auditoria usa Cerebras primeiro.
+- Quando uma API gratuita falha ou bate limite, a Kemy tenta a proxima mais parecida antes de cair no modo offline.
+- Modo seguro padrao: `FREE_ONLY=true` e `LLM_MODE=mock`, para testar deploy sem gastar cota.
+- Dependencias leves para nuvem em `requirements-cloud.txt`.
+- `.env.example` publico e `.env` verdadeiro sempre fora do Git.
+
+## Rodar em nuvem gratis
+
+1. Suba o codigo para GitHub.
+2. Crie um Web Service no Render Free usando Docker.
+3. Configure secrets no painel do Render, nunca no repositorio:
+   - `FREE_ONLY=true`
+   - `LLM_MODE=mock` para testar sem IA externa
+   - `LLM_MODE=providers` quando quiser usar Gemini/Groq/Cerebras
+   - `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`
+   - `REDIS_URL` apontando para Upstash Redis Free, se quiser persistencia fora da memoria do container
+4. Acesse `/` para o painel e `/docs` para a API.
+
+Leia tambem: `docs/CLOUD_FREE_STRATEGY.md`.
+
+---

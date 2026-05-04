@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kemy AI Cloud</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="mark">K</span>
+          <div>
+            <strong>Kemy AI</strong>
+            <small>Cloud-free coding agents</small>
+          </div>
+        </div>
+        <section class="panel status-panel">
+          <h2>Status</h2>
+          <dl id="statusList">
+            <div><dt>API</dt><dd>carregando</dd></div>
+            <div><dt>Storage</dt><dd>-</dd></div>
+            <div><dt>Modo</dt><dd>-</dd></div>
+          </dl>
+        </section>
+        <section class="panel">
+          <h2>Equipe</h2>
+          <ul class="agent-list" id="agentList"></ul>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Agencia multi-agente para coding</h1>
+            <p>Crie, audite e prepare codigo para deploy usando cotas gratuitas em nuvem.</p>
+          </div>
+          <button id="newSessionBtn" class="ghost">Nova sessao</button>
+        </header>
+
+        <section class="composer">
+          <label for="prompt">Pedido</label>
+          <textarea id="prompt" rows="7" spellcheck="true">Monte uma API FastAPI com endpoint de healthcheck, persistencia simples e checklist de deploy gratuito.</textarea>
+          <div class="composer-actions">
+            <select id="mode">
+              <option value="coding">Coding</option>
+              <option value="site">Site</option>
+              <option value="auditoria">Auditoria</option>
+              <option value="planejamento">Planejamento</option>
+            </select>
+            <button id="runBtn">Executar agentes</button>
+          </div>
+        </section>
+
+        <section class="result-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Execucao</h2>
+              <span id="jobBadge">sem job</span>
+            </div>
+            <div class="progress"><span id="progressBar"></span></div>
+            <ol class="timeline" id="timeline"></ol>
+          </article>
+
+          <article class="panel output">
+            <div class="panel-head">
+              <h2>Entrega</h2>
+              <button id="copyBtn" class="ghost">Copiar</button>
+            </div>
+            <pre id="output">A resposta estruturada dos agentes aparece aqui.</pre>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+

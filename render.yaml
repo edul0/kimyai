@@ -8,8 +8,13 @@ services:
     name: kemy-ai
     runtime: docker
     region: ohio
-    plan: standard
+    plan: free
     healthCheckPath: /api/status
+    envVars:
+      - key: FREE_ONLY
+        value: true
+      - key: LLM_MODE
+        value: mock
     
   # Adicionar Redis em Render.com dashboard manualmente
   # ou usar Redis externo (Redis Cloud, Upstash)

@@ -18,6 +18,7 @@ env/
 logs/
 *.jsonl
 *.log
+errors.txt
 progresso_extracao.json
 relatorio_otimizacao.json
 
