@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     e2b_api_key: str | None = Field(default=None, alias="E2B_API_KEY")
     browserless_api_key: str | None = Field(default=None, alias="BROWSERLESS_API_KEY")
     browserless_url: str | None = Field(default=None, alias="BROWSERLESS_URL")
+    supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
+    supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -54,6 +57,10 @@ class Settings(BaseSettings):
             "e2b": bool(self.e2b_api_key),
             "browserless": bool(self.browserless_api_key or self.browserless_url),
         }
+
+    @property
+    def supabase_enabled(self) -> bool:
+        return bool(self.supabase_url and self.supabase_service_role_key)
 
 
 @lru_cache

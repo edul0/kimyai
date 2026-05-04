@@ -70,6 +70,7 @@ async def status():
         "free_only": settings.free_only,
         "llm_mode": settings.llm_mode,
         "storage": storage.backend,
+        "supabase": settings.supabase_enabled,
         "providers": settings.configured_providers,
         "tools": settings.configured_tools,
         "fallback_routes": jobs.router.ROUTES,
@@ -114,6 +115,7 @@ async def nova_sessao():
         {"session_id": sid, "historico": [], "created_at": utcnow(), "updated_at": utcnow()},
         ttl=settings.session_ttl_seconds,
     )
+    await jobs.supabase.insert_session(sid)
     return {"session_id": sid, "mensagem": "Kemy AI pronta para codar na nuvem."}
 
 
@@ -144,6 +146,7 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks):
             {"session_id": sid, "historico": [], "created_at": utcnow(), "updated_at": utcnow()},
             ttl=settings.session_ttl_seconds,
         )
+        await jobs.supabase.insert_session(sid)
     job = jobs.create(sid, cmd.mensagem, cmd.modo)
     background_tasks.add_task(jobs.run, job.job_id)
     return {

@@ -10,6 +10,7 @@ from .config import Settings
 from .llm_router import LLMRouter
 from .schemas import JobState
 from .storage import Storage
+from .supabase_store import SupabaseStore
 from .tools import ExternalTools
 
 
@@ -23,6 +24,7 @@ class JobManager:
         self.settings = settings
         self.router = LLMRouter(settings)
         self.tools = ExternalTools(settings)
+        self.supabase = SupabaseStore(settings)
 
     def create(self, session_id: str, message: str, mode: str) -> JobState:
         now = utcnow()
@@ -86,13 +88,17 @@ class JobManager:
             job.resultado = result
             job.updated_at = utcnow()
             self.save(job)
+            await self.supabase.insert_job(job.model_dump())
             self._append_history(job.session_id, job.pedido, result)
+            await self.supabase.insert_message(job.session_id, "user", job.pedido)
+            await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), result)
         except Exception as exc:  # pragma: no cover - defensive runtime guard
             job.status = "error"
             job.etapa = "Erro na execucao"
             job.erro = str(exc)
             job.updated_at = utcnow()
             self.save(job)
+            await self.supabase.insert_job(job.model_dump())
 
     def _event(self, job: JobState, agente: str, msg: str, progresso: int) -> None:
         job.status = "running"
