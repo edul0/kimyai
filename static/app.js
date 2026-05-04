@@ -230,7 +230,17 @@ async function pollJob(jobId) {
 }
 
 async function ensureSession() {
-  if (!state.sessionId) await newSession();
+  if (!state.sessionId) {
+    await newSession();
+    return;
+  }
+  try {
+    await api(`/api/sessao/${state.sessionId}/historico`);
+  } catch {
+    state.sessionId = null;
+    localStorage.removeItem("kemy.sessionId");
+    await newSession();
+  }
 }
 
 async function runAgents(prompt, source = "chat") {
@@ -248,10 +258,21 @@ async function runAgents(prompt, source = "chat") {
   $("progressBar").style.width = "4%";
   $("timeline").innerHTML = `<li><span></span><p>Mensagem recebida. A Kemy vai decidir se responde, pesquisa ou codifica.</p></li>`;
 
-  const data = await api("/api/comando", {
-    method: "POST",
-    body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value }),
-  });
+  let data;
+  try {
+    data = await api("/api/comando", {
+      method: "POST",
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value }),
+    });
+  } catch (error) {
+    state.sessionId = null;
+    localStorage.removeItem("kemy.sessionId");
+    await ensureSession();
+    data = await api("/api/comando", {
+      method: "POST",
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: $("mode").value }),
+    });
+  }
   state.sessionId = data.session_id;
   localStorage.setItem("kemy.sessionId", state.sessionId);
   const done = await pollJob(data.job_id);

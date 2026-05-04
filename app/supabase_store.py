@@ -40,17 +40,26 @@ class SupabaseStore:
             "error": job.get("erro"),
             "events": job.get("eventos", []),
         }
-        await self._upsert("jobs", payload, "id")
+        try:
+            await self._upsert("jobs", payload, "id")
+        except Exception:
+            return
 
     async def insert_session(self, session_id: str) -> None:
         if not self.enabled:
             return
-        await self._upsert("sessions", {"id": session_id, "title": "Nova sessao"}, "id")
+        try:
+            await self._upsert("sessions", {"id": session_id, "title": "Nova sessao"}, "id")
+        except Exception:
+            return
 
     async def insert_message(self, session_id: str, role: str, content: str, metadata: dict[str, Any] | None = None) -> None:
         if not self.enabled:
             return
-        await self._insert("messages", {"session_id": session_id, "role": role, "content": content, "metadata": metadata or {}})
+        try:
+            await self._insert("messages", {"session_id": session_id, "role": role, "content": content, "metadata": metadata or {}})
+        except Exception:
+            return
 
     async def _insert(self, table: str, payload: dict[str, Any]) -> None:
         async with httpx.AsyncClient(timeout=20) as client:
