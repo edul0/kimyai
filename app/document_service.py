@@ -78,16 +78,10 @@ class DocumentService:
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
         for key in ("raw", "summary"):
             value = str(draft.get(key) or "").strip()
-            if value:
-                return value
-        return (
-            f"# Documento solicitado\n\n"
-            f"## Objetivo\n{user_request.strip()}\n\n"
-            "## Estrutura sugerida\n"
-            "- Introducao\n"
-            "- Desenvolvimento\n"
-            "- Proximos passos\n"
-        )
+            cleaned = self._strip_system_notices(value)
+            if self._looks_like_document_content(cleaned):
+                return cleaned
+        return self._fallback_document_text(user_request)
 
     def _title_from_text(self, user_request: str, text: str) -> str:
         for line in text.splitlines():
@@ -100,6 +94,83 @@ class DocumentService:
     def _safe_filename(self, title: str, extension: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
         return f"{slug or 'documento-kimi-ai'}{extension}"
+
+    def _strip_system_notices(self, text: str) -> str:
+        lines = [line.rstrip() for line in text.splitlines()]
+        cleaned: list[str] = []
+        skipping_notice = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.lower().startswith("aviso de sistema:"):
+                skipping_notice = True
+                continue
+            if skipping_notice and not stripped:
+                skipping_notice = False
+                continue
+            if skipping_notice and re.search(r"\b(gemini|groq|cerebras|openrouter|fallback|indisponivel|indisponível)\b", stripped, re.I):
+                continue
+            cleaned.append(line)
+        result = "\n".join(cleaned).strip()
+        return result or text.strip()
+
+    def _looks_like_document_content(self, text: str) -> bool:
+        if not text:
+            return False
+        compact = " ".join(text.split())
+        if len(compact) < 120:
+            return False
+        lowered = compact.lower()
+        banned_markers = [
+            "aviso de sistema:",
+            "fallback ativo",
+            "indisponivel para esta chave",
+            "indisponível para esta chave",
+            "classificacao interna",
+            "intenção:",
+            "intencao:",
+        ]
+        if any(marker in lowered for marker in banned_markers):
+            return False
+        return True
+
+    def _fallback_document_text(self, user_request: str) -> str:
+        topic = self._extract_topic(user_request)
+        return (
+            f"# {topic}\n\n"
+            "## Resumo executivo\n"
+            f"Este documento apresenta uma visao organizada sobre {topic}, com foco em contexto, principais acontecimentos, impactos e pontos de atencao.\n\n"
+            "## Contexto geral\n"
+            f"{topic} deve ser entendido a partir do seu contexto historico, politico, social e tecnologico. "
+            "O objetivo aqui e reunir uma base clara para leitura, estudo ou apresentacao.\n\n"
+            "## Principais pontos\n"
+            f"- Origem e antecedentes relacionados a {topic}\n"
+            f"- Eventos, marcos ou fases centrais de {topic}\n"
+            f"- Consequencias diretas e indiretas de {topic}\n"
+            f"- Leitura critica sobre os impactos de {topic}\n\n"
+            "## Desenvolvimento\n"
+            f"A analise de {topic} pode ser organizada em uma linha do tempo, nos atores envolvidos e nos efeitos produzidos ao longo do tempo. "
+            "Em um documento final, essa secao serve para aprofundar os fatos e organizar a narrativa de forma legivel.\n\n"
+            "## Impactos e interpretacoes\n"
+            f"Os impactos de {topic} podem incluir transformacoes politicas, economicas, culturais, sociais ou estrategicas. "
+            "Tambem e importante destacar controversias, diferentes interpretacoes e consequencias de longo prazo.\n\n"
+            "## Conclusao\n"
+            f"{topic} e um tema que exige organizacao clara, criterio e boa hierarquia textual. "
+            "Este PDF e DOCX foram estruturados para servir como ponto de partida para leitura, estudo e refinamento posterior.\n"
+        )
+
+    def _extract_topic(self, user_request: str) -> str:
+        text = " ".join(user_request.split()).strip()
+        patterns = [
+            r"(?:sobre|do|da|de)\s+(.+)$",
+            r"(?:pdf|docx|documento|arquivo)\s+(.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                topic = match.group(1).strip(" .:-")
+                if topic:
+                    return topic[:90].capitalize()
+        return (text[:90] or "Documento solicitado").capitalize()
 
     def _parse_blocks(self, text: str) -> list[Block]:
         blocks: list[Block] = []
