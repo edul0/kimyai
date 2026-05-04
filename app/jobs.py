@@ -8,6 +8,7 @@ from typing import Any
 from .agents import build_coding_prompt
 from .config import Settings
 from .llm_router import LLMRouter
+from .pollinations import PollinationsImageService
 from .schemas import JobState
 from .storage import Storage
 from .supabase_store import SupabaseStore
@@ -23,6 +24,7 @@ class JobManager:
         self.storage = storage
         self.settings = settings
         self.router = LLMRouter(settings)
+        self.pollinations = PollinationsImageService(settings)
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
 
@@ -63,6 +65,10 @@ class JobManager:
         if not job:
             return
         try:
+            effective_mode = self._resolve_mode(job.pedido, job.modo)
+            if effective_mode != job.modo:
+                job.modo = effective_mode
+                self.save(job)
             self._event(job, "Kemy", "Lendo a conversa e o contexto.", 15)
             await asyncio.sleep(0)
             session_data = self.storage.get_json(f"session:{job.session_id}", {})
@@ -71,6 +77,13 @@ class JobManager:
 
             self._event(job, "Kemy", "Preparando resposta adequada ao pedido.", 30)
             prompt = build_coding_prompt(job.pedido, job.modo, history, memory)
+
+            if job.modo == "imagem":
+                self._event(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
+                result = await self.pollinations.generate(job.pedido)
+                result["tools_used"] = ["pollinations"]
+                await self._finish_job(job, result)
+                return
 
             self._event(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
             tool_context = await self.tools.enrich(job.pedido, job.modo)
@@ -84,17 +97,7 @@ class JobManager:
             self._event(job, "Kemy", "Revisando resposta antes de entregar.", 75)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
 
-            self._event(job, "Kemy", "Finalizando mensagem.", 92)
-            job.status = "done"
-            job.etapa = "Concluido"
-            job.progresso = 100
-            job.resultado = result
-            job.updated_at = utcnow()
-            self.save(job)
-            await self.supabase.insert_job(job.model_dump())
-            self._append_history(job.session_id, job.pedido, result)
-            await self.supabase.insert_message(job.session_id, "user", job.pedido)
-            await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), result)
+            await self._finish_job(job, result)
         except Exception as exc:  # pragma: no cover - defensive runtime guard
             job.status = "error"
             job.etapa = "Erro na execucao"
@@ -128,6 +131,13 @@ class JobManager:
                 "provider": result.get("provider"),
                 "model": result.get("model"),
                 "tools_used": result.get("tools_used", []),
+                "image_url": result.get("image_url"),
+                "result": {
+                    "summary": result.get("summary"),
+                    "image_url": result.get("image_url"),
+                    "provider": result.get("provider"),
+                    "model": result.get("model"),
+                },
             }
         )
         memory = data.setdefault("memoria", [])
@@ -167,3 +177,42 @@ class JobManager:
             content = str(item.get("content", ""))[:12000]
             chunks.append(f"\n## {name} ({kind} | {mime_type})\n{content}")
         return "".join(chunks)
+
+    def _resolve_mode(self, message: str, current_mode: str) -> str:
+        if current_mode == "imagem":
+            return "imagem"
+        if current_mode != "coding":
+            return current_mode
+        lowered = message.lower()
+        image_markers = [
+            "gere uma imagem",
+            "gera uma imagem",
+            "crie uma imagem",
+            "criar uma imagem",
+            "faça uma imagem",
+            "faca uma imagem",
+            "desenhe",
+            "ilustre",
+            "renderize",
+            "imagem de",
+            "foto de",
+            "arte de",
+            "logo de",
+            "banner de",
+        ]
+        if any(marker in lowered for marker in image_markers):
+            return "imagem"
+        return current_mode
+
+    async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:
+        self._event(job, "Kemy", "Finalizando mensagem.", 92)
+        job.status = "done"
+        job.etapa = "Concluido"
+        job.progresso = 100
+        job.resultado = result
+        job.updated_at = utcnow()
+        self.save(job)
+        await self.supabase.insert_job(job.model_dump())
+        self._append_history(job.session_id, job.pedido, result)
+        await self.supabase.insert_message(job.session_id, "user", job.pedido)
+        await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), result)

@@ -99,6 +99,11 @@ def build_coding_prompt(
         "site",
         "deploy",
         "app",
+        "imagem",
+        "gere",
+        "gerar",
+        "desenhe",
+        "ilustre",
         "implemente",
         "crie",
         "corrija",
@@ -115,7 +120,8 @@ def build_coding_prompt(
         "Se for conversa, responda conversa. Se for duvida, explique. Se for tarefa tecnica, planeje e execute mentalmente como agente de coding. "
         "So entregue codigo, arquivos ou patch quando o usuario pedir implementacao, correcao, arquitetura, codigo, auditoria ou deploy.\n"
         "Classifique internamente a intencao em: conversa, pergunta, coding, pesquisa, imagem, voz, pc, deploy. "
-        "Para imagem, voz ou controle de PC, explique o que ja e possivel pela infraestrutura atual e qual ferramenta precisa ser conectada.\n"
+        "Para imagem, quando houver API visual conectada, gere a imagem em vez de apenas explicar. "
+        "Para voz ou controle de PC, explique o que ja e possivel pela infraestrutura atual e qual ferramenta precisa ser conectada.\n"
         "Regra absoluta: responda exatamente ao pedido do usuario. Nao substitua a stack pedida por outra. "
         "Se o usuario pedir para melhorar este sistema, analise o contexto da propria Kemy abaixo e proponha patches para ela.\n"
         "Para pedido tecnico, responda em Markdown claro com diagnostico, alteracoes recomendadas, arquivos afetados, patch/codigo quando util, testes e riscos. "

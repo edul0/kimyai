@@ -708,6 +708,54 @@ textarea {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+.image-result-card {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 12px;
+}
+
+.image-result-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.image-result-meta span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.image-result-card img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  object-fit: cover;
+}
+
+.image-result-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.image-result-actions a {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 13px;
+  background: var(--surface);
+  color: var(--ink-strong);
+  text-decoration: none;
+  font-weight: 650;
+}
+
+.image-result-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .agent-progress {
   width: min(920px, 100%);
   border: 1px solid var(--line);

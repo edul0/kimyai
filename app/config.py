@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     e2b_api_key: str | None = Field(default=None, alias="E2B_API_KEY")
     browserless_api_key: str | None = Field(default=None, alias="BROWSERLESS_API_KEY")
     browserless_url: str | None = Field(default=None, alias="BROWSERLESS_URL")
+    pollinations_api_key: str | None = Field(default=None, alias="POLLINATIONS_API_KEY")
+    pollinations_image_model: str = Field(default="flux", alias="POLLINATIONS_IMAGE_MODEL")
+    pollinations_image_size: str = Field(default="1024x1024", alias="POLLINATIONS_IMAGE_SIZE")
+    pollinations_image_quality: str = Field(default="medium", alias="POLLINATIONS_IMAGE_QUALITY")
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
@@ -58,6 +62,7 @@ class Settings(BaseSettings):
             "serper": bool(self.serper_api_key),
             "e2b": bool(self.e2b_api_key),
             "browserless": bool(self.browserless_api_key or self.browserless_url),
+            "pollinations": bool(self.pollinations_api_key),
         }
 
     @property

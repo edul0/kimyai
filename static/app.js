@@ -204,7 +204,19 @@ async function openSession(sessionId, options = {}) {
   } else {
     history.forEach((item) => {
       if (item.role && item.content) {
-        appendMessage(item.role, item.content);
+        if (item.role === "assistant" && (item.image_url || item.result?.image_url)) {
+          appendResult(
+            {
+              image_url: item.image_url || item.result?.image_url,
+              summary: item.result?.summary || item.content,
+              provider: item.provider || item.result?.provider,
+              model: item.model || item.result?.model,
+            },
+            item.content,
+          );
+        } else {
+          appendMessage(item.role, item.content);
+        }
         return;
       }
       if (item.usuario) appendMessage("user", item.usuario);
@@ -248,7 +260,7 @@ function renderJob(job) {
 
   if (job.resultado && job.status === "done" && !state.renderedJobs.has(job.job_id)) {
     state.lastOutput = formatResult(job.resultado);
-    appendMessage("assistant", state.lastOutput);
+    appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
     if (previewHtml) showPreview(previewHtml);
@@ -259,6 +271,9 @@ function renderJob(job) {
 }
 
 function formatResult(result) {
+  if (result.image_url) {
+    return result.raw || result.summary || "Imagem gerada.";
+  }
   if (result.raw) return result.raw;
   if (result.summary && result.files?.length) {
     return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n${file.content}`).join("\n\n")}`;
@@ -341,6 +356,30 @@ function appendMessage(role, text) {
   const node = document.createElement("div");
   node.className = `message ${role === "user" ? "user" : "assistant"}`;
   node.textContent = text;
+  $("chatLog").appendChild(node);
+  node.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+function appendResult(result, fallbackText) {
+  if (!result?.image_url) {
+    appendMessage("assistant", fallbackText);
+    return;
+  }
+  const node = document.createElement("div");
+  node.className = "message assistant";
+  node.innerHTML = `
+    <div class="image-result-card">
+      <div class="image-result-meta">
+        <strong>${escapeHtml(result.summary || "Imagem gerada")}</strong>
+        <span>${escapeHtml((result.provider || "pollinations") + " · " + (result.model || ""))}</span>
+      </div>
+      <img src="${escapeHtml(result.image_url)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
+      <div class="image-result-actions">
+        <a href="${escapeHtml(result.image_url)}" target="_blank" rel="noreferrer">Abrir imagem</a>
+      </div>
+      ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
+    </div>
+  `;
   $("chatLog").appendChild(node);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
 }
