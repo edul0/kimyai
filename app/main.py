@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import DEFAULT_AGENTS
-from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, verify_password, verify_token
+from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
 from .schemas import ComandoRequest, JobCreateResponse, NovoAgente
@@ -79,14 +79,14 @@ async def status():
 
 @app.post("/api/auth/login")
 async def login(payload: dict, response: Response, request: Request):
-    username = str(payload.get("username", ""))
+    email = str(payload.get("email") or payload.get("username", "")).strip().lower()
     password = str(payload.get("password", ""))
-    stored_user = find_user(storage, username)
-    valid_local = username == settings.auth_user and password == settings.auth_password
+    stored_user = find_user(storage, email)
+    valid_local = email == settings.auth_user and password == settings.auth_password
     valid_registered = bool(stored_user and verify_password(password, stored_user.get("password_hash", "")))
     if not (valid_local or valid_registered):
         raise HTTPException(401, "Login invalido.")
-    token = create_token(username.lower(), settings)
+    token = create_token(email, settings)
     response.set_cookie(
         COOKIE_NAME,
         token,
@@ -95,20 +95,20 @@ async def login(payload: dict, response: Response, request: Request):
         secure=request.url.scheme == "https",
         samesite="lax",
     )
-    return {"status": "ok", "user": username}
+    return {"status": "ok", "user": email}
 
 
 @app.post("/api/auth/register")
 async def register(payload: dict, response: Response, request: Request):
-    username = str(payload.get("username", "")).strip().lower()
+    email = str(payload.get("email") or payload.get("username", "")).strip().lower()
     password = str(payload.get("password", ""))
     name = str(payload.get("name", "")).strip()
-    if len(username) < 3 or len(password) < 8:
-        raise HTTPException(400, "Usuario minimo 3 caracteres e senha minimo 8.")
-    if find_user(storage, username):
-        raise HTTPException(409, "Usuario ja existe.")
-    create_user(storage, username, password, name)
-    token = create_token(username, settings)
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1] or len(password) < 8:
+        raise HTTPException(400, "Email invalido ou senha menor que 8 caracteres.")
+    if find_user(storage, email):
+        raise HTTPException(409, "Email ja cadastrado.")
+    create_user(storage, email, password, name)
+    token = create_token(email, settings)
     response.set_cookie(
         COOKIE_NAME,
         token,
@@ -117,7 +117,7 @@ async def register(payload: dict, response: Response, request: Request):
         secure=request.url.scheme == "https",
         samesite="lax",
     )
-    return {"status": "ok", "user": username}
+    return {"status": "ok", "user": email}
 
 
 @app.post("/api/auth/logout")
@@ -128,8 +128,8 @@ async def logout(response: Response):
 
 @app.get("/api/auth/me")
 async def me(request: Request):
-    authenticated = verify_token(request.cookies.get(COOKIE_NAME), settings)
-    return {"authenticated": authenticated, "user": settings.auth_user if authenticated else None}
+    subject = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    return {"authenticated": bool(subject), "user": subject}
 
 
 @app.post("/api/sessao/nova")

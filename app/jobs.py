@@ -62,26 +62,26 @@ class JobManager:
         if not job:
             return
         try:
-            self._event(job, "Gabriel", "Planejando escopo e especialistas.", 15)
+            self._event(job, "Kemy", "Lendo a conversa e o contexto.", 15)
             await asyncio.sleep(0)
             history = self.storage.get_json(f"session:{job.session_id}", {}).get("historico", [])
 
-            self._event(job, "Brenno", "Convertendo pedido em requisitos tecnicos.", 30)
+            self._event(job, "Kemy", "Preparando resposta adequada ao pedido.", 30)
             prompt = build_coding_prompt(job.pedido, job.modo, history)
 
-            self._event(job, "Kemy", "Consultando ferramentas gratuitas configuradas.", 42)
+            self._event(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
             tool_context = await self.tools.enrich(job.pedido, job.modo)
             if tool_context.get("context"):
                 prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
-            self._event(job, "Diego", "Selecionando motor gratuito e arquitetura de entrega.", 55)
+            self._event(job, "Kemy", "Selecionando melhor motor gratuito.", 55)
             result = await self.router.generate(prompt, job.modo)
             result["tools_used"] = tool_context.get("used", [])
 
-            self._event(job, "Bianca", "Aplicando checagens de seguranca e secrets.", 75)
+            self._event(job, "Kemy", "Revisando resposta antes de entregar.", 75)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
 
-            self._event(job, "Leonardo", "Formatando entrega final e testes sugeridos.", 92)
+            self._event(job, "Kemy", "Finalizando mensagem.", 92)
             job.status = "done"
             job.etapa = "Concluido"
             job.progresso = 100
@@ -111,11 +111,12 @@ class JobManager:
     def _append_history(self, session_id: str, pedido: str, result: dict[str, Any]) -> None:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
+        answer = result.get("raw") or result.get("summary", "")
         data.setdefault("historico", []).append(
             {
                 "ts": utcnow(),
                 "usuario": pedido,
-                "resumo": result.get("summary") or result.get("raw", "")[:400],
+                "resumo": answer[:1200],
                 "provider": result.get("provider"),
             }
         )

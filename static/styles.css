@@ -282,6 +282,33 @@ p {
 
 .composer-card { padding: 22px; }
 
+.chat-log {
+  display: grid;
+  gap: 12px;
+  max-height: 280px;
+  overflow: auto;
+  margin-bottom: 14px;
+}
+
+.message {
+  max-width: 86%;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 12px 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.message.assistant {
+  justify-self: start;
+  background: var(--panel);
+}
+
+.message.user {
+  justify-self: end;
+  background: var(--accent-soft);
+}
+
 textarea {
   width: 100%;
   min-height: 170px;

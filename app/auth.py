@@ -22,9 +22,9 @@ def _sign(payload: str, secret: str) -> str:
     return _b64(hmac.new(secret.encode(), payload.encode(), sha256).digest())
 
 
-def create_token(username: str, settings: Settings) -> str:
+def create_token(subject: str, settings: Settings) -> str:
     exp = int(time.time()) + MAX_AGE
-    payload = f"{username}:{exp}"
+    payload = f"{subject}:{exp}"
     return f"{_b64(payload.encode())}.{_sign(payload, settings.auth_secret)}"
 
 
@@ -35,12 +35,22 @@ def verify_token(token: str | None, settings: Settings) -> bool:
     try:
         padded = encoded + "=" * (-len(encoded) % 4)
         payload = base64.urlsafe_b64decode(padded.encode()).decode()
-        _username, exp_raw = payload.rsplit(":", 1)
+        _subject, exp_raw = payload.rsplit(":", 1)
         if int(exp_raw) < int(time.time()):
             return False
         return hmac.compare_digest(signature, _sign(payload, settings.auth_secret))
     except Exception:
         return False
+
+
+def token_subject(token: str | None, settings: Settings) -> str | None:
+    if not verify_token(token, settings):
+        return None
+    encoded = token.split(".", 1)[0]
+    padded = encoded + "=" * (-len(encoded) % 4)
+    payload = base64.urlsafe_b64decode(padded.encode()).decode()
+    subject, _exp_raw = payload.rsplit(":", 1)
+    return subject
 
 
 def password_hash(password: str, salt: str | None = None) -> str:
@@ -57,16 +67,16 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def find_user(storage: Storage, username: str) -> dict | None:
-    return storage.get_json(f"user:{username.lower()}")
+def find_user(storage: Storage, email: str) -> dict | None:
+    return storage.get_json(f"user:{email.lower()}")
 
 
-def create_user(storage: Storage, username: str, password: str, name: str = "") -> dict:
+def create_user(storage: Storage, email: str, password: str, name: str = "") -> dict:
     user = {
-        "username": username.lower(),
-        "name": name or username,
+        "email": email.lower(),
+        "name": name or email,
         "password_hash": password_hash(password),
         "created_at": int(time.time()),
     }
-    storage.set_json(f"user:{user['username']}", user)
+    storage.set_json(f"user:{user['email']}", user)
     return user

@@ -97,6 +97,18 @@ class LLMRouter:
 
     def _mock_response(self, prompt: str, mode: str, choice: ProviderChoice) -> dict[str, Any]:
         summary = textwrap.shorten(" ".join(prompt.split()), width=260, placeholder="...")
+        casual = "Conversa casual: sim" in prompt
+        if casual:
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": "Oi. Estou aqui. Me diga o que voce quer construir, revisar ou melhorar.",
+                "summary": "Resposta casual.",
+                "files": [],
+                "diff": "",
+                "tests": [],
+            }
         files = [
             {
                 "path": "README_IMPLEMENTACAO.md",
@@ -127,10 +139,15 @@ class LLMRouter:
         import httpx
 
         headers = {"Authorization": f"Bearer {self.settings.groq_api_key}"}
+        system = (
+            "Voce e um engenheiro senior de produto e coding. Responda em Markdown, nunca em JSON cru. "
+            "Nao invente preset. Nao troque FastAPI por Flask, React por Vue, ou outra stack salvo se o usuario pedir. "
+            "Entregue diagnostico, arquivos afetados, codigo/patch e testes."
+        )
         payload = {
             "model": choice.model,
             "messages": [
-                {"role": "system", "content": "Voce e um agente senior focado em coding. Responda em JSON util."},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -155,7 +172,7 @@ class LLMRouter:
         payload = {
             "model": choice.model,
             "messages": [
-                {"role": "system", "content": "Voce e um auditor tecnico rapido e preciso."},
+                {"role": "system", "content": "Voce e um auditor tecnico rapido e preciso. Responda em Markdown claro, sem JSON cru."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
@@ -173,7 +190,7 @@ class LLMRouter:
         payload = {
             "model": choice.model,
             "messages": [
-                {"role": "system", "content": "Voce e um agente senior focado em coding."},
+                {"role": "system", "content": "Voce e um agente senior focado em coding. Responda em Markdown claro, sem JSON cru."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,

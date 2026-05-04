@@ -54,7 +54,7 @@ async function submitAuth(event) {
       method: "POST",
       body: JSON.stringify({
         name: $("loginName").value,
-        username: $("loginUser").value,
+        email: $("loginEmail").value,
         password: $("loginPass").value,
       }),
     });
@@ -62,7 +62,7 @@ async function submitAuth(event) {
   } catch (error) {
     $("loginError").textContent = state.authMode === "register"
       ? "Nao foi possivel criar a conta. Use senha com 8+ caracteres."
-      : "Usuario ou senha invalidos.";
+      : "Email ou senha invalidos.";
   }
 }
 
@@ -92,6 +92,7 @@ async function newSession() {
   const data = await api("/api/sessao/nova", { method: "POST", body: "{}" });
   state.sessionId = data.session_id;
   localStorage.setItem("kemy.sessionId", state.sessionId);
+  $("chatLog").innerHTML = `<div class="message assistant">Oi. Eu sou a Kemy. Posso conversar, revisar codigo, planejar features e preparar deploy.</div>`;
   $("timeline").innerHTML = `<li><span class="step-dot idle"></span><strong>Nova sessao iniciada</strong><small>${data.mensagem}</small></li>`;
   $("output").textContent = "Pronto. Escreva a tarefa e execute.";
   $("jobBadge").textContent = "sem tarefa";
@@ -108,16 +109,20 @@ function renderJob(job) {
   if (job.resultado) {
     state.lastOutput = formatResult(job.resultado);
     $("output").textContent = state.lastOutput;
+    appendMessage("assistant", state.lastOutput);
   }
   if (job.erro) $("output").textContent = job.erro;
 }
 
 function formatResult(result) {
   if (result.raw) return result.raw;
+  if (result.summary && result.files?.length) {
+    return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n${file.content}`).join("\n\n")}`;
+  }
   if (result.files?.length) {
     return result.files.map((file) => `# ${file.path}\n\n${file.content}`).join("\n\n---\n\n");
   }
-  return JSON.stringify(result, null, 2);
+  return result.summary || "Concluido.";
 }
 
 async function pollJob(jobId) {
@@ -134,6 +139,8 @@ async function runAgents() {
   const prompt = $("prompt").value.trim();
   if (!prompt) return;
   $("runBtn").disabled = true;
+  appendMessage("user", prompt);
+  $("prompt").value = "";
   $("output").textContent = "Pensando...";
   const data = await api("/api/comando", {
     method: "POST",
@@ -144,6 +151,14 @@ async function runAgents() {
   await pollJob(data.job_id);
   clearInterval(state.poll);
   state.poll = setInterval(() => pollJob(data.job_id).catch(console.error), 900);
+}
+
+function appendMessage(role, text) {
+  const node = document.createElement("div");
+  node.className = `message ${role}`;
+  node.textContent = text;
+  $("chatLog").appendChild(node);
+  $("chatLog").scrollTop = $("chatLog").scrollHeight;
 }
 
 $("authForm").addEventListener("submit", submitAuth);

@@ -23,8 +23,8 @@
           <input id="loginName" autocomplete="name" placeholder="Seu nome" />
         </label>
         <label>
-          Usuario
-          <input id="loginUser" autocomplete="username" placeholder="seu_usuario" />
+          Email
+          <input id="loginEmail" type="email" autocomplete="email" placeholder="voce@email.com" />
         </label>
         <label>
           Senha
@@ -72,7 +72,10 @@
         </header>
 
         <section class="composer-card">
-          <textarea id="prompt" spellcheck="true">Monte uma API FastAPI com endpoint de healthcheck, persistencia simples e checklist de deploy gratuito.</textarea>
+          <div id="chatLog" class="chat-log">
+            <div class="message assistant">Oi. Eu sou a Kemy. Posso conversar, revisar codigo, planejar features e preparar deploy.</div>
+          </div>
+          <textarea id="prompt" spellcheck="true" placeholder="Escreva uma mensagem para a Kemy..."></textarea>
           <div class="composer-toolbar">
             <select id="mode" aria-label="Modo da tarefa">
               <option value="coding">Coding</option>
@@ -99,7 +102,7 @@
       <aside class="delivery">
         <div class="delivery-card">
           <div class="section-head">
-            <h2>Entrega</h2>
+            <h2>Ultima resposta</h2>
             <button id="copyBtn" class="copy-button">Copiar</button>
           </div>
           <pre id="output">A resposta da Kemy aparece aqui.</pre>

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ComandoRequest(BaseModel):
-    mensagem: str = Field(..., min_length=3, max_length=12000)
+    mensagem: str = Field(..., min_length=1, max_length=12000)
     imagem_base64: str | None = None
     session_id: str | None = None
     modo: Literal["coding", "site", "auditoria", "planejamento"] = "coding"
@@ -39,4 +39,3 @@ class JobState(BaseModel):
     resultado: dict[str, Any] | None = None
     erro: str | None = None
     eventos: list[dict[str, Any]] = Field(default_factory=list)
-
