@@ -80,57 +80,53 @@ curl -X POST http://localhost:8000/api/comando \
 ### 2.2 Setup Passo a Passo
 
 **Pré-requisitos:**
-- GitHub account com repo pushado
-- Chaves de API (Gemini, Groq, Cerebras, OpenRouter)
+- Repositório já publicado no GitHub
+- Conta no Render conectada ao GitHub
+- Chaves de API dos provedores que você quer usar
 
-**Processo:**
+**Processo recomendado: Blueprint com `render.yaml`**
 
-1. Acesse [render.com/dashboard](https://dashboard.render.com)
+1. Confirme que o arquivo [`render.yaml`](/C:/Users/carlos.lesse/Documents/Codex/2026-05-05/github-plugin-github-openai-curated-vamos/kimyai/render.yaml) está na raiz do repositório.
 
-2. Clique em **"New"** → **"Web Service"**
+2. Faça `git push` para o GitHub.
 
-3. Conecte seu GitHub
-   - Autorizar Render
-   - Selecionar repositório `kemyai`
+3. No Render, abra:
+   [https://dashboard.render.com/blueprint/new?repo=https://github.com/edul0/kimyai](https://dashboard.render.com/blueprint/new?repo=https://github.com/edul0/kimyai)
 
-4. Configure:
+4. Revise os dois serviços que o Blueprint cria:
+   - `kemy-ai`: web service público da aplicação
+   - `kemy-gotenberg`: private service interno para PDF e slides
+
+5. Preencha as secrets pedidas pelo Blueprint:
    ```
-   Name:               kemy-ai
-   Environment:        Docker
-   Branch:             main
-   Dockerfile:         ./Dockerfile
-   Build Command:      (deixe em branco)
-   Start Command:      (deixe em branco)
-   Plan:               Starter ($7/mês) ou Pro ($25/mês)
-   Region:             Ohio (us-east)
-   ```
-
-5. Environment Variables (adicione em **"Environment"**)
-   ```
+   KEMY_AUTH_PASSWORD=<senha forte>
    GEMINI_API_KEY=<sua-chave>
    GROQ_API_KEY=<sua-chave>
    CEREBRAS_API_KEY=<sua-chave>
    OPENROUTER_API_KEY=<sua-chave>
-   PORT=8000
-   ENVIRONMENT=production
-   DEBUG=false
-   ORIGENS_CORS=https://seu-frontend.com
+   TAVILY_API_KEY=<opcional>
+   SERPER_API_KEY=<opcional>
+   E2B_API_KEY=<opcional>
+   BROWSERLESS_API_KEY=<opcional>
+   BROWSERLESS_URL=<opcional>
+   POLLINATIONS_API_KEY=<opcional>
+   KIMI_SUPABASE_URL=<opcional>
+   KIMI_SUPABASE_ANON_KEY=<opcional>
+   KIMI_SUPABASE_SERVICE_ROLE_KEY=<opcional>
    ```
 
-6. Redis (Opcional, para cache distribuído)
-   - Clique **"Create +"** → **"Redis"**
-   - Plan: Free
-   - Copie o `Internal URL`
-   - Adicione em Environment Variables:
-     ```
-     REDIS_URL=<internal-redis-url>
-     ```
+6. Clique em **Apply**.
 
-7. Clique **"Create Web Service"**
+7. Aguarde o primeiro deploy terminar. O Render vai:
+   - buildar a aplicação pelo `Dockerfile`;
+   - criar o `kemy-gotenberg`;
+   - injetar `GOTENBERG_URL` automaticamente usando a rede privada interna.
 
-**Deploy automático ativa!** 🎉
+**Importante sobre custo**
 
-Agora, toda vez que você fizer `git push`, Render detecta mudanças e redeploy automaticamente.
+- O `kemy-ai` pode continuar no plano `free`.
+- O `kemy-gotenberg` está como `starter`, porque o Render não oferece `free` para `private service`.
+- Sem esse serviço interno, o app continua funcionando, mas os PDFs/slides caem no fallback local e você perde o pipeline cloud completo.
 
 ### 2.3 Verificar Deploy
 
@@ -145,6 +141,12 @@ https://kemy-ai.onrender.com/docs
 curl https://kemy-ai.onrender.com/api/status
 ```
 
+Cheque no JSON de status:
+
+- `tools.gotenberg: true`
+- `llm_mode: "providers"` se você configurou ao menos um provedor
+- `storage.supabase_enabled: true` se configurou Supabase
+
 ### 2.4 Ver Logs
 
 Em Render Dashboard:
@@ -156,6 +158,8 @@ Em Render Dashboard:
 # Ou via CLI (se instalado):
 render logs --service=kemy-ai
 ```
+
+Para problemas de PDF/slides, confira tambem os logs do servico privado `kemy-gotenberg`.
 
 ---
 

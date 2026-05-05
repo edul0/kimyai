@@ -1,8 +1,3 @@
-# ╔══════════════════════════════════════════════════════════════╗
-# ║         KEMY AI — Configuração Render.com                     ║
-# ║   Conectar GitHub e Render detecta este arquivo auto          ║
-# ╚══════════════════════════════════════════════════════════════╝
-
 services:
   - type: web
     name: kemy-ai
@@ -10,11 +5,44 @@ services:
     region: ohio
     plan: free
     healthCheckPath: /api/status
+    dockerfilePath: ./Dockerfile
     envVars:
+      - key: AMBIENTE
+        value: production
+      - key: PORT
+        value: "8000"
       - key: FREE_ONLY
-        value: true
+        value: "true"
       - key: LLM_MODE
-        value: mock
+        value: providers
+      - key: ORIGENS_CORS
+        value: "*"
+      - key: KEMY_AUTH_USER
+        value: admin
+      - key: KEMY_AUTH_PASSWORD
+        sync: false
+      - key: KEMY_AUTH_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: BROWSERLESS_API_KEY
+        sync: false
+      - key: BROWSERLESS_URL
+        sync: false
+      - key: POLLINATIONS_API_KEY
+        sync: false
       - key: KIMI_SUPABASE_URL
         sync: false
       - key: KIMI_SUPABASE_ANON_KEY
@@ -22,7 +50,17 @@ services:
       - key: KIMI_SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: GOTENBERG_URL
-        sync: false
-    
-  # Adicionar Redis em Render.com dashboard manualmente
-  # ou usar Redis externo (Redis Cloud, Upstash)
+        fromService:
+          type: pserv
+          name: kemy-gotenberg
+          property: hostport
+      - key: GOTENBERG_TIMEOUT_SECONDS
+        value: "90"
+
+  - type: pserv
+    name: kemy-gotenberg
+    runtime: image
+    plan: starter
+    region: ohio
+    image:
+      url: docker.io/gotenberg/gotenberg:8

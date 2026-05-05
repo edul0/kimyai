@@ -89,6 +89,8 @@ Acesse:
 - `GOTENBERG_URL`
 - `GOTENBERG_TIMEOUT_SECONDS`
 
+No Render, o `render.yaml` ja aponta `GOTENBERG_URL` para o servico privado `kemy-gotenberg`. Nao precisa preencher manualmente se voce subir pelo Blueprint.
+
 ### Supabase do Kimi AI
 
 Prefira estas variaveis no Render:
@@ -114,8 +116,9 @@ Para subir o schema do Kimi AI:
 2. Conecte o repositorio no Render
 3. Use o `render.yaml` da raiz
 4. Configure as secrets no painel do Render
-5. Se quiser PDF via Gotenberg, aponte `GOTENBERG_URL` para sua instancia
-6. Valide `GET /api/status` e depois o fluxo de login, sessao e jobs
+5. O Blueprint cria o `kemy-gotenberg` e injeta `GOTENBERG_URL` automaticamente
+6. Valide `GET /api/status` e confirme `tools.gotenberg: true`
+7. Teste login, sessao, anexos, PDF e slides ja na URL publica
 
 ## Endpoints principais
 

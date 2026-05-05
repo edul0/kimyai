@@ -379,7 +379,12 @@ class LLMRouter:
             return (
                 f"{base} "
                 "Se o pedido for de documento, entregue conteudo em Markdown estruturado com titulos, subtitulos, listas e texto pronto para montagem em DOCX e PDF. "
-                "Se o usuario pedir slides, apresentacao, deck ou powerpoint, entregue em Markdown de apresentacao com secoes separadas por `---`, uma ideia principal por slide, titulos curtos e bullets concisos. "
+                "Se o usuario pedir slides, apresentacao, deck ou powerpoint, entregue um deck com nivel visual e narrativo de Gamma ou Canva: premium, objetivo, limpo e convincente. "
+                "Nesse caso responda em Markdown de apresentacao com secoes separadas por `---` e siga estas regras sem falhar: "
+                "abra com um slide-capa forte; organize a historia em 6 a 12 slides; use um titulo curto por slide; use no maximo 3 a 5 bullets por slide; cada bullet deve ser especifico e acionavel; "
+                "misture slides de argumento, comparacao, processo, numeros-chave e fechamento; quando fizer sentido inclua tabelas curtas, highlights em negrito e chamadas de impacto; "
+                "evite blocos longos de texto, definicoes genericas, enchimento e repeticao; escreva como apresentacao pronta para cliente, diretoria ou pitch, nao como rascunho cru. "
+                "Nao escreva notas do apresentador, nao explique a estrutura, nao fale sobre Gamma/Canva no conteudo final, apenas entregue o deck pronto. "
                 "Nao devolva JSON cru."
             )
         if mode != "site":

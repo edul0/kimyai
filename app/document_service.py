@@ -195,32 +195,95 @@ class DocumentService:
             "theme: default\n"
             "paginate: true\n"
             "size: 16:9\n"
+            "headingDivider: 2\n"
             "style: |\n"
             "  section {\n"
             "    font-family: 'Aptos', 'Segoe UI', sans-serif;\n"
-            "    background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);\n"
+            "    background: radial-gradient(circle at top right, rgba(66, 153, 225, 0.20), transparent 28%), linear-gradient(180deg, #f7fbff 0%, #eef4fb 100%);\n"
             "    color: #10243d;\n"
-            "    padding: 56px 72px;\n"
+            "    padding: 54px 70px;\n"
             "  }\n"
-            "  h1, h2 {\n"
-            "    color: #0b3a6e;\n"
-            "    margin-bottom: 0.35em;\n"
+            "  section::after {\n"
+            "    font-size: 0.72rem;\n"
+            "    color: #4c6a8a;\n"
             "  }\n"
             "  h1 {\n"
-            "    font-size: 2.1rem;\n"
+            "    color: #0b2e59;\n"
+            "    font-size: 2.2rem;\n"
+            "    line-height: 1.02;\n"
+            "    letter-spacing: -0.03em;\n"
+            "    margin: 0 0 0.32em;\n"
             "  }\n"
             "  h2 {\n"
-            "    font-size: 1.45rem;\n"
+            "    color: #0f437a;\n"
+            "    font-size: 1.32rem;\n"
+            "    line-height: 1.1;\n"
+            "    letter-spacing: -0.02em;\n"
+            "    margin: 0 0 0.5em;\n"
             "  }\n"
-            "  p, li {\n"
+            "  h3 {\n"
+            "    color: #1d5d96;\n"
+            "    font-size: 1.0rem;\n"
+            "    margin: 0 0 0.5em;\n"
+            "  }\n"
+            "  p {\n"
             "    font-size: 1rem;\n"
-            "    line-height: 1.45;\n"
+            "    line-height: 1.42;\n"
+            "    margin: 0 0 0.7em;\n"
+            "  }\n"
+            "  ul, ol {\n"
+            "    margin: 0.2em 0 0;\n"
+            "    padding-left: 1.1em;\n"
+            "  }\n"
+            "  li {\n"
+            "    font-size: 0.96rem;\n"
+            "    line-height: 1.38;\n"
+            "    margin: 0 0 0.34em;\n"
             "  }\n"
             "  strong {\n"
-            "    color: #0b3a6e;\n"
+            "    color: #0b3264;\n"
+            "    font-weight: 750;\n"
+            "  }\n"
+            "  blockquote {\n"
+            "    margin: 0.8em 0;\n"
+            "    padding: 0.7em 0.9em;\n"
+            "    border-left: 5px solid #2f6fb1;\n"
+            "    background: rgba(255,255,255,0.62);\n"
+            "    border-radius: 0 12px 12px 0;\n"
             "  }\n"
             "  table {\n"
-            "    font-size: 0.88rem;\n"
+            "    width: 100%;\n"
+            "    border-collapse: collapse;\n"
+            "    margin-top: 0.5em;\n"
+            "    font-size: 0.82rem;\n"
+            "    background: rgba(255,255,255,0.72);\n"
+            "    border-radius: 14px;\n"
+            "    overflow: hidden;\n"
+            "  }\n"
+            "  th {\n"
+            "    background: #0f437a;\n"
+            "    color: #ffffff;\n"
+            "    text-align: left;\n"
+            "    padding: 10px 12px;\n"
+            "  }\n"
+            "  td {\n"
+            "    padding: 10px 12px;\n"
+            "    border-bottom: 1px solid rgba(15, 67, 122, 0.10);\n"
+            "    vertical-align: top;\n"
+            "  }\n"
+            "  tr:last-child td {\n"
+            "    border-bottom: 0;\n"
+            "  }\n"
+            "  code {\n"
+            "    font-size: 0.82rem;\n"
+            "    background: rgba(15, 67, 122, 0.08);\n"
+            "    padding: 0.16em 0.34em;\n"
+            "    border-radius: 6px;\n"
+            "  }\n"
+            "  hr {\n"
+            "    border: 0;\n"
+            "    height: 1px;\n"
+            "    background: rgba(15, 67, 122, 0.18);\n"
             "  }\n"
             "---\n\n"
         )
@@ -250,7 +313,10 @@ class DocumentService:
         sections = [section for section in sections if section]
         if len(sections) <= 1:
             return [f"# {self._slide_title_from_text(text)}\n\n{self._slide_bullets(text)}"]
-        return [self._normalize_slide(section) for section in sections]
+        normalized = [self._normalize_slide(section) for section in sections]
+        if normalized:
+            normalized[0] = self._upgrade_cover_slide(normalized[0])
+        return normalized
 
     def _slide_title_from_text(self, text: str) -> str:
         for line in text.splitlines():
@@ -266,6 +332,19 @@ class DocumentService:
         if not re.match(r"^#{1,2}\s+", lines[0]):
             lines.insert(0, "## Slide")
         return "\n".join(lines)
+
+    def _upgrade_cover_slide(self, slide: str) -> str:
+        lines = [line for line in slide.splitlines() if line.strip()]
+        if not lines:
+            return slide
+        title = re.sub(r"^#{1,2}\s+", "", lines[0]).strip()
+        body = [line for line in lines[1:] if line.strip()]
+        subtitle = body[0] if body else "Visao geral executiva"
+        return (
+            f"# {title}\n\n"
+            f"## {subtitle}\n\n"
+            "> Panorama claro, visual e pronto para apresentar.\n"
+        )
 
     def _slide_bullets(self, text: str) -> str:
         chunks = [chunk.strip() for chunk in re.split(r"(?<=[\.\!\?])\s+", " ".join(text.split())) if chunk.strip()]
@@ -590,6 +669,8 @@ class DocumentService:
         base_url = (self.settings.gotenberg_url or "").rstrip("/")
         if not base_url:
             raise ValueError("Gotenberg URL nao configurada.")
+        if "://" not in base_url:
+            base_url = f"http://{base_url}"
         headers = {"Gotenberg-Output-Filename": self._safe_filename(title, "").strip(".-") or "documento-kimi-ai"}
         data = {
             "printBackground": "true",
