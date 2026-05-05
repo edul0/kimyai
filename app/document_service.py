@@ -183,7 +183,7 @@ class DocumentService:
                 return cleaned
         return self._fallback_document_text(user_request)
 
-    def _is_slide_request(self, user_request: str, text: str) -> bool:
+    def _is_slide_request(self, user_request: str, text: str = "") -> bool:
         lowered = f"{user_request}\n{text}".lower()
         markers = [
             "slide",
@@ -2055,7 +2055,7 @@ class DocumentService:
             slides.append(current)
         return slides
 
-    def _is_slide_request(self, user_request: str) -> bool:
+    def _is_slide_request_legacy(self, user_request: str) -> bool:
         lowered = " ".join(user_request.split()).lower()
         slide_markers = [
             "slide",
