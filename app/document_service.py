@@ -35,6 +35,17 @@ class Block:
     rows: list[list[str]] | None = None
 
 
+@dataclass
+class Slide:
+    title: str
+    kicker: str = ""
+    body: list[str] | None = None
+    bullets: list[str] | None = None
+    rows: list[list[str]] | None = None
+    layout: str = "content"
+    visual: str | None = None
+
+
 class DocumentService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -105,13 +116,14 @@ class DocumentService:
         html_path = folder / html_name
         pdf_path = folder / pdf_name
 
-        raw_slides = self._split_raw_slides(source_text)
+        raw_slides = self._split_raw_slides(source_text) if self._looks_like_marp_deck(source_text.strip()) else self._split_into_slides(source_text.strip())
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
         marp_markdown = self._build_marp_markdown(title, source_text, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
-
-        html_created = self._render_marp_html(markdown_path, html_path)
-        pdf_provider = self._render_slide_pdf(markdown_path, html_path, pdf_path)
+        slides = self._build_slide_models(raw_slides, title, slide_visuals)
+        presentation_html = self._build_presentation_html(title, slides)
+        html_path.write_text(presentation_html, encoding="utf-8")
+        pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path)
 
         files = [
             {
@@ -121,7 +133,7 @@ class DocumentService:
                 "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
             }
         ]
-        if html_created and html_path.exists():
+        if html_path.exists():
             files.append(
                 {
                     "name": html_name,
@@ -143,9 +155,11 @@ class DocumentService:
         summary = "Slides gerados em Markdown Marp e PDF."
         if slide_visuals:
             summary = "Slides gerados com composicao visual e imagens IA."
+        else:
+            summary = "Slides gerados com layout visual personalizado e PDF."
         raw = (
             f"Slides gerados com sucesso: `{markdown_name}`"
-            + (f", `{html_name}`" if html_created and html_path.exists() else "")
+            + (f", `{html_name}`" if html_path.exists() else "")
             + (f" e `{pdf_name}`" if pdf_path.exists() else "")
             + "."
         )
@@ -159,7 +173,7 @@ class DocumentService:
             "document_title": title,
             "files": files,
             "slide_deck": True,
-            "tools_used": ["marp-cli", *(["pollinations-image"] if slide_visuals else [])],
+            "tools_used": ["presentation-html", "playwright", "marp-cli", *(["pollinations-image"] if slide_visuals else [])],
         }
 
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
@@ -607,6 +621,593 @@ class DocumentService:
         else:
             visual_line = f"![bg right:36%]({quote(normalized, safe='/:.-_')})"
         return f"{visual_line}\n\n{slide.strip()}"
+
+    def _build_slide_models(self, raw_slides: list[str], deck_title: str, slide_visuals: dict[int, str]) -> list[Slide]:
+        slides: list[Slide] = []
+        total = len(raw_slides)
+        for index, raw_slide in enumerate(raw_slides):
+            layout = self._infer_slide_class(raw_slide, index, total)
+            lines = [line.strip() for line in raw_slide.splitlines() if line.strip() and not line.strip().startswith("<!--")]
+            title = self._humanize_slide_title(lines[0] if lines else deck_title, index, deck_title)
+            bullets = [re.sub(r"^[-*]\s+", "", line).strip() for line in lines[1:] if re.match(r"^[-*]\s+", line)]
+            extras = [line for line in lines[1:] if line not in [f"- {bullet}" for bullet in bullets] and not re.match(r"^[-*]\s+", line)]
+            rows = self._extract_slide_table(raw_slide)
+            kicker = self._slide_kicker(deck_title, layout, index)
+            body = [self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", item)) for item in extras if not self._looks_like_table_line(item)]
+            slides.append(
+                Slide(
+                    title=title,
+                    kicker=kicker,
+                    body=body[:3],
+                    bullets=bullets[:5],
+                    rows=rows,
+                    layout=layout,
+                    visual=slide_visuals.get(index),
+                )
+            )
+        return slides
+
+    def _humanize_slide_title(self, raw_title: str, index: int, deck_title: str) -> str:
+        cleaned = self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", raw_title or "")).strip()
+        cleaned = re.sub(r"^(slide|pagina|página|page)\s*\d+\s*[-–:]\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"^\d+\s*[-–.:]\s*", "", cleaned)
+        return cleaned or (deck_title if index == 0 else f"Topico {index + 1}")
+
+    def _extract_slide_table(self, raw_slide: str) -> list[list[str]] | None:
+        lines = [line.strip() for line in raw_slide.splitlines() if line.strip()]
+        table_lines = [line for line in lines if self._looks_like_table_line(line)]
+        rows = self._parse_markdown_table(table_lines) if table_lines else []
+        return rows or None
+
+    def _slide_kicker(self, deck_title: str, layout: str, index: int) -> str:
+        mapping = {
+            "lead": deck_title,
+            "agenda": "Visao do percurso",
+            "metrics": "Sinais que importam",
+            "timeline": "Leitura em etapas",
+            "compare": "Comparacao executiva",
+            "closing": "Mensagem final",
+            "section": "Ponto de analise",
+        }
+        return mapping.get(layout, f"Slide {index + 1}")
+
+    def _build_presentation_html(self, deck_title: str, slides: list[Slide]) -> str:
+        slide_markup = "\n".join(self._render_slide_html(slide, index, len(slides)) for index, slide in enumerate(slides))
+        return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{self._escape_html(deck_title)}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #0f1d2e;
+      --panel: rgba(255,255,255,0.88);
+      --panel-soft: rgba(255,255,255,0.7);
+      --line: rgba(17, 35, 58, 0.09);
+      --ink: #10233d;
+      --muted: #61748f;
+      --accent: #1f5ea8;
+      --accent-2: #27a6b8;
+      --shadow: 0 28px 60px rgba(14, 31, 53, 0.12);
+      --radius: 28px;
+      --slide-w: 1600px;
+      --slide-h: 900px;
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    html, body {{
+      margin: 0;
+      padding: 0;
+      background: #0b1320;
+      color: var(--ink);
+      font-family: Inter, Aptos, "Segoe UI", Arial, sans-serif;
+    }}
+    body {{
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }}
+    .deck {{
+      width: min(100%, calc(var(--slide-w) * 1px));
+      display: grid;
+      gap: 26px;
+    }}
+    .slide {{
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      border-radius: 30px;
+      background:
+        radial-gradient(circle at top left, rgba(31, 94, 168, 0.22), transparent 34%),
+        linear-gradient(180deg, #f7fbff 0%, #eef4fa 100%);
+      box-shadow: 0 42px 90px rgba(8, 19, 36, 0.28);
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
+      page-break-after: always;
+      break-after: page;
+      isolation: isolate;
+    }}
+    .slide:last-child {{
+      page-break-after: auto;
+      break-after: auto;
+    }}
+    .slide-content {{
+      padding: 64px 68px 60px;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      gap: 22px;
+      z-index: 2;
+    }}
+    .slide-meta {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: .01em;
+    }}
+    .slide-kicker {{
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 800;
+    }}
+    .slide-page {{
+      font-size: 13px;
+    }}
+    .slide-title {{
+      margin: 0;
+      font-size: 58px;
+      line-height: .98;
+      letter-spacing: -.04em;
+      color: #0c2848;
+      max-width: 12ch;
+    }}
+    .slide-subtitle {{
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.45;
+      color: #41556f;
+      max-width: 30ch;
+    }}
+    .slide-visual {{
+      position: relative;
+      min-width: 0;
+      background: linear-gradient(135deg, #123255 0%, #1a5d85 100%);
+    }}
+    .slide-visual img {{
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }}
+    .slide-visual::after {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(247,251,255,0.02) 0%, rgba(12, 28, 49, 0.18) 100%);
+    }}
+    .content-stack {{
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-width: 0;
+    }}
+    .bullet-list {{
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 14px;
+    }}
+    .bullet-list li {{
+      display: grid;
+      grid-template-columns: 14px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      font-size: 24px;
+      line-height: 1.45;
+      color: #132942;
+    }}
+    .bullet-list li::before {{
+      content: "";
+      width: 14px;
+      height: 14px;
+      margin-top: 11px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 0 8px rgba(31, 94, 168, 0.08);
+    }}
+    .agenda-grid, .metrics-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px;
+    }}
+    .agenda-card, .metric-card {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 26px 28px;
+      box-shadow: var(--shadow);
+      min-height: 0;
+    }}
+    .agenda-card strong, .metric-label {{
+      display: block;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }}
+    .agenda-card span {{
+      display: block;
+      font-size: 30px;
+      line-height: 1.22;
+      color: #10233d;
+      font-weight: 700;
+    }}
+    .metric-value {{
+      display: block;
+      font-size: 42px;
+      line-height: 1;
+      letter-spacing: -.04em;
+      color: #0c2848;
+      margin: 8px 0 10px;
+      font-weight: 800;
+    }}
+    .metric-text {{
+      font-size: 18px;
+      line-height: 1.45;
+      color: #4b5e78;
+    }}
+    .timeline {{
+      display: grid;
+      gap: 16px;
+    }}
+    .timeline-step {{
+      position: relative;
+      padding: 0 0 0 68px;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      font-size: 24px;
+      line-height: 1.4;
+      color: #10233d;
+    }}
+    .timeline-step::before {{
+      content: attr(data-step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 46px;
+      height: 46px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #123d72, #1da6b7);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      box-shadow: 0 12px 24px rgba(16, 42, 72, 0.18);
+    }}
+    .timeline-step::after {{
+      content: "";
+      position: absolute;
+      left: 22px;
+      top: 46px;
+      width: 2px;
+      bottom: -18px;
+      background: rgba(18, 61, 114, 0.18);
+    }}
+    .timeline-step:last-child::after {{
+      display: none;
+    }}
+    .compare-table {{
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 24px;
+      background: rgba(255,255,255,0.92);
+      box-shadow: var(--shadow);
+    }}
+    .compare-table th, .compare-table td {{
+      padding: 16px 18px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(16, 35, 61, 0.08);
+      font-size: 18px;
+      line-height: 1.4;
+    }}
+    .compare-table th {{
+      background: #10345e;
+      color: #fff;
+      font-size: 15px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }}
+    .compare-table tr:last-child td {{
+      border-bottom: 0;
+    }}
+    .lead {{
+      grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr);
+      background:
+        radial-gradient(circle at top left, rgba(36, 172, 196, 0.24), transparent 26%),
+        linear-gradient(135deg, #0e1f33 0%, #163658 52%, #215b83 100%);
+    }}
+    .lead .slide-content {{
+      padding-top: 76px;
+      padding-bottom: 76px;
+      justify-content: center;
+    }}
+    .lead .slide-kicker,
+    .lead .slide-page,
+    .lead .slide-subtitle {{
+      color: rgba(255,255,255,0.8);
+    }}
+    .lead .slide-title {{
+      color: #fff;
+      font-size: 72px;
+      max-width: 10ch;
+    }}
+    .lead .slide-subtitle {{
+      font-size: 25px;
+      max-width: 24ch;
+    }}
+    .lead .lead-chip {{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.92);
+      font-size: 15px;
+      width: fit-content;
+      backdrop-filter: blur(12px);
+    }}
+    .closing {{
+      background:
+        radial-gradient(circle at top right, rgba(39, 166, 184, 0.18), transparent 28%),
+        linear-gradient(135deg, #10243d 0%, #1b4977 100%);
+    }}
+    .closing .slide-title,
+    .closing .slide-subtitle,
+    .closing .slide-kicker,
+    .closing .slide-page,
+    .closing .bullet-list li {{
+      color: #fff;
+    }}
+    .closing .bullet-list li::before {{
+      background: linear-gradient(135deg, #4fe0f2, #ffffff);
+      box-shadow: 0 0 0 8px rgba(255,255,255,0.08);
+    }}
+    .content {{
+      grid-template-columns: minmax(0, 1.18fr) minmax(320px, .82fr);
+    }}
+    .content .slide-title {{
+      max-width: 14ch;
+    }}
+    .content.no-visual,
+    .closing.no-visual,
+    .lead.no-visual {{
+      grid-template-columns: 1fr;
+    }}
+    .content.no-visual .slide-content,
+    .closing.no-visual .slide-content {{
+      max-width: 1120px;
+    }}
+    .slide.no-visual .slide-visual {{
+      display: none;
+    }}
+    .slide.copy-heavy .bullet-list li {{
+      font-size: 21px;
+    }}
+    .slide.copy-heavy .slide-title {{
+      font-size: 50px;
+    }}
+    .deck-nav {{
+      position: fixed;
+      right: 24px;
+      bottom: 22px;
+      z-index: 20;
+      display: flex;
+      gap: 10px;
+      background: rgba(9, 18, 32, 0.84);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 999px;
+      box-shadow: 0 16px 30px rgba(0,0,0,0.24);
+      backdrop-filter: blur(14px);
+      font-size: 14px;
+    }}
+    .deck-nav button {{
+      border: 0;
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      padding: 10px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+    }}
+    .deck-nav button:hover {{
+      background: rgba(255,255,255,0.16);
+    }}
+    @media screen and (max-width: 1100px) {{
+      body {{
+        padding: 10px;
+      }}
+      .deck {{
+        gap: 12px;
+      }}
+      .slide {{
+        border-radius: 18px;
+      }}
+      .slide-content {{
+        padding: 26px;
+      }}
+      .slide-title {{
+        font-size: 34px;
+      }}
+      .slide-subtitle,
+      .bullet-list li,
+      .timeline-step,
+      .agenda-card span {{
+        font-size: 18px;
+      }}
+    }}
+    @media print {{
+      body {{
+        background: #fff;
+        padding: 0;
+      }}
+      .deck {{
+        width: 100%;
+        gap: 0;
+      }}
+      .slide {{
+        width: 1600px;
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }}
+      .deck-nav {{
+        display: none !important;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="deck">
+    {slide_markup}
+  </main>
+  <div class="deck-nav" aria-hidden="true">
+    <button onclick="stepSlide(-1)">Anterior</button>
+    <button onclick="stepSlide(1)">Próximo</button>
+  </div>
+  <script>
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    let activeSlide = 0;
+    function stepSlide(direction) {{
+      activeSlide = Math.max(0, Math.min(slides.length - 1, activeSlide + direction));
+      slides[activeSlide].scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+    }}
+    document.addEventListener('keydown', (event) => {{
+      if (event.key === 'ArrowRight' || event.key === 'PageDown') stepSlide(1);
+      if (event.key === 'ArrowLeft' || event.key === 'PageUp') stepSlide(-1);
+    }});
+  </script>
+</body>
+</html>"""
+
+    def _render_slide_html(self, slide: Slide, index: int, total: int) -> str:
+        classes = [slide.layout if slide.layout in {"lead", "agenda", "metrics", "timeline", "compare", "closing"} else "content"]
+        if not slide.visual:
+            classes.append("no-visual")
+        if len(slide.bullets or []) >= 4:
+            classes.append("copy-heavy")
+        content = self._render_slide_content(slide)
+        visual_html = self._render_visual_html(slide)
+        title = self._escape_html(slide.title)
+        kicker = self._escape_html(slide.kicker)
+        subtitle = self._escape_html(slide.body[0]) if slide.layout == "lead" and slide.body else ""
+        lead_chip = '<div class="lead-chip">Deck personalizado para leitura executiva</div>' if slide.layout == "lead" else ""
+        return (
+            f'<section class="slide {" ".join(classes)}" id="slide-{index + 1}">'
+            '<div class="slide-content">'
+            f'<div class="slide-meta"><span class="slide-kicker">{kicker}</span><span class="slide-page">{index + 1} / {total}</span></div>'
+            f'<h1 class="slide-title">{title}</h1>'
+            + (f'<p class="slide-subtitle">{subtitle}</p>' if subtitle else "")
+            + lead_chip
+            + f'<div class="content-stack">{content}</div>'
+            + '</div>'
+            + visual_html
+            + '</section>'
+        )
+
+    def _render_visual_html(self, slide: Slide) -> str:
+        if not slide.visual:
+            return '<aside class="slide-visual"></aside>'
+        visual = quote(slide.visual.replace("\\", "/"), safe="/:.-_")
+        return f'<aside class="slide-visual"><img src="{visual}" alt="{self._escape_html(slide.title)}" /></aside>'
+
+    def _render_slide_content(self, slide: Slide) -> str:
+        if slide.layout == "agenda":
+            items = slide.bullets or slide.body or []
+            cards = []
+            for item in items[:4]:
+                label, detail = self._split_agenda_item(item)
+                cards.append(
+                    '<article class="agenda-card">'
+                    f'<strong>{self._escape_html(label)}</strong>'
+                    f'<span>{self._escape_html(detail)}</span>'
+                    '</article>'
+                )
+            return f'<div class="agenda-grid">{"".join(cards)}</div>'
+        if slide.layout == "metrics":
+            cards = []
+            for bullet in (slide.bullets or [])[:4]:
+                label, value, detail = self._parse_metric_bullet(f"- {bullet}")
+                cards.append(
+                    '<article class="metric-card">'
+                    f'<span class="metric-label">{self._escape_html(label)}</span>'
+                    f'<span class="metric-value">{self._escape_html(value)}</span>'
+                    f'<span class="metric-text">{self._escape_html(detail)}</span>'
+                    '</article>'
+                )
+            return f'<div class="metrics-grid">{"".join(cards)}</div>'
+        if slide.layout == "timeline":
+            steps = []
+            for idx, bullet in enumerate((slide.bullets or [])[:5], start=1):
+                steps.append(f'<div class="timeline-step" data-step="{idx}">{self._escape_html(bullet)}</div>')
+            return f'<div class="timeline">{"".join(steps)}</div>'
+        if slide.layout == "compare" and slide.rows:
+            return self._render_custom_table(slide.rows)
+        items = slide.bullets or slide.body or []
+        if items:
+            bullets = "".join(f"<li><span>{self._format_inline_html(item)}</span></li>" for item in items)
+            return f'<ul class="bullet-list">{bullets}</ul>'
+        return f'<p class="slide-subtitle">{self._escape_html(slide.kicker)}</p>'
+
+    def _render_custom_table(self, rows: list[list[str]]) -> str:
+        header = "".join(f"<th>{self._escape_html(cell)}</th>" for cell in rows[0])
+        body = "".join(
+            "<tr>" + "".join(f"<td>{self._format_inline_html(cell)}</td>" for cell in row) + "</tr>"
+            for row in rows[1:]
+        )
+        return f'<table class="compare-table"><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>'
+
+    def _split_agenda_item(self, item: str) -> tuple[str, str]:
+        cleaned = self._clean_inline_markdown(item)
+        if " - " in cleaned:
+            left, right = cleaned.split(" - ", 1)
+            return left.strip(), right.strip()
+        words = cleaned.split()
+        if len(words) <= 2:
+            return cleaned, "Ponto central do percurso"
+        return words[0], " ".join(words[1:])
+
+    def _format_inline_html(self, text: str) -> str:
+        escaped = self._escape_html(text)
+        return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+
+    def _build_presentation_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path) -> str:
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1.5)
+                page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+                page.pdf(path=str(pdf_path), width="1600px", height="900px", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
+                browser.close()
+            return "playwright-html"
+        except PlaywrightError:
+            return self._render_slide_pdf(markdown_path, html_path, pdf_path)
 
     def _infer_slide_class(self, slide: str, index: int, total: int) -> str:
         lower = slide.lower()
