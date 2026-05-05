@@ -173,7 +173,13 @@ async function loadSessions() {
 
 function renderSessions() {
   if (!state.sessions.length) {
-    $("sessionList").innerHTML = `<div class="saved-session"><strong>Nenhuma tarefa ainda</strong><small>Comece pela tela inicial.</small></div>`;
+    $("sessionList").innerHTML = `
+      <div class="session-empty-state">
+        <span class="session-empty-kicker">Workspace vazio</span>
+        <strong>Nenhuma tarefa ainda</strong>
+        <p>Crie a primeira tarefa para começar a montar seu historico de trabalho.</p>
+      </div>
+    `;
     return;
   }
   $("sessionList").innerHTML = state.sessions
