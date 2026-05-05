@@ -384,6 +384,8 @@ class LLMRouter:
                 "abra com um slide-capa forte; organize a historia em 6 a 10 slides; use um titulo curto por slide; use no maximo 3 a 5 bullets por slide; cada bullet deve ser especifico e acionavel; "
                 "misture slides de abertura, agenda, argumento, comparacao, processo, numeros-chave, recomendacao e fechamento; quando fizer sentido inclua tabelas curtas, highlights em negrito e chamadas de impacto; "
                 "escreva bullets com lideres fortes como `**Ponto**` seguido da explicacao; para metricas, prefira linhas curtas no formato `**Metrica** - valor ou insight`; para comparacoes, prefira tabela curta; para processos, prefira 3 a 5 etapas nominais; "
+                "pense visualmente: cada slide deve sugerir uma cena, simbolo ou imagem editorial clara, mesmo sem explicitar instrucoes tecnicas no texto final; "
+                "prefira linguagem concreta, cinematica e especifica, para que um gerador de imagem consiga criar artes coerentes com a narrativa do deck; "
                 "evite blocos longos de texto, definicoes genericas, enchimento e repeticao; escreva como apresentacao pronta para cliente, diretoria ou pitch, nao como rascunho cru. "
                 "Nao escreva notas do apresentador, nao explique a estrutura, nao fale sobre Gamma/Canva no conteudo final, nao use emojis, e nao repita o mesmo tipo de slide varias vezes seguidas. "
                 "Entregue conteudo pensado para um renderizador que aplica layouts profissionais automaticamente a capa, agenda, metricas, comparacao, timeline e fechamento. "

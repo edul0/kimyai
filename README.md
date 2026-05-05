@@ -91,6 +91,14 @@ Acesse:
 
 No deploy gratis do Render, deixe `GOTENBERG_URL` vazio. A Kimi usa `Playwright + Chromium` para PDFs em HTML e `marp-cli` para slides, sem precisar de servico pago extra. Se o Chromium falhar por ambiente, ainda existe fallback final com `reportlab`.
 
+### Imagens IA para slides
+
+- `POLLINATIONS_API_KEY`
+- `POLLINATIONS_IMAGE_MODEL`
+- `POLLINATIONS_IMAGE_QUALITY`
+
+Quando `POLLINATIONS_API_KEY` estiver configurada, os decks de slides passam a gerar imagens IA para capa e slides-chave, incorporadas automaticamente no PDF final.
+
 ### Supabase do Kimi AI
 
 Prefira estas variaveis no Render:

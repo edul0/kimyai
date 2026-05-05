@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 import shutil
 import subprocess
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from docx import Document
@@ -103,7 +105,9 @@ class DocumentService:
         html_path = folder / html_name
         pdf_path = folder / pdf_name
 
-        marp_markdown = self._build_marp_markdown(title, source_text)
+        raw_slides = self._split_raw_slides(source_text)
+        slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
+        marp_markdown = self._build_marp_markdown(title, source_text, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
 
         html_created = self._render_marp_html(markdown_path, html_path)
@@ -137,12 +141,16 @@ class DocumentService:
             )
 
         summary = "Slides gerados em Markdown Marp e PDF."
+        if slide_visuals:
+            summary = "Slides gerados com composicao visual e imagens IA."
         raw = (
             f"Slides gerados com sucesso: `{markdown_name}`"
             + (f", `{html_name}`" if html_created and html_path.exists() else "")
             + (f" e `{pdf_name}`" if pdf_path.exists() else "")
             + "."
         )
+        if slide_visuals:
+            raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
         return {
             "provider": draft.get("provider", "kimi-slides"),
             "model": f"{draft.get('model', 'kimi-slides')} + {pdf_provider}",
@@ -151,6 +159,7 @@ class DocumentService:
             "document_title": title,
             "files": files,
             "slide_deck": True,
+            "tools_used": ["marp-cli", *(["pollinations-image"] if slide_visuals else [])],
         }
 
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
@@ -186,13 +195,10 @@ class DocumentService:
         base = " ".join(user_request.split()).strip()
         return (base[:80] or "Documento Kimi AI").rstrip(" .:-")
 
-    def _build_marp_markdown(self, title: str, source_text: str) -> str:
+    def _build_marp_markdown(self, title: str, source_text: str, slide_visuals: dict[int, str] | None = None) -> str:
         cleaned = source_text.strip()
-        if self._looks_like_marp_deck(cleaned):
-            slides = [chunk.strip() for chunk in re.split(r"\n---+\n", cleaned) if chunk.strip()]
-        else:
-            slides = self._split_into_slides(cleaned)
-        slides = self._polish_slide_deck(slides, title)
+        slides = self._split_raw_slides(cleaned) if self._looks_like_marp_deck(cleaned) else self._split_into_slides(cleaned)
+        slides = self._polish_slide_deck(slides, title, slide_visuals or {})
         frontmatter = (
             "---\n"
             "marp: true\n"
@@ -436,6 +442,9 @@ class DocumentService:
         )
         return frontmatter + "\n\n---\n\n".join(slides).strip() + "\n"
 
+    def _split_raw_slides(self, text: str) -> list[str]:
+        return [chunk.strip() for chunk in re.split(r"\n---+\n", text) if chunk.strip()]
+
     def _looks_like_marp_deck(self, text: str) -> bool:
         if "marp: true" in text.lower():
             return True
@@ -465,7 +474,7 @@ class DocumentService:
             normalized[0] = self._upgrade_cover_slide(normalized[0])
         return normalized
 
-    def _polish_slide_deck(self, slides: list[str], title: str) -> list[str]:
+    def _polish_slide_deck(self, slides: list[str], title: str, slide_visuals: dict[int, str]) -> list[str]:
         polished: list[str] = []
         total = len(slides)
         for index, slide in enumerate(slides):
@@ -481,9 +490,123 @@ class DocumentService:
                 working = self._render_timeline_slide(working)
             elif slide_class == "closing":
                 working = self._render_closing_slide(working, title)
+            visual_path = slide_visuals.get(index)
+            if visual_path:
+                working = self._inject_visual_asset(working, visual_path, slide_class)
             working = self._inject_slide_class(working, slide_class)
             polished.append(working)
         return polished
+
+    def _generate_slide_visuals(
+        self,
+        title: str,
+        user_request: str,
+        slides: list[str],
+        folder: Path,
+    ) -> dict[int, str]:
+        if not self.settings.pollinations_api_key or not slides:
+            return {}
+        selected_indexes = self._select_visual_slides(slides)
+        if not selected_indexes:
+            return {}
+        assets_dir = folder / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        visuals: dict[int, str] = {}
+        for slide_index in selected_indexes:
+            prompt = self._slide_image_prompt(title, user_request, slides[slide_index], slide_index, len(slides))
+            output_path = assets_dir / f"slide-{slide_index + 1:02d}-visual.png"
+            try:
+                self._download_pollinations_image(prompt, output_path)
+                visuals[slide_index] = output_path.name
+            except Exception:
+                continue
+        return visuals
+
+    def _select_visual_slides(self, slides: list[str]) -> list[int]:
+        choices: list[int] = []
+        if slides:
+            choices.append(0)
+        for idx, slide in enumerate(slides[1:-1], start=1):
+            lower = slide.lower()
+            if any(token in lower for token in ["impacto", "cenario", "cenario", "mercado", "processo", "cronograma", "arquitetura", "roadmap", "estrategia", "estratégia"]):
+                choices.append(idx)
+            if len(choices) >= 3:
+                break
+        if len(choices) < 2 and len(slides) > 2:
+            choices.append(1)
+        deduped: list[int] = []
+        for item in choices:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped[:3]
+
+    def _slide_image_prompt(
+        self,
+        deck_title: str,
+        user_request: str,
+        slide: str,
+        slide_index: int,
+        total_slides: int,
+    ) -> str:
+        lines = [line.strip() for line in slide.splitlines() if line.strip() and not line.strip().startswith("<!--")]
+        heading = re.sub(r"^#{1,3}\s*", "", lines[0]).strip() if lines else deck_title
+        bullets = [
+            re.sub(r"^[-*]\s+", "", line).strip()
+            for line in lines[1:]
+            if re.match(r"^[-*]\s+", line)
+        ][:3]
+        narrative = "; ".join(bullets)[:360]
+        is_cover = slide_index == 0
+        if is_cover:
+            return (
+                f"Premium presentation cover image for '{deck_title}'. "
+                f"Theme: {heading}. "
+                f"Editorial, cinematic, polished corporate storytelling, high-end consulting deck aesthetic, "
+                f"clean composition with negative space for title text, subtle depth, modern lighting, no text, no watermark. "
+                f"Context: {user_request[:260]}"
+            )
+        return (
+            f"Presentation visual for slide {slide_index + 1} of {total_slides} about '{deck_title}'. "
+            f"Slide topic: {heading}. "
+            f"Key points: {narrative or user_request[:220]}. "
+            "Professional editorial illustration or photoreal concept for a boardroom-grade presentation, "
+            "clean composition, sophisticated color palette, suitable for split-slide layout, no text, no watermark."
+        )
+
+    def _download_pollinations_image(self, prompt: str, output_path: Path) -> None:
+        headers = {"Authorization": f"Bearer {self.settings.pollinations_api_key}"}
+        payload = {
+            "model": self.settings.pollinations_image_model,
+            "prompt": prompt,
+            "size": "1536x1024",
+            "quality": self.settings.pollinations_image_quality,
+            "response_format": "b64_json",
+        }
+        with httpx.Client(timeout=150) as client:
+            response = client.post("https://gen.pollinations.ai/v1/images/generations", headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        image_payload = (data.get("data") or [{}])[0]
+        image_b64 = image_payload.get("b64_json")
+        image_url = image_payload.get("url")
+        if image_b64:
+            output_path.write_bytes(base64.b64decode(image_b64))
+            return
+        if image_url:
+            with httpx.Client(timeout=150) as client:
+                response = client.get(image_url)
+                response.raise_for_status()
+            output_path.write_bytes(response.content)
+            return
+        raise RuntimeError("Imagem de slide nao retornou conteudo utilizavel.")
+
+    def _inject_visual_asset(self, slide: str, visual_path: str, slide_class: str) -> str:
+        normalized = visual_path.replace("\\", "/")
+        if slide_class == "lead":
+            visual_line = f"![bg right:42%]({quote(normalized, safe='/:.-_')})"
+        else:
+            visual_line = f"![bg right:36%]({quote(normalized, safe='/:.-_')})"
+        return f"{visual_line}\n\n{slide.strip()}"
 
     def _infer_slide_class(self, slide: str, index: int, total: int) -> str:
         lower = slide.lower()

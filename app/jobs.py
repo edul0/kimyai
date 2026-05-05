@@ -106,7 +106,9 @@ class JobManager:
                 )
                 self._event(job, "Kemy", "Montando arquivos finais do documento.", 72)
                 result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft)
-                result["tools_used"] = list(dict.fromkeys((draft.get("tools_used") or []) + ["python-docx", "reportlab"]))
+                result["tools_used"] = list(
+                    dict.fromkeys((draft.get("tools_used") or []) + (result.get("tools_used") or []) + ["python-docx", "reportlab"])
+                )
                 await self._finish_job(job, result)
                 return
 
