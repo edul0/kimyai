@@ -1692,7 +1692,17 @@ class DocumentService:
 
     def _build_pdf_with_reportlab(self, path: Path, title: str, blocks: list[Block], user_request: str) -> None:
         if self._is_slide_request(user_request):
-            self._build_slide_pdf_with_reportlab(path, title, blocks)
+            slide_blocks = self._group_slides(title, blocks)
+            slides = [
+                Slide(
+                    title=item["title"],
+                    body=[entry["text"] for entry in item["items"] if entry["kind"] != "bullet"] or None,
+                    bullets=[entry["text"] for entry in item["items"] if entry["kind"] == "bullet"] or None,
+                    kicker=f"Slide {index + 1}",
+                )
+                for index, item in enumerate(slide_blocks)
+            ]
+            self._build_slide_pdf_with_reportlab(path, slides)
             return
         styles = getSampleStyleSheet()
         body = ParagraphStyle(
@@ -1746,7 +1756,7 @@ class DocumentService:
         pdf = SimpleDocTemplate(str(path), pagesize=LETTER, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch)
         pdf.build(story)
 
-    def _build_slide_pdf_with_reportlab(self, path: Path, title: str, blocks: list[Block]) -> None:
+    def _build_slide_pdf_with_reportlab_legacy(self, path: Path, title: str, blocks: list[Block]) -> None:
         styles = getSampleStyleSheet()
         slide_title = ParagraphStyle(
             "KimiSlideTitle",
