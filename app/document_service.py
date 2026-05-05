@@ -189,25 +189,31 @@ class DocumentService:
     def _build_marp_markdown(self, title: str, source_text: str) -> str:
         cleaned = source_text.strip()
         if self._looks_like_marp_deck(cleaned):
-            return cleaned
-        slides = self._split_into_slides(cleaned)
+            slides = [chunk.strip() for chunk in re.split(r"\n---+\n", cleaned) if chunk.strip()]
+        else:
+            slides = self._split_into_slides(cleaned)
+        slides = self._polish_slide_deck(slides, title)
         frontmatter = (
             "---\n"
             "marp: true\n"
-            "theme: default\n"
+            "theme: gaia\n"
             "paginate: true\n"
             "size: 16:9\n"
             "headingDivider: 2\n"
+            "footer: 'Kemy AI'\n"
             "style: |\n"
             "  section {\n"
             "    font-family: 'Aptos', 'Segoe UI', sans-serif;\n"
-            "    background: radial-gradient(circle at top right, rgba(66, 153, 225, 0.20), transparent 28%), linear-gradient(180deg, #f7fbff 0%, #eef4fb 100%);\n"
+            "    background: linear-gradient(180deg, #f8fbff 0%, #eef3f9 100%);\n"
             "    color: #10243d;\n"
-            "    padding: 54px 70px;\n"
+            "    padding: 54px 64px 58px;\n"
+            "  }\n"
+            "  section strong {\n"
+            "    color: #0d315f;\n"
             "  }\n"
             "  section::after {\n"
             "    font-size: 0.72rem;\n"
-            "    color: #4c6a8a;\n"
+            "    color: #68809f;\n"
             "  }\n"
             "  h1 {\n"
             "    color: #0b2e59;\n"
@@ -258,7 +264,7 @@ class DocumentService:
             "    border-collapse: collapse;\n"
             "    margin-top: 0.5em;\n"
             "    font-size: 0.82rem;\n"
-            "    background: rgba(255,255,255,0.72);\n"
+            "    background: rgba(255,255,255,0.84);\n"
             "    border-radius: 14px;\n"
             "    overflow: hidden;\n"
             "  }\n"
@@ -286,6 +292,145 @@ class DocumentService:
             "    border: 0;\n"
             "    height: 1px;\n"
             "    background: rgba(15, 67, 122, 0.18);\n"
+            "  }\n"
+            "  section.lead {\n"
+            "    background: radial-gradient(circle at top left, rgba(99, 179, 237, 0.30), transparent 32%), linear-gradient(135deg, #0d1b2a 0%, #16324f 55%, #23486b 100%);\n"
+            "    color: #f5fbff;\n"
+            "    display: flex;\n"
+            "    flex-direction: column;\n"
+            "    justify-content: center;\n"
+            "  }\n"
+            "  section.lead h1, section.lead h2, section.lead strong, section.lead blockquote {\n"
+            "    color: #ffffff;\n"
+            "  }\n"
+            "  section.lead p, section.lead li, section.lead::after {\n"
+            "    color: rgba(255,255,255,0.88);\n"
+            "  }\n"
+            "  section.lead h1 {\n"
+            "    font-size: 2.7rem;\n"
+            "    max-width: 10.5em;\n"
+            "    margin-bottom: 0.28em;\n"
+            "  }\n"
+            "  section.lead h2 {\n"
+            "    font-size: 1.14rem;\n"
+            "    font-weight: 500;\n"
+            "    margin-bottom: 1em;\n"
+            "    max-width: 30em;\n"
+            "  }\n"
+            "  section.lead blockquote {\n"
+            "    background: rgba(255,255,255,0.08);\n"
+            "    border-left-color: rgba(255,255,255,0.7);\n"
+            "    max-width: 34em;\n"
+            "  }\n"
+            "  section.agenda ul {\n"
+            "    display: grid;\n"
+            "    grid-template-columns: 1fr 1fr;\n"
+            "    gap: 0.55em 1.8em;\n"
+            "    padding-left: 0;\n"
+            "    list-style: none;\n"
+            "    margin-top: 1.2em;\n"
+            "  }\n"
+            "  section.agenda li {\n"
+            "    background: rgba(255,255,255,0.88);\n"
+            "    border: 1px solid rgba(17, 55, 99, 0.08);\n"
+            "    border-radius: 14px;\n"
+            "    padding: 0.8em 0.95em;\n"
+            "    box-shadow: 0 12px 28px rgba(17, 55, 99, 0.08);\n"
+            "    margin: 0;\n"
+            "  }\n"
+            "  section.metrics .metrics-grid {\n"
+            "    display: grid;\n"
+            "    grid-template-columns: 1fr 1fr;\n"
+            "    gap: 0.85em;\n"
+            "    margin-top: 1.1em;\n"
+            "  }\n"
+            "  section.metrics .metric-card {\n"
+            "    background: rgba(255,255,255,0.92);\n"
+            "    border: 1px solid rgba(16, 36, 61, 0.08);\n"
+            "    border-radius: 16px;\n"
+            "    padding: 0.95em 1.05em;\n"
+            "    box-shadow: 0 16px 30px rgba(23, 45, 78, 0.08);\n"
+            "  }\n"
+            "  section.metrics .metric-label {\n"
+            "    display: block;\n"
+            "    font-size: 0.78rem;\n"
+            "    font-weight: 700;\n"
+            "    letter-spacing: 0.04em;\n"
+            "    text-transform: uppercase;\n"
+            "    color: #55708f;\n"
+            "    margin-bottom: 0.4em;\n"
+            "  }\n"
+            "  section.metrics .metric-value {\n"
+            "    display: block;\n"
+            "    font-size: 1.22rem;\n"
+            "    font-weight: 800;\n"
+            "    color: #10243d;\n"
+            "    margin-bottom: 0.28em;\n"
+            "  }\n"
+            "  section.metrics .metric-text {\n"
+            "    display: block;\n"
+            "    font-size: 0.83rem;\n"
+            "    line-height: 1.34;\n"
+            "    color: #455d79;\n"
+            "  }\n"
+            "  section.timeline ol {\n"
+            "    list-style: none;\n"
+            "    counter-reset: steps;\n"
+            "    margin-top: 1em;\n"
+            "    padding-left: 0;\n"
+            "  }\n"
+            "  section.timeline li {\n"
+            "    counter-increment: steps;\n"
+            "    position: relative;\n"
+            "    padding: 0.18em 0 0.9em 3em;\n"
+            "    margin: 0;\n"
+            "  }\n"
+            "  section.timeline li::before {\n"
+            "    content: counter(steps);\n"
+            "    position: absolute;\n"
+            "    left: 0;\n"
+            "    top: 0.06em;\n"
+            "    width: 2em;\n"
+            "    height: 2em;\n"
+            "    border-radius: 999px;\n"
+            "    background: #163f73;\n"
+            "    color: #fff;\n"
+            "    display: grid;\n"
+            "    place-items: center;\n"
+            "    font-size: 0.75rem;\n"
+            "    font-weight: 800;\n"
+            "  }\n"
+            "  section.timeline li::after {\n"
+            "    content: '';\n"
+            "    position: absolute;\n"
+            "    left: 0.95em;\n"
+            "    top: 2.2em;\n"
+            "    bottom: -0.1em;\n"
+            "    width: 2px;\n"
+            "    background: rgba(22, 63, 115, 0.16);\n"
+            "  }\n"
+            "  section.timeline li:last-child::after {\n"
+            "    display: none;\n"
+            "  }\n"
+            "  section.compare table {\n"
+            "    margin-top: 1.1em;\n"
+            "    box-shadow: 0 16px 32px rgba(23, 45, 78, 0.08);\n"
+            "  }\n"
+            "  section.closing {\n"
+            "    background: linear-gradient(135deg, #10243d 0%, #1c4f88 100%);\n"
+            "    color: #f4f8fc;\n"
+            "    display: flex;\n"
+            "    flex-direction: column;\n"
+            "    justify-content: center;\n"
+            "  }\n"
+            "  section.closing h1, section.closing h2, section.closing strong {\n"
+            "    color: #ffffff;\n"
+            "  }\n"
+            "  section.closing p, section.closing li, section.closing::after {\n"
+            "    color: rgba(255,255,255,0.9);\n"
+            "  }\n"
+            "  section.closing ul {\n"
+            "    margin-top: 1em;\n"
             "  }\n"
             "---\n\n"
         )
@@ -319,6 +464,132 @@ class DocumentService:
         if normalized:
             normalized[0] = self._upgrade_cover_slide(normalized[0])
         return normalized
+
+    def _polish_slide_deck(self, slides: list[str], title: str) -> list[str]:
+        polished: list[str] = []
+        total = len(slides)
+        for index, slide in enumerate(slides):
+            working = slide.strip()
+            slide_class = self._infer_slide_class(working, index, total)
+            if slide_class == "lead":
+                working = self._upgrade_cover_slide(working)
+            elif slide_class == "agenda":
+                working = self._normalize_agenda_slide(working)
+            elif slide_class == "metrics":
+                working = self._render_metrics_slide(working)
+            elif slide_class == "timeline":
+                working = self._render_timeline_slide(working)
+            elif slide_class == "closing":
+                working = self._render_closing_slide(working, title)
+            working = self._inject_slide_class(working, slide_class)
+            polished.append(working)
+        return polished
+
+    def _infer_slide_class(self, slide: str, index: int, total: int) -> str:
+        lower = slide.lower()
+        if index == 0:
+            return "lead"
+        if index == total - 1:
+            return "closing"
+        if "|" in slide and "\n" in slide:
+            return "compare"
+        if any(token in lower for token in ["agenda", "roteiro", "sumario", "sumário", "visao geral", "visão geral"]):
+            return "agenda"
+        if any(token in lower for token in ["roadmap", "cronograma", "etapas", "fases", "processo", "passos", "plano"]):
+            return "timeline"
+        bullet_count = len(re.findall(r"(?m)^[-*]\s+", slide))
+        numeric_hits = len(re.findall(r"\b\d+(?:[%x]|(?:[.,]\d+)?)\b", slide))
+        if bullet_count >= 3 and numeric_hits >= 2:
+            return "metrics"
+        return "section"
+
+    def _inject_slide_class(self, slide: str, slide_class: str) -> str:
+        directive = f"<!-- _class: {slide_class} -->"
+        if slide.lstrip().startswith("<!-- _class:"):
+            return slide
+        return f"{directive}\n\n{slide.strip()}"
+
+    def _normalize_agenda_slide(self, slide: str) -> str:
+        lines = [line.strip() for line in slide.splitlines() if line.strip()]
+        if not lines:
+            return slide
+        heading = lines[0]
+        body = []
+        for line in lines[1:]:
+            if re.match(r"^[-*]\s+", line):
+                body.append(line)
+            elif not line.startswith(">"):
+                body.append(f"- {line}")
+        if not body:
+            return slide
+        return "\n".join([heading, ""] + body)
+
+    def _render_metrics_slide(self, slide: str) -> str:
+        title, bullets, extras = self._split_slide_content(slide)
+        cards: list[str] = []
+        for bullet in bullets[:4]:
+            label, value, text = self._parse_metric_bullet(bullet)
+            cards.append(
+                '<div class="metric-card">'
+                f'<span class="metric-label">{self._escape_html(label)}</span>'
+                f'<span class="metric-value">{self._escape_html(value)}</span>'
+                f'<span class="metric-text">{self._escape_html(text)}</span>'
+                "</div>"
+            )
+        html_block = '<div class="metrics-grid">' + "".join(cards) + "</div>"
+        parts = [title, "", html_block]
+        if extras:
+            parts.extend([""] + extras)
+        return "\n".join(parts)
+
+    def _render_timeline_slide(self, slide: str) -> str:
+        title, bullets, extras = self._split_slide_content(slide)
+        if not bullets:
+            return slide
+        ordered = [re.sub(r"^[-*]\s+", "", bullet).strip() for bullet in bullets[:5]]
+        body = [title, "", "<ol>"] + [f"<li>{self._escape_html(item)}</li>" for item in ordered] + ["</ol>"]
+        if extras:
+            body.extend([""] + extras)
+        return "\n".join(body)
+
+    def _render_closing_slide(self, slide: str, title: str) -> str:
+        lines = [line.strip() for line in slide.splitlines() if line.strip()]
+        if not lines:
+            return slide
+        if len(lines) == 1:
+            return f"# {title}\n\n## Recomendacao final\n\n- Priorize execucao simples, narrativa clara e proximos passos concretos."
+        if not any(line.startswith("## ") for line in lines[1:]):
+            lines.insert(1, "## Recomendacao final")
+        return "\n".join(lines)
+
+    def _split_slide_content(self, slide: str) -> tuple[str, list[str], list[str]]:
+        lines = [line.strip() for line in slide.splitlines() if line.strip() and not line.strip().startswith("<!--")]
+        if not lines:
+            return "## Slide", [], []
+        title = lines[0]
+        bullets = [line for line in lines[1:] if re.match(r"^[-*]\s+", line)]
+        extras = [line for line in lines[1:] if line not in bullets]
+        return title, bullets, extras
+
+    def _parse_metric_bullet(self, bullet: str) -> tuple[str, str, str]:
+        content = re.sub(r"^[-*]\s+", "", bullet).strip()
+        strong_match = re.match(r"^\*\*(.+?)\*\*\s*[-:]\s*(.+)$", content)
+        if strong_match:
+            label = strong_match.group(1).strip()
+            tail = strong_match.group(2).strip()
+        else:
+            parts = re.split(r"\s[-:]\s", content, maxsplit=1)
+            label = parts[0].strip()
+            tail = parts[1].strip() if len(parts) > 1 else ""
+        value_match = re.match(r"^([0-9][^,;.]{0,24})(?:\s*[,-]\s*|\s+)(.+)$", tail)
+        if value_match:
+            value = value_match.group(1).strip()
+            text = value_match.group(2).strip()
+        else:
+            tokens = tail.split()
+            value = tokens[0] if tokens else label
+            text = " ".join(tokens[1:]).strip() or tail or "Indicador-chave da narrativa."
+        return label or "Indicador", value, text
 
     def _slide_title_from_text(self, text: str) -> str:
         for line in text.splitlines():

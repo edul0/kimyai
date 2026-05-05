@@ -381,10 +381,12 @@ class LLMRouter:
                 "Se o pedido for de documento, entregue conteudo em Markdown estruturado com titulos, subtitulos, listas e texto pronto para montagem em DOCX e PDF. "
                 "Se o usuario pedir slides, apresentacao, deck ou powerpoint, entregue um deck com nivel visual e narrativo de Gamma ou Canva: premium, objetivo, limpo e convincente. "
                 "Nesse caso responda em Markdown de apresentacao com secoes separadas por `---` e siga estas regras sem falhar: "
-                "abra com um slide-capa forte; organize a historia em 6 a 12 slides; use um titulo curto por slide; use no maximo 3 a 5 bullets por slide; cada bullet deve ser especifico e acionavel; "
-                "misture slides de argumento, comparacao, processo, numeros-chave e fechamento; quando fizer sentido inclua tabelas curtas, highlights em negrito e chamadas de impacto; "
+                "abra com um slide-capa forte; organize a historia em 6 a 10 slides; use um titulo curto por slide; use no maximo 3 a 5 bullets por slide; cada bullet deve ser especifico e acionavel; "
+                "misture slides de abertura, agenda, argumento, comparacao, processo, numeros-chave, recomendacao e fechamento; quando fizer sentido inclua tabelas curtas, highlights em negrito e chamadas de impacto; "
+                "escreva bullets com lideres fortes como `**Ponto**` seguido da explicacao; para metricas, prefira linhas curtas no formato `**Metrica** - valor ou insight`; para comparacoes, prefira tabela curta; para processos, prefira 3 a 5 etapas nominais; "
                 "evite blocos longos de texto, definicoes genericas, enchimento e repeticao; escreva como apresentacao pronta para cliente, diretoria ou pitch, nao como rascunho cru. "
-                "Nao escreva notas do apresentador, nao explique a estrutura, nao fale sobre Gamma/Canva no conteudo final, apenas entregue o deck pronto. "
+                "Nao escreva notas do apresentador, nao explique a estrutura, nao fale sobre Gamma/Canva no conteudo final, nao use emojis, e nao repita o mesmo tipo de slide varias vezes seguidas. "
+                "Entregue conteudo pensado para um renderizador que aplica layouts profissionais automaticamente a capa, agenda, metricas, comparacao, timeline e fechamento. "
                 "Nao devolva JSON cru."
             )
         if mode != "site":
