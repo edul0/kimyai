@@ -36,7 +36,8 @@ class JobManager:
         now = utcnow()
         normalized = attachments or []
         pedido = message.strip()[: self.settings.max_prompt_chars]
-        effective_mode = self._resolve_mode(pedido, mode)
+        session_data = self.storage.get_json(f"session:{session_id}", {})
+        effective_mode = self._resolve_mode(pedido, mode, session_data)
         job = JobState(
             job_id=str(uuid.uuid4()),
             session_id=session_id,
@@ -72,13 +73,13 @@ class JobManager:
         if not job:
             return
         try:
-            effective_mode = self._resolve_mode(job.pedido, job.modo)
+            session_data = self.storage.get_json(f"session:{job.session_id}", {})
+            effective_mode = self._resolve_mode(job.pedido, job.modo, session_data)
             if effective_mode != job.modo:
                 job.modo = effective_mode
                 self.save(job)
             self._event(job, "Kemy", "Lendo a conversa e o contexto.", 15)
             await asyncio.sleep(0)
-            session_data = self.storage.get_json(f"session:{job.session_id}", {})
             history = session_data.get("historico", [])
             memory = session_data.get("memoria", [])
             compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
@@ -225,7 +226,7 @@ class JobManager:
             return None
         return text[:220]
 
-    def _resolve_mode(self, message: str, current_mode: str) -> str:
+    def _resolve_mode(self, message: str, current_mode: str, session_data: dict[str, Any] | None = None) -> str:
         if current_mode == "imagem":
             return "imagem"
         if current_mode == "documento":
@@ -251,6 +252,17 @@ class JobManager:
         ]
         if any(marker in lowered for marker in image_markers):
             return "imagem"
+        slide_markers = [
+            "slide",
+            "slides",
+            "apresentacao",
+            "apresentação",
+            "deck",
+            "ppt",
+            "pptx",
+            "powerpoint",
+            "carrossel",
+        ]
         document_markers = [
             "gerar pdf",
             "gere pdf",
@@ -276,9 +288,34 @@ class JobManager:
             "gerar contrato",
             "gerar apostila",
             "gerar manual",
+            *slide_markers,
         ]
         if any(marker in lowered for marker in document_markers):
             return "documento"
+        if session_data:
+            history = session_data.get("historico", [])
+            recent_messages = history[-6:]
+            recent_text = "\n".join(str(item.get("content") or "") for item in recent_messages).lower()
+            recent_files = any((item.get("files") or item.get("result", {}).get("files") or []) for item in recent_messages if item.get("role") == "assistant")
+            recent_document_context = recent_files or any(marker in recent_text for marker in document_markers)
+            followup_markers = [
+                "ajuste",
+                "melhore",
+                "refaça",
+                "refaca",
+                "continue",
+                "altere",
+                "troque",
+                "mude",
+                "deixa",
+                "quero",
+                "agora",
+                "isso",
+                "esse",
+                "essa",
+            ]
+            if recent_document_context and (len(lowered.split()) <= 18 or any(marker in lowered for marker in followup_markers)):
+                return "documento"
         return current_mode
 
     async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:

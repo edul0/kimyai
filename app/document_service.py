@@ -116,9 +116,12 @@ class DocumentService:
         html_path = folder / html_name
         pdf_path = folder / pdf_name
 
-        raw_slides = self._split_raw_slides(source_text) if self._looks_like_marp_deck(source_text.strip()) else self._split_into_slides(source_text.strip())
+        normalized_source = self._normalize_slide_source(source_text)
+        raw_slides = self._split_raw_slides(normalized_source) if self._looks_like_marp_deck(normalized_source.strip()) else self._split_into_slides(normalized_source.strip())
+        if len(raw_slides) < 4:
+            raw_slides = self._synthesize_slide_deck("\n\n".join(raw_slides) or normalized_source)
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
-        marp_markdown = self._build_marp_markdown(title, source_text, slide_visuals=slide_visuals)
+        marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
         presentation_html = self._build_presentation_html(title, slides)
@@ -210,7 +213,7 @@ class DocumentService:
         return (base[:80] or "Documento Kimi AI").rstrip(" .:-")
 
     def _build_marp_markdown(self, title: str, source_text: str, slide_visuals: dict[int, str] | None = None) -> str:
-        cleaned = source_text.strip()
+        cleaned = self._normalize_slide_source(source_text).strip()
         slides = self._split_raw_slides(cleaned) if self._looks_like_marp_deck(cleaned) else self._split_into_slides(cleaned)
         slides = self._polish_slide_deck(slides, title, slide_visuals or {})
         frontmatter = (
@@ -457,7 +460,9 @@ class DocumentService:
         return frontmatter + "\n\n---\n\n".join(slides).strip() + "\n"
 
     def _split_raw_slides(self, text: str) -> list[str]:
-        return [chunk.strip() for chunk in re.split(r"\n---+\n", text) if chunk.strip()]
+        normalized = self._normalize_slide_source(text)
+        chunks = [self._sanitize_slide_chunk(chunk) for chunk in re.split(r"(?m)^\s*---+\s*$", normalized)]
+        return [chunk for chunk in chunks if chunk]
 
     def _looks_like_marp_deck(self, text: str) -> bool:
         if "marp: true" in text.lower():
@@ -465,28 +470,100 @@ class DocumentService:
         return text.count("\n---") >= 1 and ("# " in text or "## " in text)
 
     def _split_into_slides(self, text: str) -> list[str]:
-        if "\n---" in text:
-            parts = [chunk.strip() for chunk in re.split(r"\n---+\n", text) if chunk.strip()]
+        normalized = self._normalize_slide_source(text)
+        if "\n---" in normalized:
+            parts = [self._sanitize_slide_chunk(chunk) for chunk in re.split(r"(?m)^\s*---+\s*$", normalized) if chunk.strip()]
             if parts:
                 return parts
         sections = []
         current: list[str] = []
-        for line in text.splitlines():
+        for line in normalized.splitlines():
             stripped = line.strip()
             if re.match(r"^#{1,2}\s+", stripped) and current:
-                sections.append("\n".join(current).strip())
+                sections.append(self._sanitize_slide_chunk("\n".join(current)))
                 current = [stripped]
             else:
                 current.append(stripped)
         if current:
-            sections.append("\n".join(current).strip())
+            sections.append(self._sanitize_slide_chunk("\n".join(current)))
         sections = [section for section in sections if section]
         if len(sections) <= 1:
-            return [f"# {self._slide_title_from_text(text)}\n\n{self._slide_bullets(text)}"]
+            return self._synthesize_slide_deck(normalized)
         normalized = [self._normalize_slide(section) for section in sections]
         if normalized:
             normalized[0] = self._upgrade_cover_slide(normalized[0])
         return normalized
+
+    def _normalize_slide_source(self, text: str) -> str:
+        cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r"^```(?:markdown|md|text|html)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        lines = cleaned.splitlines()
+        if lines and lines[0].strip() == "---":
+            for idx in range(1, min(len(lines), 24)):
+                if lines[idx].strip() == "---":
+                    frontmatter_body = lines[1:idx]
+                    if any(":" in item for item in frontmatter_body):
+                        lines = lines[idx + 1 :]
+                    break
+        cleaned = "\n".join(lines)
+        cleaned = re.sub(r"(?m)^\s*>\s*", "", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _sanitize_slide_chunk(self, chunk: str) -> str:
+        lines: list[str] = []
+        for raw_line in chunk.splitlines():
+            cleaned = self._clean_slide_line(raw_line)
+            if cleaned:
+                lines.append(cleaned)
+        return "\n".join(lines).strip()
+
+    def _clean_slide_line(self, raw_line: str) -> str:
+        stripped = raw_line.strip()
+        if not stripped:
+            return ""
+        if stripped.startswith("<!--") or stripped.startswith("```"):
+            return ""
+        if re.fullmatch(r"-{3,}", stripped):
+            return ""
+        if re.match(r"^(marp|theme|paginate|size|headingDivider|footer)\s*:", stripped, flags=re.I):
+            return ""
+        if stripped.lower() == "style:" or re.match(r"^[a-z-]+\s*\{$", stripped.lower()):
+            return ""
+        if stripped.startswith("![") and "](" in stripped:
+            return ""
+        bullet_prefix = ""
+        if re.match(r"^[-*]\s+", stripped):
+            bullet_prefix = "- "
+            stripped = re.sub(r"^[-*]\s+", "", stripped)
+        elif re.match(r"^\d+[.)]\s+", stripped):
+            bullet_prefix = "- "
+            stripped = re.sub(r"^\d+[.)]\s+", "", stripped)
+        stripped = re.sub(r"^#{1,6}\s*", "", stripped)
+        stripped = re.sub(r"^>\s*", "", stripped)
+        stripped = self._clean_inline_markdown(stripped)
+        if not stripped or stripped in {"---", "--"}:
+            return ""
+        if re.fullmatch(r"[_*`~#\\\-.|: ]+", stripped):
+            return ""
+        return f"{bullet_prefix}{stripped}" if bullet_prefix else stripped
+
+    def _synthesize_slide_deck(self, text: str) -> list[str]:
+        title = self._slide_title_from_text(text)
+        sentences = [chunk.strip(" -") for chunk in re.split(r"(?<=[\.\!\?])\s+", " ".join(text.split())) if chunk.strip()]
+        bullets = [self._clean_inline_markdown(chunk) for chunk in sentences if chunk.strip()][:12]
+        if not bullets:
+            bullets = ["Contexto principal", "Pontos-chave", "Recomendacao final"]
+        grouped = [bullets[index : index + 3] for index in range(0, len(bullets), 3)]
+        slides = [self._upgrade_cover_slide(f"# {title}\n\n## {bullets[0]}")]
+        for index, group in enumerate(grouped[:3], start=1):
+            heading = "## Destaques" if index == 1 else f"## Topico {index}"
+            slides.append("\n".join([heading, "", *[f"- {item}" for item in group]]))
+        slides.append(self._render_closing_slide(f"## Fechamento\n\n- {bullets[-1]}", title))
+        return [self._sanitize_slide_chunk(slide) for slide in slides if slide.strip()]
 
     def _polish_slide_deck(self, slides: list[str], title: str, slide_visuals: dict[int, str]) -> list[str]:
         polished: list[str] = []
@@ -627,15 +704,19 @@ class DocumentService:
         total = len(raw_slides)
         for index, raw_slide in enumerate(raw_slides):
             layout = self._infer_slide_class(raw_slide, index, total)
-            lines = [line.strip() for line in raw_slide.splitlines() if line.strip() and not line.strip().startswith("<!--")]
-            title = self._humanize_slide_title(lines[0] if lines else deck_title, index, deck_title)
-            bullets = [self._clean_inline_markdown(re.sub(r"^[-*]\s+", "", line).strip()) for line in lines[1:] if re.match(r"^[-*]\s+", line)]
-            extras = [line for line in lines[1:] if line not in [f"- {bullet}" for bullet in bullets] and not re.match(r"^[-*]\s+", line)]
+            lines = [line for line in (self._clean_slide_line(item) for item in raw_slide.splitlines()) if line]
+            title_line = next((line for line in lines if not line.startswith("- ")), lines[0] if lines else deck_title)
+            title = self._humanize_slide_title(title_line, index, deck_title)
+            bullets = [self._clean_inline_markdown(re.sub(r"^-\s+", "", line).strip()) for line in lines if line.startswith("- ")]
+            extras = [line for line in lines if line != title_line and not line.startswith("- ")]
             rows = self._extract_slide_table(raw_slide)
             kicker = self._slide_kicker(deck_title, layout, index)
-            body = [self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", item)) for item in extras if not self._looks_like_table_line(item)]
-            body = [item for item in body if item and item != title and not item.startswith("## ")]
+            body = [self._clean_inline_markdown(item) for item in extras if not self._looks_like_table_line(item)]
+            body = [item for item in body if item and item != title and item.lower() != kicker.lower()]
             bullets = [item for item in bullets if item and item != title][:4]
+            if layout == "lead" and not body and bullets:
+                body = [bullets[0]]
+                bullets = bullets[1:]
             slides.append(
                 Slide(
                     title=title,
@@ -668,6 +749,7 @@ class DocumentService:
             "metrics": "Sinais que importam",
             "timeline": "Leitura em etapas",
             "compare": "Comparacao executiva",
+            "highlights": "Prioridades executivas",
             "closing": "Mensagem final",
             "section": "Ponto de analise",
         }
@@ -828,18 +910,26 @@ class DocumentService:
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       box-shadow: 0 0 0 8px rgba(31, 94, 168, 0.08);
     }}
-    .agenda-grid, .metrics-grid {{
+    .agenda-grid, .metrics-grid, .highlights-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 20px;
     }}
-    .agenda-card, .metric-card {{
+    .agenda-card, .metric-card, .highlight-card {{
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 24px;
       padding: 26px 28px;
       box-shadow: var(--shadow);
       min-height: 0;
+    }}
+    .highlight-card {{
+      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,249,255,0.94));
+      min-height: 190px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
     }}
     .agenda-card strong, .metric-label {{
       display: block;
@@ -869,6 +959,30 @@ class DocumentService:
       font-size: 18px;
       line-height: 1.45;
       color: #4b5e78;
+    }}
+    .highlight-label {{
+      display: inline-flex;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(31, 94, 168, 0.08);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }}
+    .highlight-text {{
+      font-size: 28px;
+      line-height: 1.22;
+      color: #10233d;
+      font-weight: 700;
+      letter-spacing: -.03em;
+    }}
+    .highlight-detail {{
+      font-size: 18px;
+      line-height: 1.45;
+      color: #51657f;
     }}
     .timeline {{
       display: grid;
@@ -1109,7 +1223,7 @@ class DocumentService:
 </html>"""
 
     def _render_slide_html(self, slide: Slide, index: int, total: int) -> str:
-        classes = [slide.layout if slide.layout in {"lead", "agenda", "metrics", "timeline", "compare", "closing"} else "content"]
+        classes = [slide.layout if slide.layout in {"lead", "agenda", "metrics", "timeline", "compare", "closing", "highlights"} else "content"]
         if not slide.visual:
             classes.append("no-visual")
         if len(slide.bullets or []) >= 4:
@@ -1169,6 +1283,18 @@ class DocumentService:
             for idx, bullet in enumerate((slide.bullets or [])[:5], start=1):
                 steps.append(f'<div class="timeline-step" data-step="{idx}">{self._escape_html(bullet)}</div>')
             return f'<div class="timeline">{"".join(steps)}</div>'
+        if slide.layout == "highlights":
+            cards = []
+            for bullet in (slide.bullets or [])[:4]:
+                label, detail = self._split_card_item(bullet)
+                cards.append(
+                    '<article class="highlight-card">'
+                    f'<span class="highlight-label">{self._escape_html(label)}</span>'
+                    f'<div class="highlight-text">{self._escape_html(detail)}</div>'
+                    f'<div class="highlight-detail">{self._escape_html(self._short_support_copy(detail))}</div>'
+                    '</article>'
+                )
+            return f'<div class="highlights-grid">{"".join(cards)}</div>'
         if slide.layout == "compare" and slide.rows:
             return self._render_custom_table(slide.rows)
         items = slide.bullets or slide.body or []
@@ -1194,6 +1320,23 @@ class DocumentService:
         if len(words) <= 2:
             return cleaned, "Ponto central do percurso"
         return words[0], " ".join(words[1:])
+
+    def _split_card_item(self, item: str) -> tuple[str, str]:
+        cleaned = self._clean_inline_markdown(item)
+        for token in [" - ", ": ", " — "]:
+            if token in cleaned:
+                left, right = cleaned.split(token, 1)
+                return left.strip()[:48], right.strip()
+        words = cleaned.split()
+        if len(words) <= 3:
+            return cleaned, "Ponto principal do slide"
+        return " ".join(words[:2]), " ".join(words[2:])
+
+    def _short_support_copy(self, detail: str) -> str:
+        words = detail.split()
+        if len(words) <= 12:
+            return detail
+        return " ".join(words[:12]).rstrip(" ,.;:") + "."
 
     def _format_inline_html(self, text: str) -> str:
         escaped = self._escape_html(text)
@@ -1304,6 +1447,13 @@ class DocumentService:
         numeric_hits = len(re.findall(r"\b\d+(?:[%x]|(?:[.,]\d+)?)\b", slide))
         if bullet_count >= 3 and numeric_hits >= 2:
             return "metrics"
+        card_like_bullets = [
+            line
+            for line in slide.splitlines()
+            if re.match(r"^[-*]\s+.+(?:\s[-:]\s+|\s:\s+).+", line.strip())
+        ]
+        if len(card_like_bullets) >= 3:
+            return "highlights"
         return "section"
 
     def _inject_slide_class(self, slide: str, slide_class: str) -> str:
@@ -2098,8 +2248,11 @@ class DocumentService:
         cleaned = cleaned.replace("\\|", "|")
         cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
         cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+        cleaned = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
         cleaned = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", cleaned)
+        cleaned = re.sub(r"^#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"^>\s*", "", cleaned)
         cleaned = re.sub(r"\s+\|\s*$", "", cleaned)
         cleaned = re.sub(r"^\|\s*", "", cleaned)
         return " ".join(cleaned.split()).strip()
