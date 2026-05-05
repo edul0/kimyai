@@ -124,7 +124,7 @@ class DocumentService:
         marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
-        presentation_html = self._build_presentation_html(title, slides)
+        presentation_html = self._build_presentation_html(title, slides, user_request)
         html_path.write_text(presentation_html, encoding="utf-8")
         pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
 
@@ -597,7 +597,7 @@ class DocumentService:
     ) -> dict[int, str]:
         if not self.settings.pollinations_api_key or not slides:
             return {}
-        selected_indexes = self._select_visual_slides(slides)
+        selected_indexes = self._select_visual_slides(slides, user_request)
         if not selected_indexes:
             return {}
         assets_dir = folder / "assets"
@@ -608,28 +608,31 @@ class DocumentService:
             output_path = assets_dir / f"slide-{slide_index + 1:02d}-visual.png"
             try:
                 self._download_pollinations_image(prompt, output_path)
-                visuals[slide_index] = output_path.name
+                visuals[slide_index] = f"assets/{output_path.name}"
             except Exception:
                 continue
         return visuals
 
-    def _select_visual_slides(self, slides: list[str]) -> list[int]:
+    def _select_visual_slides(self, slides: list[str], user_request: str = "") -> list[int]:
         choices: list[int] = []
+        lowered_request = user_request.lower()
         if slides:
             choices.append(0)
         for idx, slide in enumerate(slides[1:-1], start=1):
             lower = slide.lower()
             if any(token in lower for token in ["impacto", "cenario", "cenario", "mercado", "processo", "cronograma", "arquitetura", "roadmap", "estrategia", "estratégia"]):
                 choices.append(idx)
-            if len(choices) >= 3:
+            if len(choices) >= 4:
                 break
         if len(choices) < 2 and len(slides) > 2:
             choices.append(1)
+        if any(token in lowered_request for token in ["imagem", "imagens", "visual", "ilustrado", "com fotos", "com foto"]) and len(slides) > 3:
+            choices.append(min(2, len(slides) - 2))
         deduped: list[int] = []
         for item in choices:
             if item not in deduped:
                 deduped.append(item)
-        return deduped[:3]
+        return deduped[:4]
 
     def _slide_image_prompt(
         self,
@@ -647,13 +650,14 @@ class DocumentService:
             if re.match(r"^[-*]\s+", line)
         ][:3]
         narrative = "; ".join(bullets)[:360]
+        style_hint = self._image_style_hint(user_request)
         is_cover = slide_index == 0
         if is_cover:
             return (
                 f"Premium presentation cover image for '{deck_title}'. "
                 f"Theme: {heading}. "
                 f"Editorial, cinematic, polished corporate storytelling, high-end consulting deck aesthetic, "
-                f"clean composition with negative space for title text, subtle depth, modern lighting, no text, no watermark. "
+                f"{style_hint} clean composition with negative space for title text, subtle depth, modern lighting, no text, no watermark. "
                 f"Context: {user_request[:260]}"
             )
         return (
@@ -661,8 +665,20 @@ class DocumentService:
             f"Slide topic: {heading}. "
             f"Key points: {narrative or user_request[:220]}. "
             "Professional editorial illustration or photoreal concept for a boardroom-grade presentation, "
-            "clean composition, sophisticated color palette, suitable for split-slide layout, no text, no watermark."
+            f"{style_hint} clean composition, sophisticated color palette, suitable for split-slide layout, no text, no watermark."
         )
+
+    def _image_style_hint(self, user_request: str) -> str:
+        lowered = user_request.lower()
+        if any(token in lowered for token in ["realista", "fotorealista", "foto"]):
+            return "Photoreal, realistic, premium business photography,"
+        if any(token in lowered for token in ["3d", "futurista", "neon"]):
+            return "Futuristic 3D render language,"
+        if any(token in lowered for token in ["minimal", "minimalista", "clean"]):
+            return "Minimal editorial visual language,"
+        if any(token in lowered for token in ["luxo", "premium", "executivo"]):
+            return "Luxury executive editorial visual language,"
+        return "Professional presentation visual language,"
 
     def _download_pollinations_image(self, prompt: str, output_path: Path) -> None:
         headers = {"Authorization": f"Bearer {self.settings.pollinations_api_key}"}
@@ -755,7 +771,8 @@ class DocumentService:
         }
         return mapping.get(layout, f"Slide {index + 1}")
 
-    def _build_presentation_html(self, deck_title: str, slides: list[Slide]) -> str:
+    def _build_presentation_html(self, deck_title: str, slides: list[Slide], user_request: str = "") -> str:
+        theme_css = self._deck_theme_css(user_request, deck_title)
         slide_markup = "\n".join(self._render_slide_html(slide, index, len(slides)) for index, slide in enumerate(slides))
         return f"""<!doctype html>
 <html lang="pt-BR">
@@ -778,6 +795,11 @@ class DocumentService:
       --radius: 28px;
       --slide-w: 1600px;
       --slide-h: 900px;
+    }}
+    {theme_css}
+    @page {{
+      size: 13.333in 7.5in;
+      margin: 0;
     }}
     * {{
       box-sizing: border-box;
@@ -1179,6 +1201,10 @@ class DocumentService:
       }}
     }}
     @media print {{
+      @page {{
+        size: 13.333in 7.5in;
+        margin: 0;
+      }}
       body {{
         background: #fff;
         padding: 0;
@@ -1323,7 +1349,7 @@ class DocumentService:
 
     def _split_card_item(self, item: str) -> tuple[str, str]:
         cleaned = self._clean_inline_markdown(item)
-        for token in [" - ", ": ", " — "]:
+        for token in [" - ", ": ", " — ", " -- "]:
             if token in cleaned:
                 left, right = cleaned.split(token, 1)
                 return left.strip()[:48], right.strip()
@@ -1331,6 +1357,104 @@ class DocumentService:
         if len(words) <= 3:
             return cleaned, "Ponto principal do slide"
         return " ".join(words[:2]), " ".join(words[2:])
+
+    def _deck_theme_css(self, user_request: str, deck_title: str) -> str:
+        lowered = f"{user_request}\n{deck_title}".lower()
+        themes = {
+            "minimal": """
+    :root {
+      --bg: #edf2f7;
+      --panel: rgba(255,255,255,0.96);
+      --panel-soft: rgba(255,255,255,0.82);
+      --line: rgba(15, 23, 42, 0.08);
+      --ink: #0f172a;
+      --muted: #5b6472;
+      --accent: #1d4ed8;
+      --accent-2: #22c55e;
+      --shadow: 0 24px 52px rgba(15, 23, 42, 0.10);
+    }
+            """,
+            "dark": """
+    :root {
+      --bg: #050816;
+      --panel: rgba(10,18,34,0.74);
+      --panel-soft: rgba(15,24,44,0.58);
+      --line: rgba(148,163,184,0.12);
+      --ink: #e5eefb;
+      --muted: #a8bad5;
+      --accent: #60a5fa;
+      --accent-2: #22d3ee;
+      --shadow: 0 28px 60px rgba(2, 6, 23, 0.38);
+    }
+    .slide {
+      background:
+        radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 34%),
+        linear-gradient(180deg, #08101f 0%, #0d1a31 100%);
+    }
+    .slide-title, .agenda-card span, .highlight-text, .timeline-step, .bullet-list li, .metric-value {
+      color: #f8fbff;
+    }
+    .slide-subtitle, .metric-text, .highlight-detail {
+      color: #c7d6ea;
+    }
+    .agenda-card, .metric-card, .highlight-card, .compare-table {
+      background: rgba(8,16,31,0.66);
+    }
+            """,
+            "executive": """
+    :root {
+      --bg: #0f1d2e;
+      --panel: rgba(255,255,255,0.88);
+      --panel-soft: rgba(255,255,255,0.7);
+      --line: rgba(17, 35, 58, 0.09);
+      --ink: #10233d;
+      --muted: #61748f;
+      --accent: #1f5ea8;
+      --accent-2: #27a6b8;
+      --shadow: 0 28px 60px rgba(14, 31, 53, 0.12);
+    }
+            """,
+            "warm": """
+    :root {
+      --bg: #2d160e;
+      --panel: rgba(255,250,244,0.90);
+      --panel-soft: rgba(255,247,237,0.76);
+      --line: rgba(120, 53, 15, 0.12);
+      --ink: #40210f;
+      --muted: #8a5b3d;
+      --accent: #c2410c;
+      --accent-2: #f59e0b;
+      --shadow: 0 30px 60px rgba(82, 36, 10, 0.16);
+    }
+            """,
+        }
+        if any(token in lowered for token in ["dark", "escuro", "noturno", "futurista", "neon"]):
+            return themes["dark"]
+        if any(token in lowered for token in ["minimal", "minimalista", "clean", "limpo"]):
+            return themes["minimal"]
+        if any(token in lowered for token in ["quente", "laranja", "criativo", "editorial", "premium"]):
+            return themes["warm"]
+        return themes["executive"]
+
+    def _inline_slide_assets(self, html: str, base_dir: Path) -> str:
+        def replace_src(match: re.Match[str]) -> str:
+            original = match.group(1)
+            if original.startswith(("http://", "https://", "data:")):
+                return match.group(0)
+            asset_path = (base_dir / original).resolve()
+            if not asset_path.exists() or not asset_path.is_file():
+                return match.group(0)
+            mime_type = "image/png"
+            if asset_path.suffix.lower() in {".jpg", ".jpeg"}:
+                mime_type = "image/jpeg"
+            elif asset_path.suffix.lower() == ".webp":
+                mime_type = "image/webp"
+            elif asset_path.suffix.lower() == ".svg":
+                mime_type = "image/svg+xml"
+            data_url = f"data:{mime_type};base64,{base64.b64encode(asset_path.read_bytes()).decode('ascii')}"
+            return match.group(0).replace(original, data_url)
+
+        return re.sub(r'src="([^"]+)"', replace_src, html)
 
     def _short_support_copy(self, detail: str) -> str:
         words = detail.split()
@@ -1343,16 +1467,23 @@ class DocumentService:
         return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
 
     def _build_presentation_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path, slides: list[Slide]) -> str:
+        html_text = self._inline_slide_assets(html_path.read_text(encoding="utf-8"), html_path.parent)
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
                 page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1.5)
-                page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
-                page.pdf(path=str(pdf_path), width="1600px", height="900px", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
+                page.set_content(html_text, wait_until="networkidle")
+                page.emulate_media(media="print")
+                page.pdf(
+                    path=str(pdf_path),
+                    print_background=True,
+                    prefer_css_page_size=True,
+                    margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+                )
                 browser.close()
             return "playwright-html"
         except Exception:
-            provider = self._render_slide_pdf(markdown_path, html_path, pdf_path)
+            provider = self._render_slide_pdf(markdown_path, html_path, pdf_path, html_text)
             if pdf_path.exists():
                 return provider
             self._build_slide_pdf_with_reportlab(pdf_path, slides)
@@ -1585,19 +1716,15 @@ class DocumentService:
         except Exception:
             return False
 
-    def _render_slide_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path) -> str:
+    def _render_slide_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path, html_text: str | None = None) -> str:
+        html_payload = html_text or self._inline_slide_assets(html_path.read_text(encoding="utf-8"), html_path.parent)
         if self.settings.gotenberg_url and html_path.exists():
             try:
-                self._build_pdf_with_gotenberg(pdf_path, markdown_path.stem, html_path.read_text(encoding="utf-8"))
-                return "marp-html + gotenberg"
+                self._build_pdf_with_gotenberg(pdf_path, markdown_path.stem, html_payload)
+                return "presentation-html + gotenberg"
             except Exception:
                 pass
-        command = self._marp_command(markdown_path, pdf_path, "--pdf")
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            return "marp-cli"
-        except Exception:
-            return "marp-markdown"
+        return "presentation-html-unavailable"
 
     def _marp_command(self, input_path: Path, output_path: Path, mode: str) -> list[str]:
         marp_bin = shutil.which("marp")
@@ -1961,6 +2088,8 @@ class DocumentService:
         data = {
             "printBackground": "true",
             "generateDocumentOutline": "true",
+            "preferCssPageSize": "true",
+            "scale": "1.0",
         }
         files = [("files", ("index.html", html.encode("utf-8"), "text/html; charset=utf-8"))]
         with httpx.Client(timeout=self.settings.gotenberg_timeout_seconds) as client:
