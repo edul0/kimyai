@@ -19,7 +19,7 @@ from docx.shared import Inches, Pt, RGBColor
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.pagesizes import LETTER, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
@@ -1691,6 +1691,9 @@ class DocumentService:
         return "reportlab"
 
     def _build_pdf_with_reportlab(self, path: Path, title: str, blocks: list[Block], user_request: str) -> None:
+        if self._is_slide_request(user_request):
+            self._build_slide_pdf_with_reportlab(path, title, blocks)
+            return
         styles = getSampleStyleSheet()
         body = ParagraphStyle(
             "KimiBody",
@@ -1743,6 +1746,48 @@ class DocumentService:
         pdf = SimpleDocTemplate(str(path), pagesize=LETTER, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch)
         pdf.build(story)
 
+    def _build_slide_pdf_with_reportlab(self, path: Path, title: str, blocks: list[Block]) -> None:
+        styles = getSampleStyleSheet()
+        slide_title = ParagraphStyle(
+            "KimiSlideTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=24,
+            leading=28,
+            textColor=colors.HexColor("#0f172a"),
+            spaceAfter=14,
+        )
+        slide_body = ParagraphStyle(
+            "KimiSlideBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=14,
+            leading=20,
+            textColor=colors.HexColor("#334155"),
+            spaceAfter=10,
+        )
+        slides = self._group_slides(title, blocks)
+        story: list[Any] = []
+        for index, slide in enumerate(slides):
+            story.append(Paragraph(slide["title"], slide_title))
+            for item in slide["items"]:
+                prefix = "• " if item["kind"] == "bullet" else ""
+                story.append(Paragraph(f"{prefix}{item['text']}", slide_body))
+            if index < len(slides) - 1:
+                from reportlab.platypus import PageBreak
+
+                story.append(PageBreak())
+
+        pdf = SimpleDocTemplate(
+            str(path),
+            pagesize=landscape(LETTER),
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.65 * inch,
+        )
+        pdf.build(story)
+
     def _build_pdf_with_gotenberg(self, path: Path, title: str, html: str) -> None:
         base_url = (self.settings.gotenberg_url or "").rstrip("/")
         if not base_url:
@@ -1782,6 +1827,8 @@ class DocumentService:
             raise RuntimeError("Falha ao gerar PDF com Playwright.") from exc
 
     def _build_html(self, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
+        if self._is_slide_request(user_request):
+            return self._build_slide_html(title, blocks)
         content_parts = []
         open_list: str | None = None
         for block in blocks:
@@ -1883,6 +1930,145 @@ class DocumentService:
   {''.join(content_parts)}
 </body>
 </html>"""
+
+    def _build_slide_html(self, title: str, blocks: list[Block]) -> str:
+        slides = self._group_slides(title, blocks)
+        slides_markup = []
+        for index, slide in enumerate(slides, start=1):
+            items_markup = []
+            for item in slide["items"]:
+                tag = "li" if item["kind"] == "bullet" else "p"
+                items_markup.append(f"<{tag}>{self._escape_html(item['text'])}</{tag}>")
+            body_markup = "".join(items_markup) or "<p>Conteudo em preparacao.</p>"
+            list_open = "<ul>" if any(item["kind"] == "bullet" for item in slide["items"]) else ""
+            list_close = "</ul>" if any(item["kind"] == "bullet" for item in slide["items"]) else ""
+            if list_open:
+                bullets = "".join(f"<li>{self._escape_html(item['text'])}</li>" for item in slide["items"] if item["kind"] == "bullet")
+                paragraphs = "".join(f"<p>{self._escape_html(item['text'])}</p>" for item in slide["items"] if item["kind"] != "bullet")
+                body_markup = f"{paragraphs}{list_open}{bullets}{list_close}"
+            slides_markup.append(
+                f"""
+  <section class="slide">
+    <div class="slide-chrome">
+      <span class="slide-index">{index:02d}</span>
+      <span class="slide-mark">Kimi deck</span>
+    </div>
+    <div class="slide-body">
+      <h1>{self._escape_html(slide["title"])}</h1>
+      <div class="slide-content">{body_markup}</div>
+    </div>
+  </section>"""
+            )
+        return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>{self._escape_html(title)}</title>
+  <style>
+    @page {{
+      size: 13.333in 7.5in;
+      margin: 0;
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f4efe6;
+      color: #111827;
+    }}
+    .slide {{
+      width: 13.333in;
+      height: 7.5in;
+      padding: 0.5in;
+      page-break-after: always;
+      background:
+        radial-gradient(circle at top left, rgba(52, 211, 153, 0.12), transparent 24%),
+        linear-gradient(135deg, #fffdf8 0%, #f5efe5 100%);
+    }}
+    .slide:last-child {{
+      page-break-after: auto;
+    }}
+    .slide-chrome {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.35in;
+      color: #6b7280;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .slide-body {{
+      display: grid;
+      gap: 0.26in;
+      height: calc(100% - 0.7in);
+      align-content: start;
+      padding: 0.18in 0.08in;
+    }}
+    h1 {{
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.05;
+      color: #0f172a;
+    }}
+    .slide-content {{
+      display: grid;
+      gap: 0.12in;
+      font-size: 18px;
+      line-height: 1.45;
+      color: #334155;
+    }}
+    p {{
+      margin: 0;
+    }}
+    ul {{
+      margin: 0;
+      padding-left: 0.24in;
+    }}
+    li {{
+      margin: 0 0 0.08in;
+    }}
+  </style>
+</head>
+<body>
+{''.join(slides_markup)}
+</body>
+</html>"""
+
+    def _group_slides(self, title: str, blocks: list[Block]) -> list[dict[str, Any]]:
+        slides: list[dict[str, Any]] = []
+        current = {"title": title, "items": []}
+        for block in blocks:
+            if block.kind == "heading" and block.level <= 2:
+                if current["items"]:
+                    slides.append(current)
+                current = {"title": block.text, "items": []}
+                continue
+            current["items"].append({"kind": "bullet" if block.kind == "bullet" else "text", "text": block.text})
+            if len(current["items"]) >= 5:
+                slides.append(current)
+                current = {"title": title, "items": []}
+        if current["items"] or not slides:
+            slides.append(current)
+        return slides
+
+    def _is_slide_request(self, user_request: str) -> bool:
+        lowered = " ".join(user_request.split()).lower()
+        slide_markers = [
+            "slide",
+            "slides",
+            "apresentacao",
+            "apresentação",
+            "deck",
+            "pitch deck",
+            "powerpoint",
+            "ppt",
+            "pptx",
+        ]
+        return any(marker in lowered for marker in slide_markers)
 
     def _escape_html(self, value: str) -> str:
         return (
