@@ -64,6 +64,7 @@ def _cache_session_payload(payload: dict) -> dict:
         "title": payload.get("title") or "Nova conversa",
         "historico": payload.get("historico", []),
         "memoria": payload.get("memoria", []),
+        "contexto_compacto": payload.get("contexto_compacto") or {},
         "created_at": payload.get("created_at") or utcnow(),
         "updated_at": payload.get("updated_at") or payload.get("created_at") or utcnow(),
     }
@@ -88,6 +89,96 @@ def _preview_from_history(items: list[dict]) -> str:
     return ""
 
 
+def _session_jobs(session_id: str) -> list[dict]:
+    items = []
+    for key in storage.keys("job:"):
+        data = storage.get_json(key)
+        if data and data.get("session_id") == session_id:
+            items.append(data)
+    return sorted(items, key=lambda item: item.get("created_at", ""))
+
+
+def _session_log_entries(session_id: str, session_data: dict) -> list[dict]:
+    entries = []
+    for job in _session_jobs(session_id):
+        for event in job.get("eventos", []):
+            entries.append(
+                {
+                    "ts": event.get("ts") or job.get("updated_at"),
+                    "sid": session_id,
+                    "level": "info",
+                    "agent": event.get("agente", "Kemy"),
+                    "message": event.get("msg", ""),
+                    "progress": event.get("progresso"),
+                    "job_id": job.get("job_id"),
+                    "status": job.get("status"),
+                }
+            )
+        if job.get("erro"):
+            entries.append(
+                {
+                    "ts": job.get("updated_at"),
+                    "sid": session_id,
+                    "level": "error",
+                    "agent": "Kemy",
+                    "message": job.get("erro"),
+                    "progress": job.get("progresso"),
+                    "job_id": job.get("job_id"),
+                    "status": job.get("status"),
+                }
+            )
+    for item in session_data.get("historico", []):
+        entries.append(
+            {
+                "ts": item.get("ts") or session_data.get("updated_at"),
+                "sid": session_id,
+                "level": "info",
+                "agent": item.get("role", "message"),
+                "message": str(item.get("content") or item.get("resumo") or "")[:500],
+                "progress": None,
+                "job_id": None,
+                "status": "message",
+            }
+        )
+    return sorted(entries, key=lambda item: item.get("ts") or "")
+
+
+def _session_analytics(session_id: str, session_data: dict) -> dict:
+    jobs_for_session = _session_jobs(session_id)
+    completed = [job for job in jobs_for_session if job.get("status") == "done"]
+    failed = [job for job in jobs_for_session if job.get("status") == "error"]
+    providers: dict[str, int] = {}
+    modes: dict[str, int] = {}
+    generated_files = 0
+    tool_usage: dict[str, int] = {}
+
+    for job in jobs_for_session:
+        modes[job.get("modo", "coding")] = modes.get(job.get("modo", "coding"), 0) + 1
+        result = job.get("resultado") or {}
+        provider = result.get("provider") or "unknown"
+        providers[provider] = providers.get(provider, 0) + 1
+        generated_files += len(result.get("files") or [])
+        for tool_name in result.get("tools_used") or []:
+            tool_usage[tool_name] = tool_usage.get(tool_name, 0) + 1
+
+    message_count = len(session_data.get("historico", []))
+    total = len(jobs_for_session)
+    success_rate = round((len(completed) / total) * 100, 1) if total else 0.0
+    return {
+        "session_id": session_id,
+        "total_jobs": total,
+        "completed_jobs": len(completed),
+        "failed_jobs": len(failed),
+        "message_count": message_count,
+        "generated_files": generated_files,
+        "success_rate_pct": success_rate,
+        "by_mode": modes,
+        "by_provider": providers,
+        "tool_usage": tool_usage,
+        "latest_activity": session_data.get("updated_at", ""),
+    }
+
+
 async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> dict | None:
     if not owner:
         return None
@@ -96,14 +187,18 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
         return None
     messages = await supabase_auth.list_messages(session_id)
     historico = []
+    compact_context = {}
     for item in messages:
         metadata = item.get("metadata") or {}
         files = metadata.get("files", [])
+        compact_context = metadata.get("context_snapshot") or compact_context
         historico.append(
             {
                 "ts": item.get("created_at") or utcnow(),
                 "role": item.get("role"),
                 "content": item.get("content", ""),
+                "request_parts": metadata.get("request_parts", []),
+                "context_snapshot": metadata.get("context_snapshot", {}),
                 "provider": metadata.get("provider"),
                 "model": metadata.get("model"),
                 "tools_used": metadata.get("tools_used", []),
@@ -127,6 +222,7 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
             "owner": session.get("owner_email") or owner,
             "title": session.get("title") or "Nova conversa",
             "historico": historico,
+            "contexto_compacto": compact_context,
             "created_at": session.get("created_at"),
             "updated_at": session.get("updated_at"),
         }
@@ -159,6 +255,7 @@ async def status():
         "free_only": settings.free_only,
         "llm_mode": settings.llm_mode,
         "storage": storage.backend,
+        "cache": storage.status(),
         "supabase": settings.supabase_enabled,
         "providers": settings.configured_providers,
         "tools": settings.configured_tools,
@@ -277,6 +374,21 @@ async def historico(sid: str, request: Request):
     return data
 
 
+@app.get("/api/sessao/{sid}/contexto")
+async def contexto_sessao(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    return {
+        "session_id": sid,
+        "contexto_compacto": data.get("contexto_compacto") or {},
+        "memoria": data.get("memoria", []),
+    }
+
+
 @app.get("/api/sessao/listar")
 async def listar_sessoes(request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
@@ -309,14 +421,18 @@ async def listar_sessoes(request: Request):
         if session_id and not had_local:
             remote_messages = await supabase_auth.list_messages(session_id)
             remote_history = []
+            compact_context = {}
             for item in remote_messages:
                 metadata = item.get("metadata") or {}
                 files = metadata.get("files", [])
+                compact_context = metadata.get("context_snapshot") or compact_context
                 remote_history.append(
                     {
                         "ts": item.get("created_at") or utcnow(),
                         "role": item.get("role"),
                         "content": item.get("content", ""),
+                        "request_parts": metadata.get("request_parts", []),
+                        "context_snapshot": metadata.get("context_snapshot", {}),
                         "provider": metadata.get("provider"),
                         "model": metadata.get("model"),
                         "tools_used": metadata.get("tools_used", []),
@@ -341,6 +457,7 @@ async def listar_sessoes(request: Request):
                     "owner": session.get("owner_email") or owner,
                     "title": session.get("title") or "Nova conversa",
                     "historico": remote_history,
+                    "contexto_compacto": compact_context,
                     "created_at": session.get("created_at"),
                     "updated_at": session.get("updated_at"),
                 }
@@ -429,6 +546,34 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
 @app.get("/api/jobs")
 async def listar_jobs():
     return {"jobs": jobs.list_recent()}
+
+
+@app.get("/api/cache/status")
+async def cache_status():
+    return {"cache": storage.status()}
+
+
+@app.get("/api/logs/{sid}")
+async def session_logs(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    logs = _session_log_entries(sid, data)
+    return {"session_id": sid, "total": len(logs), "logs": logs[-250:]}
+
+
+@app.get("/api/analytics/{sid}")
+async def session_analytics(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    return _session_analytics(sid, data)
 
 
 @app.get("/api/jobs/{job_id}")

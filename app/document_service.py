@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +28,7 @@ class Block:
     kind: str
     text: str
     level: int = 0
+    rows: list[list[str]] | None = None
 
 
 class DocumentService:
@@ -36,6 +39,8 @@ class DocumentService:
     def generate(self, session_id: str, job_id: str, user_request: str, draft: dict[str, Any]) -> dict[str, Any]:
         source_text = self._source_text(user_request, draft)
         title = self._title_from_text(user_request, source_text)
+        if self._is_slide_request(user_request, source_text):
+            return self._generate_slides(session_id, job_id, user_request, title, source_text, draft)
         blocks = self._parse_blocks(source_text)
         folder = self.output_root / session_id / job_id
         folder.mkdir(parents=True, exist_ok=True)
@@ -76,6 +81,76 @@ class DocumentService:
             ],
         }
 
+    def _generate_slides(
+        self,
+        session_id: str,
+        job_id: str,
+        user_request: str,
+        title: str,
+        source_text: str,
+        draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        folder = self.output_root / session_id / job_id
+        folder.mkdir(parents=True, exist_ok=True)
+
+        file_stem = self._filename_stem(user_request, title)
+        markdown_name = self._safe_filename(file_stem, ".md")
+        html_name = self._safe_filename(file_stem, ".html")
+        pdf_name = self._safe_filename(file_stem, ".pdf")
+        markdown_path = folder / markdown_name
+        html_path = folder / html_name
+        pdf_path = folder / pdf_name
+
+        marp_markdown = self._build_marp_markdown(title, source_text)
+        markdown_path.write_text(marp_markdown, encoding="utf-8")
+
+        html_created = self._render_marp_html(markdown_path, html_path)
+        pdf_provider = self._render_slide_pdf(markdown_path, html_path, pdf_path)
+
+        files = [
+            {
+                "name": markdown_name,
+                "path": str(markdown_path).replace("\\", "/"),
+                "mime_type": "text/markdown",
+                "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
+            }
+        ]
+        if html_created and html_path.exists():
+            files.append(
+                {
+                    "name": html_name,
+                    "path": str(html_path).replace("\\", "/"),
+                    "mime_type": "text/html",
+                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
+                }
+            )
+        if pdf_path.exists():
+            files.append(
+                {
+                    "name": pdf_name,
+                    "path": str(pdf_path).replace("\\", "/"),
+                    "mime_type": "application/pdf",
+                    "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
+                }
+            )
+
+        summary = "Slides gerados em Markdown Marp e PDF."
+        raw = (
+            f"Slides gerados com sucesso: `{markdown_name}`"
+            + (f", `{html_name}`" if html_created and html_path.exists() else "")
+            + (f" e `{pdf_name}`" if pdf_path.exists() else "")
+            + "."
+        )
+        return {
+            "provider": draft.get("provider", "kimi-slides"),
+            "model": f"{draft.get('model', 'kimi-slides')} + {pdf_provider}",
+            "summary": summary,
+            "raw": raw,
+            "document_title": title,
+            "files": files,
+            "slide_deck": True,
+        }
+
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
         for key in ("raw", "summary"):
             value = str(draft.get(key) or "").strip()
@@ -83,6 +158,20 @@ class DocumentService:
             if self._looks_like_document_content(cleaned):
                 return cleaned
         return self._fallback_document_text(user_request)
+
+    def _is_slide_request(self, user_request: str, text: str) -> bool:
+        lowered = f"{user_request}\n{text}".lower()
+        markers = [
+            "slide",
+            "slides",
+            "apresentacao",
+            "apresentação",
+            "deck",
+            "powerpoint",
+            "ppt",
+            "palestra",
+        ]
+        return any(marker in lowered for marker in markers)
 
     def _title_from_text(self, user_request: str, text: str) -> str:
         extracted = self._extract_topic(user_request)
@@ -94,6 +183,125 @@ class DocumentService:
                 return cleaned[:80]
         base = " ".join(user_request.split()).strip()
         return (base[:80] or "Documento Kimi AI").rstrip(" .:-")
+
+    def _build_marp_markdown(self, title: str, source_text: str) -> str:
+        cleaned = source_text.strip()
+        if self._looks_like_marp_deck(cleaned):
+            return cleaned
+        slides = self._split_into_slides(cleaned)
+        frontmatter = (
+            "---\n"
+            "marp: true\n"
+            "theme: default\n"
+            "paginate: true\n"
+            "size: 16:9\n"
+            "style: |\n"
+            "  section {\n"
+            "    font-family: 'Aptos', 'Segoe UI', sans-serif;\n"
+            "    background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);\n"
+            "    color: #10243d;\n"
+            "    padding: 56px 72px;\n"
+            "  }\n"
+            "  h1, h2 {\n"
+            "    color: #0b3a6e;\n"
+            "    margin-bottom: 0.35em;\n"
+            "  }\n"
+            "  h1 {\n"
+            "    font-size: 2.1rem;\n"
+            "  }\n"
+            "  h2 {\n"
+            "    font-size: 1.45rem;\n"
+            "  }\n"
+            "  p, li {\n"
+            "    font-size: 1rem;\n"
+            "    line-height: 1.45;\n"
+            "  }\n"
+            "  strong {\n"
+            "    color: #0b3a6e;\n"
+            "  }\n"
+            "  table {\n"
+            "    font-size: 0.88rem;\n"
+            "  }\n"
+            "---\n\n"
+        )
+        return frontmatter + "\n\n---\n\n".join(slides).strip() + "\n"
+
+    def _looks_like_marp_deck(self, text: str) -> bool:
+        if "marp: true" in text.lower():
+            return True
+        return text.count("\n---") >= 1 and ("# " in text or "## " in text)
+
+    def _split_into_slides(self, text: str) -> list[str]:
+        if "\n---" in text:
+            parts = [chunk.strip() for chunk in re.split(r"\n---+\n", text) if chunk.strip()]
+            if parts:
+                return parts
+        sections = []
+        current: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if re.match(r"^#{1,2}\s+", stripped) and current:
+                sections.append("\n".join(current).strip())
+                current = [stripped]
+            else:
+                current.append(stripped)
+        if current:
+            sections.append("\n".join(current).strip())
+        sections = [section for section in sections if section]
+        if len(sections) <= 1:
+            return [f"# {self._slide_title_from_text(text)}\n\n{self._slide_bullets(text)}"]
+        return [self._normalize_slide(section) for section in sections]
+
+    def _slide_title_from_text(self, text: str) -> str:
+        for line in text.splitlines():
+            cleaned = re.sub(r"^#{1,3}\s*", "", line).strip()
+            if cleaned:
+                return cleaned[:80]
+        return "Apresentacao"
+
+    def _normalize_slide(self, section: str) -> str:
+        lines = [line.rstrip() for line in section.splitlines() if line.strip()]
+        if not lines:
+            return "## Slide\n\n- Conteudo"
+        if not re.match(r"^#{1,2}\s+", lines[0]):
+            lines.insert(0, "## Slide")
+        return "\n".join(lines)
+
+    def _slide_bullets(self, text: str) -> str:
+        chunks = [chunk.strip() for chunk in re.split(r"(?<=[\.\!\?])\s+", " ".join(text.split())) if chunk.strip()]
+        bullets = [f"- {chunk}" for chunk in chunks[:5]]
+        return "\n".join(bullets) or "- Conteudo principal"
+
+    def _render_marp_html(self, markdown_path: Path, html_path: Path) -> bool:
+        command = self._marp_command(markdown_path, html_path, "--html")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            return True
+        except Exception:
+            return False
+
+    def _render_slide_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path) -> str:
+        if self.settings.gotenberg_url and html_path.exists():
+            try:
+                self._build_pdf_with_gotenberg(pdf_path, markdown_path.stem, html_path.read_text(encoding="utf-8"))
+                return "marp-html + gotenberg"
+            except Exception:
+                pass
+        command = self._marp_command(markdown_path, pdf_path, "--pdf")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            return "marp-cli"
+        except Exception:
+            return "marp-markdown"
+
+    def _marp_command(self, input_path: Path, output_path: Path, mode: str) -> list[str]:
+        marp_bin = shutil.which("marp")
+        if marp_bin:
+            return [marp_bin, str(input_path), mode, "-o", str(output_path), "--allow-local-files"]
+        npx_bin = shutil.which("npx") or shutil.which("npx.cmd")
+        if npx_bin:
+            return [npx_bin, "--yes", "@marp-team/marp-cli", str(input_path), mode, "-o", str(output_path), "--allow-local-files"]
+        raise FileNotFoundError("Marp CLI nao encontrado.")
 
     def _filename_stem(self, user_request: str, title: str) -> str:
         request_text = " ".join(user_request.split()).strip(" .:-")
@@ -109,6 +317,9 @@ class DocumentService:
         cleaned = text.strip()
         if not cleaned:
             return cleaned
+        cleaned = cleaned.replace("\u25a0", " ")
+        cleaned = cleaned.replace("\u00a0", " ")
+        cleaned = re.sub(r"[\u200b-\u200f\u202a-\u202e]", "", cleaned)
         cleaned = re.sub(r"^```(?:markdown|md|text)?\s*", "", cleaned, flags=re.I)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         cleaned = re.sub(
@@ -225,13 +436,23 @@ class DocumentService:
         blocks: list[Block] = []
         bullet_buffer: list[str] = []
         numbered_buffer: list[str] = []
+        table_buffer: list[str] = []
 
         def flush_buffers() -> None:
-            nonlocal bullet_buffer, numbered_buffer
+            nonlocal bullet_buffer, numbered_buffer, table_buffer
+            if table_buffer:
+                rows = self._parse_markdown_table(table_buffer)
+                if rows:
+                    blocks.append(Block("table", "", rows=rows))
+                else:
+                    for item in table_buffer:
+                        if item.strip():
+                            blocks.append(Block("paragraph", self._clean_inline_markdown(item.strip())))
             for item in bullet_buffer:
-                blocks.append(Block("bullet", item))
+                blocks.append(Block("bullet", self._clean_inline_markdown(item)))
             for item in numbered_buffer:
-                blocks.append(Block("numbered", item))
+                blocks.append(Block("numbered", self._clean_inline_markdown(item)))
+            table_buffer = []
             bullet_buffer = []
             numbered_buffer = []
 
@@ -242,10 +463,17 @@ class DocumentService:
                 continue
             if line.startswith("```"):
                 continue
+            if re.fullmatch(r"-{3,}", line):
+                continue
+            if self._looks_like_table_line(line):
+                table_buffer.append(line)
+                continue
+            if table_buffer:
+                flush_buffers()
             heading = re.match(r"^(#{1,3})\s+(.*)$", line)
             if heading:
                 flush_buffers()
-                blocks.append(Block("heading", heading.group(2).strip(), len(heading.group(1))))
+                blocks.append(Block("heading", self._clean_inline_markdown(heading.group(2).strip()), len(heading.group(1))))
                 continue
             bullet = re.match(r"^[-*]\s+(.*)$", line)
             if bullet:
@@ -256,7 +484,7 @@ class DocumentService:
                 numbered_buffer.append(numbered.group(1).strip())
                 continue
             flush_buffers()
-            blocks.append(Block("paragraph", line))
+            blocks.append(Block("paragraph", self._clean_inline_markdown(line)))
 
         flush_buffers()
         if not blocks:
@@ -272,6 +500,8 @@ class DocumentService:
         section.right_margin = Inches(1)
 
         self._configure_styles(doc)
+        self._configure_header(section, title)
+        self._configure_footer(section)
 
         doc.add_paragraph(title, style="Title")
         doc.add_paragraph()
@@ -280,6 +510,8 @@ class DocumentService:
             if block.kind == "heading":
                 style_name = {1: "Heading 1", 2: "Heading 2", 3: "Heading 3"}.get(block.level, "Heading 2")
                 doc.add_paragraph(block.text, style=style_name)
+            elif block.kind == "table" and block.rows:
+                self._append_docx_table(doc, block.rows)
             elif block.kind == "bullet":
                 doc.add_paragraph(block.text, style="List Bullet")
             elif block.kind == "numbered":
@@ -312,9 +544,12 @@ class DocumentService:
             spaceAfter=10,
             textColor=colors.HexColor("#243240"),
         )
+        body.wordWrap = "CJK"
         h1 = ParagraphStyle("KimiH1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=colors.HexColor("#14213d"), spaceBefore=10, spaceAfter=8)
         h2 = ParagraphStyle("KimiH2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=colors.HexColor("#223b63"), spaceBefore=8, spaceAfter=6)
         title_style = ParagraphStyle("KimiTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=colors.HexColor("#0f172a"), spaceAfter=8)
+        table_cell = ParagraphStyle("KimiTableCell", parent=body, fontSize=10, leading=14, spaceAfter=0)
+        table_header = ParagraphStyle("KimiTableHeader", parent=table_cell, fontName="Helvetica-Bold", textColor=colors.white)
         story: list[Any] = [Paragraph(title, title_style), Spacer(1, 0.08 * inch)]
 
         bullet_items: list[ListItem] = []
@@ -341,6 +576,9 @@ class DocumentService:
             flush_lists()
             if block.kind == "heading":
                 story.append(Paragraph(block.text, h1 if block.level == 1 else h2))
+            elif block.kind == "table" and block.rows:
+                story.append(self._build_pdf_table(block.rows, table_header, table_cell))
+                story.append(Spacer(1, 0.12 * inch))
             else:
                 story.append(Paragraph(block.text, body))
         flush_lists()
@@ -382,6 +620,8 @@ class DocumentService:
             if block.kind == "heading":
                 level = min(max(block.level, 1), 3)
                 content_parts.append(f"<h{level}>{self._escape_html(block.text)}</h{level}>")
+            elif block.kind == "table" and block.rows:
+                content_parts.append(self._build_html_table(block.rows))
             else:
                 content_parts.append(f"<p>{self._escape_html(block.text)}</p>")
         if open_list:
@@ -424,6 +664,26 @@ class DocumentService:
       margin: 18px 0 6px;
       color: #223b63;
     }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 14px;
+      table-layout: fixed;
+    }}
+    th, td {{
+      border: 1px solid #c8d4e3;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }}
+    th {{
+      background: #1f4b8f;
+      color: #ffffff;
+      font-weight: 700;
+    }}
+    tbody tr:nth-child(even) {{
+      background: #f4f7fb;
+    }}
     p {{
       margin: 0 0 10px;
     }}
@@ -452,6 +712,100 @@ class DocumentService:
             .replace(">", "&gt;")
             .replace('"', "&quot;")
         )
+
+    def _clean_inline_markdown(self, text: str) -> str:
+        cleaned = str(text or "").replace("\u25a0", " ")
+        cleaned = re.sub(r"[\u200b-\u200f\u202a-\u202e]", "", cleaned)
+        cleaned = cleaned.replace("\\|", "|")
+        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", cleaned)
+        cleaned = re.sub(r"\s+\|\s*$", "", cleaned)
+        cleaned = re.sub(r"^\|\s*", "", cleaned)
+        return " ".join(cleaned.split()).strip()
+
+    def _looks_like_table_line(self, line: str) -> bool:
+        stripped = line.strip()
+        if stripped.count("|") < 2:
+            return False
+        if stripped.startswith("|") or stripped.endswith("|"):
+            return True
+        return bool(re.match(r"^[^|]+\|[^|]+\|", stripped))
+
+    def _parse_markdown_table(self, lines: list[str]) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            cells = [self._clean_inline_markdown(cell) for cell in stripped.strip("|").split("|")]
+            if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
+                continue
+            if any(cells):
+                rows.append(cells)
+        if len(rows) < 2:
+            return []
+        width = max(len(row) for row in rows)
+        return [row + [""] * (width - len(row)) for row in rows]
+
+    def _append_docx_table(self, doc: Document, rows: list[list[str]]) -> None:
+        table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+        table.style = "Table Grid"
+        table.autofit = True
+        for row_index, row in enumerate(rows):
+            for col_index, value in enumerate(row):
+                cell = table.cell(row_index, col_index)
+                cell.text = value
+                if row_index == 0 and cell.paragraphs:
+                    for run in cell.paragraphs[0].runs:
+                        run.font.bold = True
+        doc.add_paragraph()
+
+    def _build_pdf_table(self, rows: list[list[str]], header_style: ParagraphStyle, cell_style: ParagraphStyle) -> Table:
+        rendered = []
+        for row_index, row in enumerate(rows):
+            rendered.append(
+                [
+                    Paragraph(self._escape_reportlab(value), header_style if row_index == 0 else cell_style)
+                    for value in row
+                ]
+            )
+        table = Table(rendered, repeatRows=1, hAlign="LEFT")
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4b8f")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#f8fafc")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#ffffff"), colors.HexColor("#f4f7fb")]),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8d4e3")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        return table
+
+    def _build_html_table(self, rows: list[list[str]]) -> str:
+        header = "".join(f"<th>{self._escape_html(cell)}</th>" for cell in rows[0])
+        body_rows = []
+        for row in rows[1:]:
+            body_rows.append("<tr>" + "".join(f"<td>{self._escape_html(cell)}</td>" for cell in row) + "</tr>")
+        return (
+            "<table><thead><tr>"
+            + header
+            + "</tr></thead><tbody>"
+            + "".join(body_rows)
+            + "</tbody></table>"
+        )
+
+    def _escape_reportlab(self, value: str) -> str:
+        return self._escape_html(value).replace("\n", "<br/>")
 
     def _configure_styles(self, doc: Document) -> None:
         normal = doc.styles["Normal"]

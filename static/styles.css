@@ -1051,6 +1051,30 @@ dd {
   font-size: 12px;
 }
 
+.session-insights {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.session-insights div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface-2) 62%, transparent);
+}
+
+.session-insights strong {
+  color: var(--ink-strong);
+}
+
+.session-insights span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 980px) {
   .login-shell {
     grid-template-columns: 1fr;

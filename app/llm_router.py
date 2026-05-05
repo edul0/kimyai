@@ -46,15 +46,18 @@ class LLMRouter:
             "last_error": "",
         }
 
-    def choose(self, mode: str = "coding") -> ProviderChoice:
-        for provider in self.route_for(mode):
+    def choose(self, mode: str = "coding", has_visual: bool = False) -> ProviderChoice:
+        for provider in self.route_for(mode, has_visual=has_visual):
             return ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
         return ProviderChoice("mock", "local-planner", "no cloud keys configured")
 
-    def route_for(self, mode: str = "coding") -> list[str]:
+    def route_for(self, mode: str = "coding", has_visual: bool = False) -> list[str]:
         configured = self.settings.configured_providers
         route = self.ROUTES.get(mode, self.ROUTES["coding"])
-        return [provider for provider in route if configured.get(provider)]
+        available = [provider for provider in route if configured.get(provider)]
+        if has_visual and "gemini" in available:
+            return ["gemini"] + [provider for provider in available if provider != "gemini"]
+        return available
 
     def model_for(self, provider: str) -> str:
         if provider == "groq" and self.settings.default_model.startswith("groq/"):
@@ -72,11 +75,18 @@ class LLMRouter:
         }
         return f"{reasons[provider]} em modo {mode}"
 
-    async def generate(self, prompt: str, mode: str = "coding") -> dict[str, Any]:
-        route = self.route_for(mode)
-        choice = self.choose(mode)
+    async def generate(
+        self,
+        prompt: str,
+        mode: str = "coding",
+        attachments: list[dict[str, Any]] | None = None,
+        visual_items: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        has_visual = bool(visual_items)
+        route = self.route_for(mode, has_visual=has_visual)
+        choice = self.choose(mode, has_visual=has_visual)
         if self.settings.llm_mode != "providers" or not route:
-            return self._mock_response(prompt, mode, choice)
+            return self._mock_response(prompt, mode, choice, has_visual=has_visual)
 
         attempts = []
         for provider in route:
@@ -85,7 +95,7 @@ class LLMRouter:
                 if provider == "groq":
                     result = await self._groq(prompt, current, mode)
                 elif provider == "gemini":
-                    result = await self._gemini(prompt, current, mode)
+                    result = await self._gemini(prompt, current, mode, visual_items=visual_items)
                 elif provider == "cerebras":
                     result = await self._cerebras(prompt, current, mode)
                 elif provider == "openrouter":
@@ -107,14 +117,15 @@ class LLMRouter:
                 )
                 continue
 
-        offline = self._mock_response(prompt, mode, ProviderChoice("mock", "local-planner", "free providers exhausted"))
+        offline = self._mock_response(prompt, mode, ProviderChoice("mock", "local-planner", "free providers exhausted"), has_visual=has_visual)
         offline = self._apply_provider_notice(offline, "mock")
         offline["fallback_chain"] = attempts + [{"provider": "mock", "status": "ok"}]
         return offline
 
-    def _mock_response(self, prompt: str, mode: str, choice: ProviderChoice) -> dict[str, Any]:
+    def _mock_response(self, prompt: str, mode: str, choice: ProviderChoice, has_visual: bool = False) -> dict[str, Any]:
         summary = textwrap.shorten(" ".join(prompt.split()), width=260, placeholder="...")
         casual = "Conversa casual: sim" in prompt
+        attachment_excerpt = self._attachment_excerpt(prompt)
         if casual:
             return {
                 "provider": choice.name,
@@ -193,6 +204,34 @@ class LLMRouter:
                 "diff": raw,
                 "tests": ["Gerar DOCX e PDF e validar links de download."],
             }
+        if has_visual and not attachment_excerpt:
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": (
+                    "Recebi o anexo visual, mas nesta sessao a leitura de imagem depende de Gemini configurado em `LLM_MODE=providers` com `GEMINI_API_KEY` ativa. "
+                    "Quando isso estiver ligado, a Kemy passa a descrever fotos, lousas, prints e PDFs visuais."
+                ),
+                "summary": "Leitura visual depende de Gemini configurado.",
+                "files": [],
+                "diff": "",
+                "tests": [],
+            }
+        if attachment_excerpt:
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": (
+                    "Extraí o conteúdo textual do anexo localmente. "
+                    f"Trecho encontrado: {attachment_excerpt}"
+                ),
+                "summary": "Texto de anexo extraído localmente.",
+                "files": [],
+                "diff": "",
+                "tests": [],
+            }
         files = [
             {
                 "path": "README_IMPLEMENTACAO.md",
@@ -212,7 +251,12 @@ class LLMRouter:
             "provider": choice.name,
             "model": choice.model,
             "reason": choice.reason,
-            "summary": summary,
+            "summary": (
+                "Anexo visual recebido, mas a leitura visual depende de Gemini configurado. "
+                + summary
+                if has_visual
+                else summary
+            ),
             "files": files,
             "diff": "",
             "tests": ["python -m compileall app agencia_kemy.py"],
@@ -238,13 +282,27 @@ class LLMRouter:
             content = response.json()["choices"][0]["message"]["content"]
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
 
-    async def _gemini(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
+    async def _gemini(
+        self,
+        prompt: str,
+        choice: ProviderChoice,
+        mode: str,
+        visual_items: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         from google import genai
+        from google.genai import types
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
         system_prompt = f"{self._system_prompt('gemini', mode)}\n\n{prompt}"
+        contents: list[Any] = [system_prompt]
+        if visual_items:
+            contents.extend(
+                types.Part.from_bytes(data=item["data"], mime_type=item["mime_type"])
+                for item in visual_items
+                if item.get("data") and item.get("mime_type")
+            )
         try:
-            response = client.models.generate_content(model=self.settings.gemini_primary_model, contents=system_prompt)
+            response = client.models.generate_content(model=self.settings.gemini_primary_model, contents=contents)
             self.gemini_state = {
                 "active_model": self.settings.gemini_primary_model,
                 "fallback_model": self.settings.gemini_fallback_model,
@@ -258,7 +316,7 @@ class LLMRouter:
             blocked = any(marker in error_text for marker in ["not found", "permission", "quota", "unsupported", "access"])
             if not blocked:
                 raise
-            response = client.models.generate_content(model=self.settings.gemini_fallback_model, contents=system_prompt)
+            response = client.models.generate_content(model=self.settings.gemini_fallback_model, contents=contents)
             self.gemini_state = {
                 "active_model": self.settings.gemini_fallback_model,
                 "fallback_model": self.settings.gemini_fallback_model,
@@ -312,12 +370,16 @@ class LLMRouter:
             "Nao invente preset. Nao troque FastAPI por Flask, React por Vue, ou outra stack salvo se o usuario pedir. "
             "Entregue diagnostico, arquivos afetados, codigo/patch e testes."
         )
+        base += (
+            " Se houver imagem, foto, quadro, print, pagina escaneada ou PDF visual anexado, descreva o que ve e transcreva o texto importante antes de responder ao pedido principal."
+        )
         if provider == "cerebras":
             base = "Voce e um auditor tecnico rapido e preciso. Responda em Markdown claro, sem JSON cru."
         if mode == "documento":
             return (
                 f"{base} "
                 "Se o pedido for de documento, entregue conteudo em Markdown estruturado com titulos, subtitulos, listas e texto pronto para montagem em DOCX e PDF. "
+                "Se o usuario pedir slides, apresentacao, deck ou powerpoint, entregue em Markdown de apresentacao com secoes separadas por `---`, uma ideia principal por slide, titulos curtos e bullets concisos. "
                 "Nao devolva JSON cru."
             )
         if mode != "site":
@@ -366,3 +428,13 @@ class LLMRouter:
             503: "Aviso de sistema: o OpenRouter gratuito ficou indisponivel agora. A Kemy continua com os outros provedores gratuitos.",
         }
         return messages.get(status_code, "Aviso de sistema: o OpenRouter gratuito ficou indisponivel temporariamente.")
+
+    def _attachment_excerpt(self, prompt: str) -> str:
+        match = textwrap.dedent(prompt).split("[ANEXOS PROCESSADOS]", 1)
+        if len(match) < 2:
+            return ""
+        if "Texto extraido do anexo:" not in match[1]:
+            return ""
+        extracted = " ".join(match[1].split())
+        extracted = extracted.replace("Texto extraido do anexo:", "").strip()
+        return textwrap.shorten(extracted, width=280, placeholder="...")

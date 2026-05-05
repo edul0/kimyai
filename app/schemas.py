@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 class AttachmentInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=180)
     mime_type: str = Field(default="text/plain", max_length=120)
-    content: str = Field(..., min_length=1, max_length=40000)
-    kind: Literal["text", "image"] = "text"
+    content: str = Field(..., min_length=1, max_length=8000000)
+    kind: Literal["text", "image", "document", "binary"] = "text"
 
 
 class ComandoRequest(BaseModel):
@@ -47,3 +47,4 @@ class JobState(BaseModel):
     resultado: dict[str, Any] | None = None
     erro: str | None = None
     eventos: list[dict[str, Any]] = Field(default_factory=list)
+    anexos: list[AttachmentInput] = Field(default_factory=list)

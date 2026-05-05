@@ -25,6 +25,21 @@ class Storage:
     def backend(self) -> str:
         return "redis" if self._redis else "memory"
 
+    def status(self) -> dict[str, Any]:
+        if self._redis:
+            try:
+                info = self._redis.info()
+                return {
+                    "type": "redis",
+                    "connected": True,
+                    "keys": int(self._redis.dbsize()),
+                    "memory": info.get("used_memory_human", ""),
+                }
+            except Exception as exc:
+                return {"type": "redis", "connected": False, "error": str(exc)}
+        self._prune_expired()
+        return {"type": "memory", "connected": True, "keys": len(self._memory)}
+
     def set_json(self, key: str, value: Any, ttl: int | None = None) -> None:
         payload = json.dumps(value, ensure_ascii=False)
         if self._redis:
@@ -58,5 +73,12 @@ class Storage:
     def keys(self, prefix: str) -> list[str]:
         if self._redis:
             return [str(k) for k in self._redis.keys(f"{prefix}*")]
+        self._prune_expired()
         return [k for k in self._memory if k.startswith(prefix)]
+
+    def _prune_expired(self) -> None:
+        now = time.time()
+        for key, (_value, expires) in list(self._memory.items()):
+            if expires and now > expires:
+                self._memory.pop(key, None)
 

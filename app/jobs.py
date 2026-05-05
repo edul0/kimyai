@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from .agents import build_coding_prompt
+from .attachment_service import prepare_attachments
 from .config import Settings
+from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
@@ -33,7 +35,7 @@ class JobManager:
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
         normalized = attachments or []
-        pedido = self._compose_request(message, normalized)[: self.settings.max_prompt_chars]
+        pedido = message.strip()[: self.settings.max_prompt_chars]
         effective_mode = self._resolve_mode(pedido, mode)
         job = JobState(
             job_id=str(uuid.uuid4()),
@@ -43,6 +45,7 @@ class JobManager:
             progresso=5,
             pedido=pedido,
             modo=effective_mode,
+            anexos=normalized,
             created_at=now,
             updated_at=now,
         )
@@ -78,9 +81,13 @@ class JobManager:
             session_data = self.storage.get_json(f"session:{job.session_id}", {})
             history = session_data.get("historico", [])
             memory = session_data.get("memoria", [])
+            compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
+            attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
 
             self._event(job, "Kemy", "Preparando resposta adequada ao pedido.", 30)
-            prompt = build_coding_prompt(job.pedido, job.modo, history, memory)
+            prompt = build_coding_prompt(job.pedido, job.modo, history, memory, compact_context)
+            if attachment_context.get("prompt_context"):
+                prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
 
             if job.modo == "imagem":
                 self._event(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
@@ -91,7 +98,12 @@ class JobManager:
 
             if job.modo == "documento":
                 self._event(job, "Kemy", "Pedido de documento detectado. Vou estruturar a entrega em DOCX e PDF.", 45)
-                draft = await self.router.generate(prompt, job.modo)
+                draft = await self.router.generate(
+                    prompt,
+                    job.modo,
+                    attachments=attachment_context["items"],
+                    visual_items=attachment_context["visual_items"],
+                )
                 self._event(job, "Kemy", "Montando arquivos finais do documento.", 72)
                 result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft)
                 result["tools_used"] = list(dict.fromkeys((draft.get("tools_used") or []) + ["python-docx", "reportlab"]))
@@ -104,8 +116,18 @@ class JobManager:
                 prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
             self._event(job, "Kemy", "Selecionando melhor motor gratuito.", 55)
-            result = await self.router.generate(prompt, job.modo)
+            result = await self.router.generate(
+                prompt,
+                job.modo,
+                attachments=attachment_context["items"],
+                visual_items=attachment_context["visual_items"],
+            )
             result["tools_used"] = tool_context.get("used", [])
+            if attachment_context["items"]:
+                result["attachments_used"] = [
+                    {"name": item["name"], "mime_type": item["mime_type"], "visual": item["visual"]}
+                    for item in attachment_context["items"]
+                ]
 
             self._event(job, "Kemy", "Revisando resposta antes de entregar.", 75)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
@@ -133,14 +155,27 @@ class JobManager:
         answer = result.get("raw") or result.get("summary", "")
         now = utcnow()
         history = data.setdefault("historico", [])
+        previous_context = data.get("contexto_compacto") or {}
+        user_context = build_context_snapshot(previous_context, pedido)
+        assistant_context = build_context_snapshot(user_context, pedido, result)
+        request_parts = split_request_parts(pedido)
         if not data.get("title") or data.get("title") == "Nova conversa":
             data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
-        history.append({"ts": now, "role": "user", "content": pedido})
+        history.append(
+            {
+                "ts": now,
+                "role": "user",
+                "content": pedido,
+                "request_parts": request_parts,
+                "context_snapshot": user_context,
+            }
+        )
         history.append(
             {
                 "ts": now,
                 "role": "assistant",
                 "content": answer[:8000],
+                "context_snapshot": assistant_context,
                 "provider": result.get("provider"),
                 "model": result.get("model"),
                 "tools_used": result.get("tools_used", []),
@@ -163,6 +198,7 @@ class JobManager:
         if fact and fact not in memory:
             memory.append(fact)
             data["memoria"] = memory[-20:]
+        data["contexto_compacto"] = assistant_context
         data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
         return data
@@ -184,18 +220,6 @@ class JobManager:
         if len(text) < 18 or not any(marker in lowered for marker in durable_markers):
             return None
         return text[:220]
-
-    def _compose_request(self, message: str, attachments: list[dict[str, Any]]) -> str:
-        if not attachments:
-            return message
-        chunks = [message.strip(), "\n\n[ANEXOS DO USUARIO]"]
-        for item in attachments[:6]:
-            name = item.get("name", "anexo")
-            mime_type = item.get("mime_type", "text/plain")
-            kind = item.get("kind", "text")
-            content = str(item.get("content", ""))[:12000]
-            chunks.append(f"\n## {name} ({kind} | {mime_type})\n{content}")
-        return "".join(chunks)
 
     def _resolve_mode(self, message: str, current_mode: str) -> str:
         if current_mode == "imagem":
@@ -224,29 +248,30 @@ class JobManager:
         if any(marker in lowered for marker in image_markers):
             return "imagem"
         document_markers = [
-            ".docx",
-            ".pdf",
-            ".md",
-            "markdown",
-            "word",
-            "documento",
-            "relatorio",
-            "relatório",
-            "proposta",
-            "contrato",
-            "ata",
-            "apostila",
-            "manual",
             "gerar pdf",
             "gere pdf",
+            "criar pdf",
+            "crie pdf",
+            "montar pdf",
             "gerar docx",
             "gere docx",
+            "criar docx",
+            "crie docx",
             "converter para pdf",
             "converta para pdf",
             "transformar em pdf",
             "transforme em pdf",
             "gerar arquivo",
             "gere arquivo",
+            "criar documento",
+            "crie documento",
+            "montar documento",
+            "gerar relatorio",
+            "gerar relatório",
+            "gerar proposta",
+            "gerar contrato",
+            "gerar apostila",
+            "gerar manual",
         ]
         if any(marker in lowered for marker in document_markers):
             return "documento"
@@ -269,5 +294,18 @@ class JobManager:
             created_at=session_data.get("created_at"),
             updated_at=session_data.get("updated_at"),
         )
-        await self.supabase.insert_message(job.session_id, "user", job.pedido)
-        await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), result)
+        history = session_data.get("historico", [])
+        user_message = history[-2] if len(history) >= 2 else {}
+        assistant_message = history[-1] if history else {}
+        await self.supabase.insert_message(
+            job.session_id,
+            "user",
+            job.pedido,
+            {
+                "request_parts": user_message.get("request_parts", []),
+                "context_snapshot": user_message.get("context_snapshot", {}),
+            },
+        )
+        assistant_metadata = dict(result)
+        assistant_metadata["context_snapshot"] = assistant_message.get("context_snapshot", {})
+        await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), assistant_metadata)

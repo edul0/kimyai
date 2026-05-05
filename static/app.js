@@ -150,9 +150,11 @@ async function logout() {
 async function loadStatus() {
   const data = await api("/api/status");
   $("apiPill").textContent = data.status === "online" ? "Online" : "Offline";
+  const cache = data.cache || {};
   $("statusList").innerHTML = `
     <div><dt>API</dt><dd>${data.status}</dd></div>
     <div><dt>Storage</dt><dd>${data.storage}</dd></div>
+    <div><dt>Cache</dt><dd>${cache.type || data.storage} - ${cache.keys ?? 0} keys</dd></div>
     <div><dt>Supabase</dt><dd>${data.supabase ? "ativo" : "off"}</dd></div>
     <div><dt>LLM</dt><dd>${data.llm_mode}</dd></div>
   `;
@@ -163,6 +165,32 @@ async function loadStatus() {
     .map(([name, enabled]) => `<span>${name}: ${enabled ? "ativo" : "off"}</span>`)
     .join("");
   $("toolStatus").innerHTML = providers + tools;
+}
+
+async function loadSessionInsights() {
+  const target = $("sessionInsights");
+  if (!state.sessionId) {
+    target.innerHTML = "";
+    return;
+  }
+  try {
+    const data = await api(`/api/analytics/${state.sessionId}`);
+    const context = await api(`/api/sessao/${state.sessionId}/contexto`).catch(() => null);
+    const summary = context?.contexto_compacto?.summary || "";
+    target.innerHTML = `
+      <div>
+        <strong>Sessao atual</strong>
+        <span>${data.total_jobs || 0} jobs - ${data.message_count || 0} mensagens - ${data.generated_files || 0} arquivos</span>
+      </div>
+      <div>
+        <strong>Confiabilidade</strong>
+        <span>${data.success_rate_pct || 0}% sucesso - ${data.failed_jobs || 0} falhas</span>
+      </div>
+      ${summary ? `<div><strong>Contexto aprendido</strong><span>${escapeHtml(summary)}</span></div>` : ""}
+    `;
+  } catch {
+    target.innerHTML = "";
+  }
 }
 
 async function loadSessions() {
@@ -536,21 +564,39 @@ function readAttachment(file) {
     const reader = new FileReader();
     reader.onload = () => {
       const raw = typeof reader.result === "string" ? reader.result : "";
-      const isImage = file.type.startsWith("image/");
-      const content = isImage
+      const mimeType = file.type || inferMimeType(file.name);
+      const isImage = mimeType.startsWith("image/");
+      const isPdf = mimeType === "application/pdf";
+      const isDocx = mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        || mimeType === "application/msword";
+      const isTextLike = mimeType.startsWith("text/")
+        || /(\.md|\.txt|\.py|\.js|\.ts|\.tsx|\.jsx|\.json|\.html|\.css|\.csv|\.log|\.yml|\.yaml)$/i.test(file.name);
+      const content = (isImage || isPdf || isDocx)
         ? raw
-        : raw.slice(0, 40000);
+        : raw.slice(0, 120000);
       resolve({
         name: file.name,
-        mime_type: file.type || "text/plain",
+        mime_type: mimeType,
         content,
-        kind: isImage ? "image" : "text",
+        kind: isImage ? "image" : (isPdf || isDocx ? "document" : (isTextLike ? "text" : "binary")),
       });
     };
     reader.onerror = () => resolve(null);
-    if (file.type.startsWith("image/")) reader.readAsDataURL(file);
-    else reader.readAsText(file);
+    const mimeType = file.type || inferMimeType(file.name);
+    if (mimeType.startsWith("image/") || mimeType === "application/pdf" || mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || mimeType === "application/msword") {
+      reader.readAsDataURL(file);
+      return;
+    }
+    reader.readAsText(file);
   });
+}
+
+function inferMimeType(filename) {
+  const lower = String(filename || "").toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".doc")) return "application/msword";
+  return "text/plain";
 }
 
 function renderAttachments() {
@@ -594,7 +640,11 @@ $("newSessionBtn").addEventListener("click", () => newSession({ openChat: true }
 $("backHomeBtn").addEventListener("click", showHome);
 $("refreshSessionsBtn").addEventListener("click", () => loadSessions().catch(console.error));
 $("copyBtn").addEventListener("click", () => navigator.clipboard.writeText(state.lastOutput || ""));
-$("systemToggle").addEventListener("click", () => $("systemDialog").showModal());
+$("systemToggle").addEventListener("click", async () => {
+  await loadStatus().catch(console.error);
+  await loadSessionInsights();
+  $("systemDialog").showModal();
+});
 $("systemClose").addEventListener("click", () => $("systemDialog").close());
 $("chatForm").addEventListener("submit", (event) => {
   event.preventDefault();

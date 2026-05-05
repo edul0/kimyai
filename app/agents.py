@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .context_memory import context_to_prompt
+
 
 DEFAULT_AGENTS = [
     {
@@ -81,6 +83,7 @@ def build_coding_prompt(
     mode: str,
     history: list[dict[str, Any]] | None = None,
     memory: list[str] | None = None,
+    compact_context: dict[str, Any] | None = None,
 ) -> str:
     recent = history[-6:] if history else []
     history_lines = []
@@ -130,6 +133,9 @@ def build_coding_prompt(
         "Para voz ou controle de PC, explique o que ja e possivel pela infraestrutura atual e qual ferramenta precisa ser conectada.\n"
         "Regra absoluta: responda exatamente ao pedido do usuario. Nao substitua a stack pedida por outra. "
         "Se o usuario pedir para melhorar este sistema, analise o contexto da propria Kemy abaixo e proponha patches para ela.\n"
+        "Use o contexto compactado como memoria operacional. Entenda pedidos longos por partes e resolva cada parte sem perder as restricoes anteriores. "
+        "A cada nova pergunta, seja mais especifica usando as preferencias, requisitos e pendencias ja aprendidas. "
+        "Se faltar uma informacao que bloqueia a execucao, faca uma pergunta curta; se nao bloquear, assuma o caminho mais provavel e continue.\n"
         "Para pedido tecnico, responda em Markdown claro com diagnostico, alteracoes recomendadas, arquivos afetados, patch/codigo quando util, testes e riscos. "
         "Para conversa casual, seja breve e natural, sem inventar codigo.\n"
         "Nao retorne JSON cru para o usuario final.\n"
@@ -137,6 +143,7 @@ def build_coding_prompt(
         f"Modo: {mode}\n"
         f"Conversa casual: {'sim' if casual else 'nao'}\n"
         f"Memoria duravel desta sessao:\n{memory_text or '- sem memoria duravel ainda'}\n\n"
+        f"Contexto compactado da sessao:\n{context_to_prompt(compact_context)}\n\n"
         f"Historico recente:\n{history_text or '- sem historico'}\n\n"
         f"[CONTEXTO DO PROJETO]\n{_project_context(message)}\n\n"
         f"Pedido do usuario:\n{message}\n"

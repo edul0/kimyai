@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     git \
+    nodejs \
+    npm \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -33,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-cloud.txt .
 RUN pip install --upgrade pip setuptools wheel && \
     pip install -r requirements-cloud.txt
+
+RUN npm install -g @marp-team/marp-cli
 
 # ─── App Files ────────────────────────────────
 COPY . .
