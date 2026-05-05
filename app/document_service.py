@@ -22,7 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .config import Settings
 
@@ -123,25 +123,9 @@ class DocumentService:
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
         presentation_html = self._build_presentation_html(title, slides)
         html_path.write_text(presentation_html, encoding="utf-8")
-        pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path)
+        pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
 
-        files = [
-            {
-                "name": markdown_name,
-                "path": str(markdown_path).replace("\\", "/"),
-                "mime_type": "text/markdown",
-                "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
-            }
-        ]
-        if html_path.exists():
-            files.append(
-                {
-                    "name": html_name,
-                    "path": str(html_path).replace("\\", "/"),
-                    "mime_type": "text/html",
-                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
-                }
-            )
+        files: list[dict[str, Any]] = []
         if pdf_path.exists():
             files.append(
                 {
@@ -151,6 +135,22 @@ class DocumentService:
                     "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
                 }
             )
+        files.append(
+            {
+                "name": markdown_name,
+                "path": str(markdown_path).replace("\\", "/"),
+                "mime_type": "text/markdown",
+                "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
+            }
+        )
+        if html_path.exists():
+            files.append(
+                {
+                    "name": html_name,
+                    "path": str(html_path).replace("\\", "/"),
+                    "mime_type": "text/html",
+                }
+            )
 
         summary = "Slides gerados em Markdown Marp e PDF."
         if slide_visuals:
@@ -158,10 +158,9 @@ class DocumentService:
         else:
             summary = "Slides gerados com layout visual personalizado e PDF."
         raw = (
-            f"Slides gerados com sucesso: `{markdown_name}`"
-            + (f", `{html_name}`" if html_path.exists() else "")
-            + (f" e `{pdf_name}`" if pdf_path.exists() else "")
-            + "."
+            f"Slides gerados com sucesso: `{pdf_name}`"
+            + f" e `{markdown_name}`"
+            + (" com HTML interno para renderizacao." if html_path.exists() else ".")
         )
         if slide_visuals:
             raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
@@ -1197,7 +1196,7 @@ class DocumentService:
         escaped = self._escape_html(text)
         return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
 
-    def _build_presentation_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path) -> str:
+    def _build_presentation_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path, slides: list[Slide]) -> str:
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -1206,8 +1205,85 @@ class DocumentService:
                 page.pdf(path=str(pdf_path), width="1600px", height="900px", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
                 browser.close()
             return "playwright-html"
-        except PlaywrightError:
-            return self._render_slide_pdf(markdown_path, html_path, pdf_path)
+        except Exception:
+            provider = self._render_slide_pdf(markdown_path, html_path, pdf_path)
+            if pdf_path.exists():
+                return provider
+            self._build_slide_pdf_with_reportlab(pdf_path, slides)
+            return "reportlab-slides"
+
+    def _build_slide_pdf_with_reportlab(self, path: Path, slides: list[Slide]) -> None:
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "SlideDeckTitle",
+            parent=styles["Heading1"],
+            fontName="Helvetica-Bold",
+            fontSize=24,
+            leading=28,
+            textColor=colors.HexColor("#0c2848"),
+            spaceAfter=12,
+        )
+        kicker_style = ParagraphStyle(
+            "SlideDeckKicker",
+            parent=styles["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#1f5ea8"),
+            spaceAfter=8,
+        )
+        body_style = ParagraphStyle(
+            "SlideDeckBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=14,
+            leading=19,
+            textColor=colors.HexColor("#132942"),
+            spaceAfter=10,
+        )
+        bullet_style = ParagraphStyle(
+            "SlideDeckBullet",
+            parent=body_style,
+            leftIndent=12,
+            firstLineIndent=0,
+        )
+
+        def draw_frame(canvas: Any, doc: Any) -> None:
+            canvas.saveState()
+            canvas.setFillColor(colors.HexColor("#f7fbff"))
+            canvas.rect(0, 0, LETTER[0], LETTER[1], fill=1, stroke=0)
+            canvas.setFillColor(colors.HexColor("#0f2f52"))
+            canvas.rect(0, LETTER[1] - 18, LETTER[0], 18, fill=1, stroke=0)
+            canvas.setFillColor(colors.HexColor("#1f5ea8"))
+            canvas.rect(0, 0, LETTER[0], 10, fill=1, stroke=0)
+            canvas.restoreState()
+
+        story: list[Any] = []
+        for index, slide in enumerate(slides):
+            story.append(Paragraph(self._escape_reportlab(slide.kicker or f"Slide {index + 1}"), kicker_style))
+            story.append(Paragraph(self._escape_reportlab(slide.title), title_style))
+            if slide.body:
+                for line in slide.body[:2]:
+                    story.append(Paragraph(self._escape_reportlab(line), body_style))
+            items = slide.bullets or []
+            if items:
+                bullet_items = [ListItem(Paragraph(self._escape_reportlab(item), bullet_style)) for item in items[:5]]
+                story.append(ListFlowable(bullet_items, bulletType="bullet", leftIndent=18))
+            elif slide.rows:
+                story.append(self._build_pdf_table(slide.rows, body_style, body_style))
+            story.append(Spacer(1, 0.25 * inch))
+            if index < len(slides) - 1:
+                story.append(PageBreak())
+
+        pdf = SimpleDocTemplate(
+            str(path),
+            pagesize=LETTER,
+            leftMargin=0.6 * inch,
+            rightMargin=0.6 * inch,
+            topMargin=0.6 * inch,
+            bottomMargin=0.6 * inch,
+        )
+        pdf.build(story, onFirstPage=draw_frame, onLaterPages=draw_frame)
 
     def _infer_slide_class(self, slide: str, index: int, total: int) -> str:
         lower = slide.lower()

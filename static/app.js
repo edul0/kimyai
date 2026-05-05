@@ -462,7 +462,7 @@ function appendMessage(role, text) {
 function appendResult(result, fallbackText) {
   const imageSource = extractImageSource(result) || extractImageSource({ raw: fallbackText, summary: fallbackText });
   if (!imageSource) {
-    const downloadableFiles = (result.files || []).filter((file) => file.download_url);
+    const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
     if (downloadableFiles.length) {
       const node = document.createElement("div");
       node.className = "message assistant";
@@ -514,6 +514,20 @@ function extractImageUrl(result) {
   const text = [result?.raw, result?.summary, result?.content].filter(Boolean).join("\n");
   const match = text.match(/https?:\/\/\S+/i);
   return match ? match[0].replace(/[)\],.]+$/, "") : "";
+}
+
+function prioritizeFiles(files) {
+  return [...files].sort((a, b) => filePriority(a) - filePriority(b));
+}
+
+function filePriority(file) {
+  const mime = String(file?.mime_type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return 0;
+  if (mime.includes("word") || name.endsWith(".docx")) return 1;
+  if (mime === "text/markdown" || name.endsWith(".md")) return 2;
+  if (mime === "text/html" || name.endsWith(".html")) return 3;
+  return 10;
 }
 
 function titleFromPrompt(text) {
