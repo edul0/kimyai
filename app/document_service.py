@@ -124,7 +124,7 @@ class DocumentService:
         marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
-        presentation_html = self._build_presentation_html(title, slides, user_request)
+        presentation_html = self._inline_slide_assets(self._build_presentation_html(title, slides, user_request), folder)
         html_path.write_text(presentation_html, encoding="utf-8")
         pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
 
@@ -822,6 +822,33 @@ class DocumentService:
       display: grid;
       gap: 26px;
     }}
+    body.pdf-export {{
+      width: 1600px;
+      min-height: auto;
+      display: block;
+      padding: 0;
+      background: #fff;
+    }}
+    body.pdf-export .deck {{
+      width: 1600px;
+      gap: 0;
+    }}
+    body.pdf-export .slide {{
+      width: 1600px;
+      height: 900px;
+      aspect-ratio: auto;
+      border-radius: 0;
+      box-shadow: none;
+      page-break-after: always;
+      break-after: page;
+    }}
+    body.pdf-export .slide:last-child {{
+      page-break-after: auto;
+      break-after: auto;
+    }}
+    body.pdf-export .deck-nav {{
+      display: none !important;
+    }}
     .slide {{
       position: relative;
       width: 100%;
@@ -1098,6 +1125,13 @@ class DocumentService:
       font-size: 25px;
       max-width: 24ch;
     }}
+    .lead .bullet-list li {{
+      color: rgba(255,255,255,0.78);
+    }}
+    .lead .bullet-list li::before {{
+      background: linear-gradient(135deg, #5eead4, #38bdf8);
+      box-shadow: 0 0 0 8px rgba(94, 234, 212, 0.12);
+    }}
     .lead .lead-chip {{
       display: inline-flex;
       align-items: center;
@@ -1204,20 +1238,6 @@ class DocumentService:
       @page {{
         size: 13.333in 7.5in;
         margin: 0;
-      }}
-      body {{
-        background: #fff;
-        padding: 0;
-      }}
-      .deck {{
-        width: 100%;
-        gap: 0;
-      }}
-      .slide {{
-        width: 1600px;
-        margin: 0;
-        border-radius: 0;
-        box-shadow: none;
       }}
       .deck-nav {{
         display: none !important;
@@ -1456,6 +1476,11 @@ class DocumentService:
 
         return re.sub(r'src="([^"]+)"', replace_src, html)
 
+    def _prepare_slide_pdf_html(self, html: str) -> str:
+        if "<body>" in html:
+            return html.replace("<body>", '<body class="pdf-export">', 1)
+        return html.replace("<body ", '<body class="pdf-export" ', 1)
+
     def _short_support_copy(self, detail: str) -> str:
         words = detail.split()
         if len(words) <= 12:
@@ -1467,17 +1492,18 @@ class DocumentService:
         return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
 
     def _build_presentation_pdf(self, markdown_path: Path, html_path: Path, pdf_path: Path, slides: list[Slide]) -> str:
-        html_text = self._inline_slide_assets(html_path.read_text(encoding="utf-8"), html_path.parent)
+        html_text = self._prepare_slide_pdf_html(self._inline_slide_assets(html_path.read_text(encoding="utf-8"), html_path.parent))
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
                 page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1.5)
                 page.set_content(html_text, wait_until="networkidle")
-                page.emulate_media(media="print")
+                page.emulate_media(media="screen")
                 page.pdf(
                     path=str(pdf_path),
+                    width="1600px",
+                    height="900px",
                     print_background=True,
-                    prefer_css_page_size=True,
                     margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
                 )
                 browser.close()
@@ -1720,7 +1746,7 @@ class DocumentService:
         html_payload = html_text or self._inline_slide_assets(html_path.read_text(encoding="utf-8"), html_path.parent)
         if self.settings.gotenberg_url and html_path.exists():
             try:
-                self._build_pdf_with_gotenberg(pdf_path, markdown_path.stem, html_payload)
+                self._build_pdf_with_gotenberg(pdf_path, markdown_path.stem, html_payload, slide_layout=True)
                 return "presentation-html + gotenberg"
             except Exception:
                 pass
@@ -2078,7 +2104,7 @@ class DocumentService:
         )
         pdf.build(story)
 
-    def _build_pdf_with_gotenberg(self, path: Path, title: str, html: str) -> None:
+    def _build_pdf_with_gotenberg(self, path: Path, title: str, html: str, slide_layout: bool = False) -> None:
         base_url = (self.settings.gotenberg_url or "").rstrip("/")
         if not base_url:
             raise ValueError("Gotenberg URL nao configurada.")
@@ -2088,9 +2114,22 @@ class DocumentService:
         data = {
             "printBackground": "true",
             "generateDocumentOutline": "true",
-            "preferCssPageSize": "true",
-            "scale": "1.0",
         }
+        if slide_layout:
+            data.update(
+                {
+                    "generateDocumentOutline": "false",
+                    "preferCssPageSize": "true",
+                    "paperWidth": "13.333",
+                    "paperHeight": "7.5",
+                    "marginTop": "0",
+                    "marginBottom": "0",
+                    "marginLeft": "0",
+                    "marginRight": "0",
+                    "emulatedMediaType": "screen",
+                    "scale": "1.0",
+                }
+            )
         files = [("files", ("index.html", html.encode("utf-8"), "text/html; charset=utf-8"))]
         with httpx.Client(timeout=self.settings.gotenberg_timeout_seconds) as client:
             response = client.post(f"{base_url}/forms/chromium/convert/html", headers=headers, data=data, files=files)
