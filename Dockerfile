@@ -37,6 +37,7 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install -r requirements-cloud.txt
 
 RUN npm install -g @marp-team/marp-cli
+RUN python -m playwright install --with-deps chromium
 
 # ─── App Files ────────────────────────────────
 COPY . .

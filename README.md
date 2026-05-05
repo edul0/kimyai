@@ -89,7 +89,7 @@ Acesse:
 - `GOTENBERG_URL`
 - `GOTENBERG_TIMEOUT_SECONDS`
 
-No Render, o `render.yaml` ja aponta `GOTENBERG_URL` para o servico privado `kemy-gotenberg`. Nao precisa preencher manualmente se voce subir pelo Blueprint.
+No deploy gratis do Render, deixe `GOTENBERG_URL` vazio. A Kimi usa `Playwright + Chromium` para PDFs em HTML e `marp-cli` para slides, sem precisar de servico pago extra. Se o Chromium falhar por ambiente, ainda existe fallback final com `reportlab`.
 
 ### Supabase do Kimi AI
 
@@ -116,8 +116,8 @@ Para subir o schema do Kimi AI:
 2. Conecte o repositorio no Render
 3. Use o `render.yaml` da raiz
 4. Configure as secrets no painel do Render
-5. O Blueprint cria o `kemy-gotenberg` e injeta `GOTENBERG_URL` automaticamente
-6. Valide `GET /api/status` e confirme `tools.gotenberg: true`
+5. Mantenha `GOTENBERG_URL` vazio para ficar no free tier
+6. Valide `GET /api/status` e confirme que a app esta online
 7. Teste login, sessao, anexos, PDF e slides ja na URL publica
 
 ## Endpoints principais

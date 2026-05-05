@@ -93,9 +93,8 @@ curl -X POST http://localhost:8000/api/comando \
 3. No Render, abra:
    [https://dashboard.render.com/blueprint/new?repo=https://github.com/edul0/kimyai](https://dashboard.render.com/blueprint/new?repo=https://github.com/edul0/kimyai)
 
-4. Revise os dois serviços que o Blueprint cria:
+4. Revise o serviço criado pelo Blueprint:
    - `kemy-ai`: web service público da aplicação
-   - `kemy-gotenberg`: private service interno para PDF e slides
 
 5. Preencha as secrets pedidas pelo Blueprint:
    ```
@@ -117,16 +116,14 @@ curl -X POST http://localhost:8000/api/comando \
 
 6. Clique em **Apply**.
 
-7. Aguarde o primeiro deploy terminar. O Render vai:
-   - buildar a aplicação pelo `Dockerfile`;
-   - criar o `kemy-gotenberg`;
-   - injetar `GOTENBERG_URL` automaticamente usando a rede privada interna.
+7. Aguarde o primeiro deploy terminar. O Render vai buildar a aplicação pelo `Dockerfile` e subir um único serviço no plano grátis.
 
 **Importante sobre custo**
 
-- O `kemy-ai` pode continuar no plano `free`.
-- O `kemy-gotenberg` está como `starter`, porque o Render não oferece `free` para `private service`.
-- Sem esse serviço interno, o app continua funcionando, mas os PDFs/slides caem no fallback local e você perde o pipeline cloud completo.
+- Esse blueprint agora fica compatível com o `free tier`.
+- `GOTENBERG_URL` deve ficar vazio no Render grátis.
+- PDFs comuns usam `Playwright + Chromium` e slides usam `marp-cli` dentro da própria aplicação, sem serviço extra pago.
+- Se o Chromium não estiver disponível por algum detalhe do ambiente, ainda existe fallback final com `reportlab`.
 
 ### 2.3 Verificar Deploy
 
@@ -143,7 +140,7 @@ curl https://kemy-ai.onrender.com/api/status
 
 Cheque no JSON de status:
 
-- `tools.gotenberg: true`
+- `tools.gotenberg: false` no modo grátis
 - `llm_mode: "providers"` se você configurou ao menos um provedor
 - `storage.supabase_enabled: true` se configurou Supabase
 
@@ -159,7 +156,7 @@ Em Render Dashboard:
 render logs --service=kemy-ai
 ```
 
-Para problemas de PDF/slides, confira tambem os logs do servico privado `kemy-gotenberg`.
+Para problemas de PDF/slides no plano grátis, confira apenas os logs do `kemy-ai`, porque a renderização acontece dentro da própria aplicação.
 
 ---
 

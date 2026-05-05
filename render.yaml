@@ -49,18 +49,5 @@ services:
         sync: false
       - key: KIMI_SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      - key: GOTENBERG_URL
-        fromService:
-          type: pserv
-          name: kemy-gotenberg
-          property: hostport
       - key: GOTENBERG_TIMEOUT_SECONDS
         value: "90"
-
-  - type: pserv
-    name: kemy-gotenberg
-    runtime: image
-    plan: starter
-    region: ohio
-    image:
-      url: docker.io/gotenberg/gotenberg:8

@@ -14,6 +14,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import sync_playwright
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -608,6 +610,11 @@ class DocumentService:
                 return "gotenberg"
             except Exception:
                 pass
+        try:
+            self._build_pdf_with_playwright(path, html)
+            return "playwright"
+        except Exception:
+            pass
 
         self._build_pdf_with_reportlab(path, title, blocks, user_request)
         return "reportlab"
@@ -681,6 +688,27 @@ class DocumentService:
             response = client.post(f"{base_url}/forms/chromium/convert/html", headers=headers, data=data, files=files)
             response.raise_for_status()
         path.write_bytes(response.content)
+
+    def _build_pdf_with_playwright(self, path: Path, html: str) -> None:
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                page = browser.new_page()
+                page.set_content(html, wait_until="networkidle")
+                page.pdf(
+                    path=str(path),
+                    format="A4",
+                    print_background=True,
+                    margin={
+                        "top": "24mm",
+                        "right": "18mm",
+                        "bottom": "22mm",
+                        "left": "18mm",
+                    },
+                )
+                browser.close()
+        except PlaywrightError as exc:
+            raise RuntimeError("Falha ao gerar PDF com Playwright.") from exc
 
     def _build_html(self, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
         content_parts = []
