@@ -126,6 +126,15 @@ class DocumentService:
         pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
 
         files: list[dict[str, Any]] = []
+        if html_path.exists():
+            files.append(
+                {
+                    "name": html_name,
+                    "path": str(html_path).replace("\\", "/"),
+                    "mime_type": "text/html",
+                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
+                }
+            )
         if pdf_path.exists():
             files.append(
                 {
@@ -143,24 +152,15 @@ class DocumentService:
                 "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
             }
         )
-        if html_path.exists():
-            files.append(
-                {
-                    "name": html_name,
-                    "path": str(html_path).replace("\\", "/"),
-                    "mime_type": "text/html",
-                }
-            )
 
-        summary = "Slides gerados em Markdown Marp e PDF."
+        summary = "Apresentacao profissional gerada em HTML e PDF."
         if slide_visuals:
-            summary = "Slides gerados com composicao visual e imagens IA."
+            summary = "Apresentacao profissional gerada em HTML e PDF com composicao visual e imagens IA."
         else:
-            summary = "Slides gerados com layout visual personalizado e PDF."
+            summary = "Apresentacao profissional gerada em HTML e PDF com layout visual personalizado."
         raw = (
-            f"Slides gerados com sucesso: `{pdf_name}`"
-            + f" e `{markdown_name}`"
-            + (" com HTML interno para renderizacao." if html_path.exists() else ".")
+            f"Apresentacao gerada com sucesso: `{html_name}`, `{pdf_name}` e `{markdown_name}`."
+            " Abra o HTML para revisar o deck visual e use o PDF para entrega final."
         )
         if slide_visuals:
             raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
@@ -171,6 +171,7 @@ class DocumentService:
             "raw": raw,
             "document_title": title,
             "files": files,
+            "preview_url": f"/api/artefatos/{job_id}/{html_name}" if html_path.exists() else "",
             "slide_deck": True,
             "tools_used": ["presentation-html", "playwright", "marp-cli", *(["pollinations-image"] if slide_visuals else [])],
         }
@@ -628,17 +629,19 @@ class DocumentService:
             layout = self._infer_slide_class(raw_slide, index, total)
             lines = [line.strip() for line in raw_slide.splitlines() if line.strip() and not line.strip().startswith("<!--")]
             title = self._humanize_slide_title(lines[0] if lines else deck_title, index, deck_title)
-            bullets = [re.sub(r"^[-*]\s+", "", line).strip() for line in lines[1:] if re.match(r"^[-*]\s+", line)]
+            bullets = [self._clean_inline_markdown(re.sub(r"^[-*]\s+", "", line).strip()) for line in lines[1:] if re.match(r"^[-*]\s+", line)]
             extras = [line for line in lines[1:] if line not in [f"- {bullet}" for bullet in bullets] and not re.match(r"^[-*]\s+", line)]
             rows = self._extract_slide_table(raw_slide)
             kicker = self._slide_kicker(deck_title, layout, index)
             body = [self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", item)) for item in extras if not self._looks_like_table_line(item)]
+            body = [item for item in body if item and item != title and not item.startswith("## ")]
+            bullets = [item for item in bullets if item and item != title][:4]
             slides.append(
                 Slide(
                     title=title,
                     kicker=kicker,
-                    body=body[:3],
-                    bullets=bullets[:5],
+                    body=body[:2],
+                    bullets=bullets,
                     rows=rows,
                     layout=layout,
                     visual=slide_visuals.get(index),

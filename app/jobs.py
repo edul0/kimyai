@@ -184,6 +184,7 @@ class JobManager:
                 "image_url": result.get("image_url"),
                 "image_data_url": result.get("image_data_url"),
                 "files": result.get("files", []),
+                "preview_url": result.get("preview_url"),
                 "result": {
                     "summary": result.get("summary"),
                     "image_url": result.get("image_url"),
@@ -192,6 +193,7 @@ class JobManager:
                     "model": result.get("model"),
                     "files": result.get("files", []),
                     "document_title": result.get("document_title"),
+                    "preview_url": result.get("preview_url"),
                 },
             }
         )

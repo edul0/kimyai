@@ -205,6 +205,7 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                 "image_url": metadata.get("image_url"),
                 "image_data_url": metadata.get("image_data_url"),
                 "files": files,
+                "preview_url": metadata.get("preview_url"),
                 "result": {
                     "summary": metadata.get("summary"),
                     "image_url": metadata.get("image_url"),
@@ -213,6 +214,7 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                     "model": metadata.get("model"),
                     "files": files,
                     "document_title": metadata.get("document_title"),
+                    "preview_url": metadata.get("preview_url"),
                 },
             }
         )
@@ -439,6 +441,7 @@ async def listar_sessoes(request: Request):
                         "image_url": metadata.get("image_url"),
                         "image_data_url": metadata.get("image_data_url"),
                         "files": files,
+                        "preview_url": metadata.get("preview_url"),
                         "result": {
                             "summary": metadata.get("summary"),
                             "image_url": metadata.get("image_url"),
@@ -447,6 +450,7 @@ async def listar_sessoes(request: Request):
                             "model": metadata.get("model"),
                             "files": files,
                             "document_title": metadata.get("document_title"),
+                            "preview_url": metadata.get("preview_url"),
                         },
                     }
                 )

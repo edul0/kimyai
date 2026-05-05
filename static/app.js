@@ -71,7 +71,16 @@ function showChat() {
 
 function showPreview(html) {
   if (!html) return;
+  $("previewFrame").removeAttribute("src");
   $("previewFrame").srcdoc = html;
+  $("previewPanel").classList.remove("hidden");
+  $("chatView").classList.add("has-preview");
+}
+
+function showPreviewUrl(url) {
+  if (!url) return;
+  $("previewFrame").removeAttribute("srcdoc");
+  $("previewFrame").src = url;
   $("previewPanel").classList.remove("hidden");
   $("chatView").classList.add("has-preview");
 }
@@ -289,8 +298,10 @@ async function openSession(sessionId, options = {}) {
     });
   }
   const lastAssistant = [...history].reverse().find((item) => item.role === "assistant" && item.content);
-  const previewHtml = lastAssistant ? extractPreviewHtml({}, lastAssistant.content) : "";
+  const previewHtml = lastAssistant ? extractPreviewHtml(lastAssistant.result || lastAssistant, lastAssistant.content) : "";
+  const previewUrl = lastAssistant ? extractPreviewUrl(lastAssistant.result || lastAssistant) : "";
   if (previewHtml) showPreview(previewHtml);
+  else if (previewUrl) showPreviewUrl(previewUrl);
   else hidePreview();
   resetProgress("Conversa carregada.");
   renderSessions();
@@ -327,7 +338,9 @@ function renderJob(job) {
     appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
+    const previewUrl = extractPreviewUrl(job.resultado);
     if (previewHtml) showPreview(previewHtml);
+    else if (previewUrl) showPreviewUrl(previewUrl);
   }
   if (job.erro) {
     appendMessage("assistant", `Erro: ${job.erro}`);
@@ -523,10 +536,10 @@ function prioritizeFiles(files) {
 function filePriority(file) {
   const mime = String(file?.mime_type || "").toLowerCase();
   const name = String(file?.name || "").toLowerCase();
-  if (mime === "application/pdf" || name.endsWith(".pdf")) return 0;
-  if (mime.includes("word") || name.endsWith(".docx")) return 1;
-  if (mime === "text/markdown" || name.endsWith(".md")) return 2;
-  if (mime === "text/html" || name.endsWith(".html")) return 3;
+  if (mime === "text/html" || name.endsWith(".html")) return 0;
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return 1;
+  if (mime.includes("word") || name.endsWith(".docx")) return 2;
+  if (mime === "text/markdown" || name.endsWith(".md")) return 3;
   return 10;
 }
 
@@ -555,11 +568,19 @@ function showRunError(error) {
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
+  if (result?.preview_html) return result.preview_html;
   const files = result?.files || [];
   const htmlFile = files.find((file) => String(file.path || "").toLowerCase().endsWith(".html"));
   if (htmlFile?.content) return htmlFile.content;
   const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
   return match ? match[1].trim() : "";
+}
+
+function extractPreviewUrl(result) {
+  if (result?.preview_url) return result.preview_url;
+  const files = result?.files || [];
+  const htmlFile = files.find((file) => (String(file.mime_type || "").toLowerCase() === "text/html" || String(file.name || "").toLowerCase().endsWith(".html")) && file.download_url);
+  return htmlFile?.download_url || "";
 }
 
 async function handleFileSelection(fileList) {
