@@ -71,15 +71,11 @@
       <section id="homeView" class="home-view">
         <section class="hero-composer home-minimal" aria-label="Nova tarefa">
           <div class="home-minimal-copy">
-            <span class="eyebrow">Kimi workspace</span>
-            <h1>Abra uma nova tarefa.</h1>
-            <p>Cada envio aqui cria uma conversa separada. Para continuar uma antiga, abra pela lateral.</p>
+            <h1>No que vamos trabalhar?</h1>
+            <p>Uma nova tarefa abre uma nova conversa. Para continuar outra, use as conversas salvas.</p>
           </div>
 
-          <div class="home-command-deck">
-            <div class="hero-toolbar">
-              <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
-            </div>
+          <div class="home-command-deck home-composer-shell">
             <div class="hero-input">
               <textarea id="homePrompt" spellcheck="true" placeholder="Descreva a nova tarefa que voce quer abrir"></textarea>
               <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
@@ -89,6 +85,10 @@
                 <button id="homeAttachBtn" type="button" title="Adicionar anexos">+</button>
                 <button id="homeRunBtn" type="button" aria-label="Criar nova tarefa">Criar tarefa</button>
               </div>
+            </div>
+            <div class="home-secondary-actions">
+              <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
+              <span class="home-secondary-copy">Documentos, imagens e coding no mesmo workspace.</span>
             </div>
           </div>
         </section>

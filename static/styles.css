@@ -1537,37 +1537,107 @@ dialog {
 }
 
 .home-minimal {
-  width: min(920px, 100%);
-  min-height: calc(100vh - 90px);
+  width: min(860px, 100%);
+  min-height: calc(100vh - 120px);
   align-content: center;
   justify-items: stretch;
   margin: 0 auto;
-  padding-top: 0;
+  padding: 0 20px 42px;
+  gap: 14px;
 }
 
 .home-minimal-copy {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   justify-items: center;
   text-align: center;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .home-minimal-copy h1 {
   max-width: none;
   margin: 0;
+  font-size: clamp(38px, 6vw, 62px);
+  line-height: 1.02;
 }
 
 .home-minimal-copy p {
-  max-width: 54ch;
+  max-width: 46ch;
   margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.home-composer-shell {
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  box-shadow: var(--shadow-strong);
 }
 
 .home-minimal .home-command-deck {
-  padding: 18px;
+  padding: 12px;
 }
 
-.home-minimal .hero-toolbar {
-  justify-content: flex-start;
-  margin-bottom: 12px;
+.home-minimal .hero-input {
+  min-height: 228px;
+  border: 0;
+  border-radius: 22px;
+  background: transparent;
+  box-shadow: none;
+  padding: 18px 18px 12px;
+}
+
+.home-minimal .hero-input textarea {
+  min-height: 118px;
+  font-size: 28px;
+  line-height: 1.22;
+}
+
+.home-secondary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 10px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.home-secondary-copy {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.home-sessions-link {
+  border: 0;
+  background: transparent;
+  padding: 10px 0;
+  color: var(--ink-strong);
+  font-weight: 650;
+}
+
+.home-sessions-link:hover {
+  color: var(--success);
+}
+
+@media (max-width: 640px) {
+  .home-minimal {
+    min-height: calc(100vh - 92px);
+    padding-inline: 14px;
+  }
+
+  .home-minimal-copy h1 {
+    font-size: 36px;
+  }
+
+  .home-minimal .hero-input textarea {
+    min-height: 90px;
+    font-size: 22px;
+  }
+
+  .home-secondary-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
