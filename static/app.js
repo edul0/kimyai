@@ -331,7 +331,11 @@ async function pollJob(jobId) {
   return false;
 }
 
-async function ensureSession() {
+async function ensureSession(options = {}) {
+  if (options.forceNewSession) {
+    await newSession({ openChat: true });
+    return;
+  }
   if (!state.sessionId) {
     await newSession();
     return;
@@ -377,7 +381,7 @@ function resolveRequestedMode(text) {
 async function runAgents(prompt, source = "chat") {
   const text = (prompt || "").trim();
   if (!text) return;
-  await ensureSession();
+  await ensureSession({ forceNewSession: source === "home" });
   showChat();
   $("runBtn").disabled = true;
   $("homeRunBtn").disabled = true;
@@ -580,7 +584,7 @@ $("authForm").addEventListener("submit", submitAuth);
 $("authModeBtn").addEventListener("click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
 $("themeToggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
 $("logoutBtn").addEventListener("click", () => logout().catch(console.error));
-$("newSessionBtn").addEventListener("click", () => newSession({ openChat: false }).then(showHome).catch(console.error));
+$("newSessionBtn").addEventListener("click", () => newSession({ openChat: true }).catch(console.error));
 $("backHomeBtn").addEventListener("click", showHome);
 $("refreshSessionsBtn").addEventListener("click", () => loadSessions().catch(console.error));
 $("copyBtn").addEventListener("click", () => navigator.clipboard.writeText(state.lastOutput || ""));
@@ -612,14 +616,14 @@ document.querySelectorAll("[data-home-prompt]").forEach((button) => {
 });
 
 $("homePrompt").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     runAgents($("homePrompt").value, "home").catch(showRunError);
   }
 });
 
 $("prompt").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     runAgents($("prompt").value, "chat").catch(showRunError);
   }

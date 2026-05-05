@@ -40,8 +40,9 @@ class DocumentService:
         folder = self.output_root / session_id / job_id
         folder.mkdir(parents=True, exist_ok=True)
 
-        docx_name = self._safe_filename(title, ".docx")
-        pdf_name = self._safe_filename(title, ".pdf")
+        file_stem = self._filename_stem(user_request, title)
+        docx_name = self._safe_filename(file_stem, ".docx")
+        pdf_name = self._safe_filename(file_stem, ".pdf")
         docx_path = folder / docx_name
         pdf_path = folder / pdf_name
 
@@ -78,12 +79,15 @@ class DocumentService:
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
         for key in ("raw", "summary"):
             value = str(draft.get(key) or "").strip()
-            cleaned = self._strip_system_notices(value)
+            cleaned = self._normalize_document_text(self._strip_system_notices(value), user_request)
             if self._looks_like_document_content(cleaned):
                 return cleaned
         return self._fallback_document_text(user_request)
 
     def _title_from_text(self, user_request: str, text: str) -> str:
+        extracted = self._extract_topic(user_request)
+        if extracted:
+            return extracted[:80].rstrip(" .:-")
         for line in text.splitlines():
             cleaned = re.sub(r"^#+\s*", "", line).strip()
             if len(cleaned) >= 6:
@@ -91,9 +95,50 @@ class DocumentService:
         base = " ".join(user_request.split()).strip()
         return (base[:80] or "Documento Kimi AI").rstrip(" .:-")
 
+    def _filename_stem(self, user_request: str, title: str) -> str:
+        request_text = " ".join(user_request.split()).strip(" .:-")
+        if request_text:
+            return request_text[:120]
+        return title
+
     def _safe_filename(self, title: str, extension: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
         return f"{slug or 'documento-kimi-ai'}{extension}"
+
+    def _normalize_document_text(self, text: str, user_request: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return cleaned
+        cleaned = re.sub(r"^```(?:markdown|md|text)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = re.sub(
+            r"(?is)^#+\s*pedido:.*?(?=^#+\s+|^[A-ZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇa-záàâãéèêíìîóòôõúùûç].*$|$)",
+            "",
+            cleaned,
+        ).strip()
+        lead_patterns = [
+            r"(?is)^compreendido\.?\s+voc[eê].{0,220}?(?=\n\s*\n|^#|\Z)",
+            r"(?is)^aqui est[aá].{0,220}?(?=\n\s*\n|^#|\Z)",
+            r"(?is)^abaixo est[aá].{0,220}?(?=\n\s*\n|^#|\Z)",
+            r"(?is)^segue.{0,180}?(?=\n\s*\n|^#|\Z)",
+            r"(?is)^este documento.{0,220}?(?=\n\s*\n|^#|\Z)",
+            r"(?is)^o documento a seguir.{0,220}?(?=\n\s*\n|^#|\Z)",
+        ]
+        for pattern in lead_patterns:
+            cleaned = re.sub(pattern, "", cleaned).strip()
+        request_topic = self._extract_topic(user_request).lower()
+        cleaned = re.sub(
+            r"(?is)^pedido original:\s*.*?(?=\n\s*\n|^#|\Z)",
+            "",
+            cleaned,
+        ).strip()
+        if request_topic:
+            cleaned = re.sub(
+                r"(?is)^int[eê]n[cç][aã]o:.*?(?=\n\s*\n|^#|\Z)",
+                "",
+                cleaned,
+            ).strip()
+        return cleaned
 
     def _strip_system_notices(self, text: str) -> str:
         lines = [line.rstrip() for line in text.splitlines()]
@@ -160,9 +205,13 @@ class DocumentService:
 
     def _extract_topic(self, user_request: str) -> str:
         text = " ".join(user_request.split()).strip()
+        text = re.sub(r"^(me\s+)?(gere|gerar|gera|crie|criar|fa[cç]a|fazer|monte|montar|produza|produzir)\s+", "", text, flags=re.I)
+        text = re.sub(r"^(um|uma|o|a)\s+", "", text, flags=re.I)
+        text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown)\b", "", text, flags=re.I)
+        text = re.sub(r"\s{2,}", " ", text).strip(" .:-")
         patterns = [
             r"(?:sobre|do|da|de)\s+(.+)$",
-            r"(?:pdf|docx|documento|arquivo)\s+(.+)$",
+            r"(?:pedido|tema)\s+(.+)$",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.I)
@@ -223,32 +272,9 @@ class DocumentService:
         section.right_margin = Inches(1)
 
         self._configure_styles(doc)
-        self._configure_header(section, "Kimi AI Documento")
-        self._configure_footer(section)
 
         doc.add_paragraph(title, style="Title")
-        subtitle = doc.add_paragraph("Entrega automatica em DOCX e PDF pelo Kimi AI", style="Subtitle")
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-        meta = doc.add_table(rows=3, cols=2)
-        meta.style = "Table Grid"
-        meta.autofit = True
-        meta.cell(0, 0).text = "Solicitacao"
-        meta.cell(0, 1).text = "Documento gerado"
-        meta.cell(1, 0).text = "Sessao"
-        meta.cell(1, 1).text = path.parent.parent.name
-        meta.cell(2, 0).text = "Gerado em"
-        meta.cell(2, 1).text = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        for row in meta.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    paragraph.style = doc.styles["Normal"]
         doc.add_paragraph()
-
-        if user_request.strip():
-            intro = doc.add_paragraph(style="Normal")
-            intro.add_run("Pedido original: ").bold = True
-            intro.add_run(" ".join(user_request.split())[:800])
 
         for block in blocks:
             if block.kind == "heading":
@@ -289,41 +315,7 @@ class DocumentService:
         h1 = ParagraphStyle("KimiH1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=colors.HexColor("#14213d"), spaceBefore=10, spaceAfter=8)
         h2 = ParagraphStyle("KimiH2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=colors.HexColor("#223b63"), spaceBefore=8, spaceAfter=6)
         title_style = ParagraphStyle("KimiTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=colors.HexColor("#0f172a"), spaceAfter=8)
-        subtitle_style = ParagraphStyle("KimiSubtitle", parent=styles["BodyText"], fontName="Helvetica", fontSize=11, leading=14, textColor=colors.HexColor("#5b6472"), spaceAfter=18)
-
-        story: list[Any] = [
-            Paragraph(title, title_style),
-            Paragraph("Entrega automatica em DOCX e PDF pelo Kimi AI", subtitle_style),
-        ]
-
-        meta = Table(
-            [
-                ["Solicitacao", "Documento gerado"],
-                ["Sessao", path.parent.parent.name],
-                ["Gerado em", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")],
-            ],
-            colWidths=[1.7 * inch, 4.8 * inch],
-        )
-        meta.setStyle(
-            TableStyle(
-                [
-                    ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#d7dde5")),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef3f8")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 10),
-                    ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#243240")),
-                    ("TOPPADDING", (0, 0), (-1, -1), 7),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ]
-            )
-        )
-        story.extend([meta, Spacer(1, 0.18 * inch)])
-
-        if user_request.strip():
-            story.append(Paragraph(f"<b>Pedido original:</b> {' '.join(user_request.split())[:800]}", body))
+        story: list[Any] = [Paragraph(title, title_style), Spacer(1, 0.08 * inch)]
 
         bullet_items: list[ListItem] = []
         numbered_items: list[ListItem] = []
@@ -373,10 +365,6 @@ class DocumentService:
 
     def _build_html(self, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
         content_parts = []
-        if user_request.strip():
-            content_parts.append(
-                f'<section class="request"><p><strong>Pedido original:</strong> {self._escape_html(" ".join(user_request.split())[:800])}</p></section>'
-            )
         open_list: str | None = None
         for block in blocks:
             if block.kind in {"bullet", "numbered"}:
@@ -399,7 +387,6 @@ class DocumentService:
         if open_list:
             content_parts.append(f"</{open_list}>")
 
-        generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         return f"""<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -419,16 +406,7 @@ class DocumentService:
       background: #ffffff;
     }}
     header {{
-      border-bottom: 1px solid #d7dde5;
-      padding-bottom: 10px;
-      margin-bottom: 24px;
-    }}
-    .eyebrow {{
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: #667085;
-      font-size: 10px;
-      font-weight: 700;
+      margin-bottom: 20px;
     }}
     h1 {{
       font-size: 28px;
@@ -449,22 +427,6 @@ class DocumentService:
     p {{
       margin: 0 0 10px;
     }}
-    .meta {{
-      display: grid;
-      grid-template-columns: 180px 1fr;
-      border: 1px solid #d7dde5;
-      border-bottom: 0;
-      margin: 0 0 18px;
-    }}
-    .meta div {{
-      padding: 9px 10px;
-      border-bottom: 1px solid #d7dde5;
-    }}
-    .meta div:nth-child(4n+1),
-    .meta div:nth-child(4n+2) {{
-      background: #eef3f8;
-      font-weight: 700;
-    }}
     ul, ol {{
       margin: 0 0 12px 22px;
       padding: 0;
@@ -472,22 +434,12 @@ class DocumentService:
     li {{
       margin: 0 0 8px;
     }}
-    .request {{
-      margin-bottom: 16px;
-    }}
   </style>
 </head>
 <body>
   <header>
-    <div class="eyebrow">Kimi AI Documento</div>
     <h1>{self._escape_html(title)}</h1>
-    <p>Entrega automatica em DOCX e PDF pelo Kimi AI.</p>
   </header>
-  <section class="meta">
-    <div>Solicitacao</div><div>Documento gerado</div>
-    <div>Sessao</div><div>{self._escape_html(session_id)}</div>
-    <div>Gerado em</div><div>{generated_at}</div>
-  </section>
   {''.join(content_parts)}
 </body>
 </html>"""

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kemy AI</title>
+    <title>Kimi AI</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -19,39 +19,40 @@
 
     <section id="loginView" class="login-view">
       <div class="login-shell">
-      <form id="authForm" class="login-card">
-        <div class="auth-brand">
-          <span class="brand-logo">K</span>
-          <button type="button" id="authModeBtn">Criar conta</button>
-        </div>
-        <h1 id="authTitle">Entrar na Kemy</h1>
-        <p id="authSubtitle">Use email e senha para acessar suas conversas, tarefas e memoria do workspace.</p>
+        <form id="authForm" class="login-card">
+          <div class="auth-brand">
+            <span class="brand-logo">K</span>
+            <button type="button" id="authModeBtn">Criar conta</button>
+          </div>
+          <h1 id="authTitle">Entrar na Kemy</h1>
+          <p id="authSubtitle">Use email e senha para acessar suas conversas, tarefas e memoria do workspace.</p>
 
-        <label id="nameField" class="hidden">
-          Nome
-          <input id="loginName" autocomplete="name" placeholder="Seu nome" />
-        </label>
-        <label>
-          Email
-          <input id="loginEmail" type="email" autocomplete="email" placeholder="voce@email.com" />
-        </label>
-        <label>
-          Senha
-          <input id="loginPass" type="password" autocomplete="current-password" placeholder="Minimo 8 caracteres" />
-        </label>
+          <label id="nameField" class="hidden">
+            Nome
+            <input id="loginName" autocomplete="name" placeholder="Seu nome" />
+          </label>
+          <label>
+            Email
+            <input id="loginEmail" type="email" autocomplete="email" placeholder="voce@email.com" />
+          </label>
+          <label>
+            Senha
+            <input id="loginPass" type="password" autocomplete="current-password" placeholder="Minimo 8 caracteres" />
+          </label>
 
-        <button id="authSubmit" type="submit">Entrar</button>
-        <small id="loginError"></small>
-      </form>
-      <aside class="login-proof">
-        <span>Workspace inteligente</span>
-        <h2>Memoria, agentes e fallback de APIs no mesmo fluxo.</h2>
-        <ul>
-          <li>Conversa normal quando voce so pergunta.</li>
-          <li>Coding quando a tarefa exige arquitetura, codigo ou deploy.</li>
-          <li>Historico salvo por sessao para a Kemy lembrar o contexto.</li>
-        </ul>
-      </aside>
+          <button id="authSubmit" type="submit">Entrar</button>
+          <small id="loginError"></small>
+        </form>
+
+        <aside class="login-proof">
+          <span>Workspace persistente</span>
+          <h2>Conversas, tarefas e documentos no mesmo lugar.</h2>
+          <ul>
+            <li>Cada tarefa vira uma conversa separada na lateral.</li>
+            <li>Documentos, imagens e coding convivem no mesmo fluxo.</li>
+            <li>Historico salvo por conta para continuar depois do deploy.</li>
+          </ul>
+        </aside>
       </div>
     </section>
 
@@ -68,72 +69,27 @@
       </header>
 
       <section id="homeView" class="home-view">
-        <div class="announcement">Kemy guarda contexto, conversa e aciona agentes quando a tarefa pede codigo.</div>
-        <section class="hero-composer" aria-label="Nova tarefa">
-          <div class="hero-intro">
-            <div class="hero-copy">
-              <span class="eyebrow">Kemy workspace</span>
-              <h1>Coordene, crie e entregue com memoria por perfil.</h1>
-              <p>Uma central de operacao para coding, imagem, pesquisa e deploy. Cada conversa fica presa ao perfil certo e volta mesmo depois do refresh.</p>
-            </div>
-            <div class="hero-stats">
-              <article>
-                <strong>Chat com contexto</strong>
-                <span>Conversa normal, execucao quando a tarefa pede.</span>
-              </article>
-              <article>
-                <strong>Rotas especializadas</strong>
-                <span>Gemini, Groq, Cerebras e imagem por Pollinations.</span>
-              </article>
-              <article>
-                <strong>Sessoes privadas</strong>
-                <span>Historico separado por conta, sem misturar perfis.</span>
-              </article>
-            </div>
+        <section class="hero-composer home-minimal" aria-label="Nova tarefa">
+          <div class="home-minimal-copy">
+            <span class="eyebrow">Kimi workspace</span>
+            <h1>Abra uma nova tarefa.</h1>
+            <p>Cada envio aqui cria uma conversa separada. Para continuar uma antiga, abra pela lateral.</p>
           </div>
+
           <div class="home-command-deck">
             <div class="hero-toolbar">
               <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
-              <div class="hero-tags">
-                <span>coding</span>
-                <span>imagem</span>
-                <span>deploy</span>
-              </div>
             </div>
             <div class="hero-input">
-              <textarea id="homePrompt" spellcheck="true" placeholder="Descreva uma ideia, cole codigo, peça uma imagem ou continue uma conversa existente"></textarea>
+              <textarea id="homePrompt" spellcheck="true" placeholder="Descreva a nova tarefa que voce quer abrir"></textarea>
               <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
               <div id="homeAttachments" class="attachment-list hidden"></div>
+              <p class="composer-hint">Enter quebra linha. Ctrl+Enter ou Cmd+Enter cria a tarefa.</p>
               <div class="hero-actions">
                 <button id="homeAttachBtn" type="button" title="Adicionar anexos">+</button>
-                <button id="homeRunBtn" type="button" aria-label="Enviar mensagem">Executar tarefa</button>
+                <button id="homeRunBtn" type="button" aria-label="Criar nova tarefa">Criar tarefa</button>
               </div>
             </div>
-          </div>
-          <div class="suggestions" aria-label="Sugestoes">
-            <button data-home-prompt="Crie um site moderno para minha ideia e entregue os arquivos principais.">Criar site</button>
-            <button data-home-prompt="Analise este projeto e diga o que falta para ficar profissional.">Analisar codigo</button>
-            <button data-home-prompt="Gere uma imagem cinematografica para minha ideia e entregue o preview.">Gerar imagem</button>
-            <button data-home-prompt="Planeje um sistema com memoria, voz, imagem e agentes de coding gratuitos.">Planejar IA</button>
-            <button data-home-prompt="Gere testes automatizados e checklist de deploy para este projeto.">Gerar testes</button>
-            <button data-home-prompt="Explique como a Kemy pode lembrar conversas e decidir quando codar.">Memoria</button>
-          </div>
-          <div class="home-grid">
-            <article class="home-panel">
-              <span class="panel-label">Fluxo sugerido</span>
-              <strong>Fale com naturalidade</strong>
-              <p>A Kemy identifica quando deve conversar, quando deve pesquisar e quando precisa abrir a rota de codigo ou imagem.</p>
-            </article>
-            <article class="home-panel">
-              <span class="panel-label">Entrega</span>
-              <strong>Arquivos, preview e historico</strong>
-              <p>Sites abrem em live preview. Imagens aparecem no chat. Conversas ficam salvas por conta para continuar depois.</p>
-            </article>
-            <article class="home-panel">
-              <span class="panel-label">Operacao</span>
-              <strong>Nuvem com fallback</strong>
-              <p>Quando uma rota falha, a Kemy troca de provedor e preserva o contexto da sessao.</p>
-            </article>
           </div>
         </section>
       </section>
@@ -142,6 +98,7 @@
         <aside class="task-sidebar">
           <button id="newSessionBtn" class="new-task" type="button">Nova tarefa</button>
           <button id="backHomeBtn" class="side-link" type="button">Inicio</button>
+          <p class="sidebar-note">Cada tarefa fica separada. Abra uma conversa antiga para continuar daquele ponto.</p>
 
           <div class="task-head">
             <span>Todas as tarefas</span>
@@ -186,6 +143,7 @@
             <textarea id="prompt" spellcheck="true" placeholder="Enviar mensagem para Kemy"></textarea>
             <input id="chatFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
             <div id="chatAttachments" class="attachment-list hidden"></div>
+            <p class="composer-hint">Enter quebra linha. Ctrl+Enter ou Cmd+Enter envia.</p>
             <div class="composer-actions">
               <button id="plusBtn" type="button" title="Adicionar contexto">+</button>
               <button id="voiceBtn" type="button" title="Voz entra na proxima etapa">Voz</button>

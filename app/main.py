@@ -71,6 +71,23 @@ def _cache_session_payload(payload: dict) -> dict:
     return data
 
 
+def _preview_from_history(items: list[dict]) -> str:
+    for item in reversed(items):
+        result = item.get("result") or {}
+        preview = (
+            result.get("document_title")
+            or result.get("summary")
+            or item.get("content")
+            or item.get("usuario")
+            or item.get("resumo")
+            or ""
+        )
+        preview = " ".join(str(preview).split()).strip()
+        if preview:
+            return preview[:90]
+    return ""
+
+
 async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> dict | None:
     if not owner:
         return None
@@ -81,6 +98,7 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
     historico = []
     for item in messages:
         metadata = item.get("metadata") or {}
+        files = metadata.get("files", [])
         historico.append(
             {
                 "ts": item.get("created_at") or utcnow(),
@@ -91,12 +109,15 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                 "tools_used": metadata.get("tools_used", []),
                 "image_url": metadata.get("image_url"),
                 "image_data_url": metadata.get("image_data_url"),
+                "files": files,
                 "result": {
                     "summary": metadata.get("summary"),
                     "image_url": metadata.get("image_url"),
                     "image_data_url": metadata.get("image_data_url"),
                     "provider": metadata.get("provider"),
                     "model": metadata.get("model"),
+                    "files": files,
+                    "document_title": metadata.get("document_title"),
                 },
             }
         )
@@ -265,15 +286,11 @@ async def listar_sessoes(request: Request):
         if not data or (data.get("owner") and data.get("owner") != owner):
             continue
         history = data.get("historico", [])
-        preview = ""
-        for item in reversed(history):
-            preview = item.get("content") or item.get("usuario") or item.get("resumo") or ""
-            if preview:
-                break
+        preview = _preview_from_history(history)
         sessions_by_id[data.get("session_id")] = {
             "session_id": data.get("session_id"),
             "title": data.get("title") or "Nova conversa",
-            "preview": preview[:90],
+            "preview": preview,
             "updated_at": data.get("updated_at", ""),
             "created_at": data.get("created_at", ""),
         }
@@ -290,12 +307,40 @@ async def listar_sessoes(request: Request):
             "created_at": existing.get("created_at") or session.get("created_at", ""),
         }
         if session_id and not had_local:
+            remote_messages = await supabase_auth.list_messages(session_id)
+            remote_history = []
+            for item in remote_messages:
+                metadata = item.get("metadata") or {}
+                files = metadata.get("files", [])
+                remote_history.append(
+                    {
+                        "ts": item.get("created_at") or utcnow(),
+                        "role": item.get("role"),
+                        "content": item.get("content", ""),
+                        "provider": metadata.get("provider"),
+                        "model": metadata.get("model"),
+                        "tools_used": metadata.get("tools_used", []),
+                        "image_url": metadata.get("image_url"),
+                        "image_data_url": metadata.get("image_data_url"),
+                        "files": files,
+                        "result": {
+                            "summary": metadata.get("summary"),
+                            "image_url": metadata.get("image_url"),
+                            "image_data_url": metadata.get("image_data_url"),
+                            "provider": metadata.get("provider"),
+                            "model": metadata.get("model"),
+                            "files": files,
+                            "document_title": metadata.get("document_title"),
+                        },
+                    }
+                )
+            sessions_by_id[session_id]["preview"] = _preview_from_history(remote_history)
             _cache_session_payload(
                 {
                     "session_id": session_id,
                     "owner": session.get("owner_email") or owner,
                     "title": session.get("title") or "Nova conversa",
-                    "historico": [],
+                    "historico": remote_history,
                     "created_at": session.get("created_at"),
                     "updated_at": session.get("updated_at"),
                 }
