@@ -117,9 +117,12 @@ class DocumentService:
         pdf_path = folder / pdf_name
 
         normalized_source = self._normalize_slide_source(source_text)
+        if self._needs_slide_fallback(normalized_source, user_request):
+            normalized_source = self._fallback_slide_deck_text(user_request, title)
         raw_slides = self._split_raw_slides(normalized_source) if self._looks_like_marp_deck(normalized_source.strip()) else self._split_into_slides(normalized_source.strip())
-        if len(raw_slides) < 4:
-            raw_slides = self._synthesize_slide_deck("\n\n".join(raw_slides) or normalized_source)
+        if len(raw_slides) < 6:
+            normalized_source = self._fallback_slide_deck_text(user_request, title)
+            raw_slides = self._split_into_slides(normalized_source)
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
         marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
@@ -564,6 +567,110 @@ class DocumentService:
             slides.append("\n".join([heading, "", *[f"- {item}" for item in group]]))
         slides.append(self._render_closing_slide(f"## Fechamento\n\n- {bullets[-1]}", title))
         return [self._sanitize_slide_chunk(slide) for slide in slides if slide.strip()]
+
+    def _needs_slide_fallback(self, source_text: str, user_request: str) -> bool:
+        compact = " ".join(source_text.split()).lower()
+        if len(compact) < 260:
+            return True
+        weak_markers = [
+            "documento executivo",
+            "contexto principal",
+            "pontos-chave",
+            "recomendacao final",
+            "recomendação final",
+            "panorama claro, visual e pronto",
+            "estrutura base de documento",
+            "este documento apresenta",
+            "contexto geral",
+            "em um documento final",
+            "este pdf e docx",
+        ]
+        if any(marker in compact for marker in weak_markers):
+            return True
+        topic = self._extract_topic(user_request).lower()
+        topic_terms = [term for term in re.split(r"\W+", topic) if len(term) >= 5][:4]
+        if topic_terms and not any(term in compact for term in topic_terms):
+            return True
+        return False
+
+    def _fallback_slide_deck_text(self, user_request: str, title: str) -> str:
+        topic = self._clean_inline_markdown(self._extract_topic(user_request) or title)
+        lowered = user_request.lower()
+        wants_iso = any(token in lowered for token in ["iso", "norma", "normas", "certificacao", "certificação"])
+        wants_steps = any(token in lowered for token in ["roadmap", "passos", "plano", "implementacao", "implementação"])
+        wants_images = any(token in lowered for token in ["imagem", "visual", "ilustrado", "premium", "gamma", "canva"])
+        standards = [
+            "ISO 55001 - sistema de gestao de ativos e governanca do ciclo de vida",
+            "ISO/IEC 19770 - gestao de ativos de TI, inventario, licencas e conformidade",
+            "ISO/IEC 27001 - seguranca da informacao aplicada a ativos criticos",
+            "ISO/IEC 20000-1 - gestao de servicos de TI conectada a catalogo e suporte",
+        ]
+        standards_slide = "\n".join(f"- {item}" for item in standards)
+        general_references = "\n".join(
+            [
+                "- Boas praticas de gestao de ativos orientadas a ciclo de vida",
+                "- Controles de seguranca e conformidade para ativos criticos",
+                "- Governanca de servicos e processos para TI operacional",
+                "- Metricas executivas para custo, risco, disponibilidade e uso",
+            ]
+        )
+        references_slide = standards_slide if wants_iso else general_references
+        visual_note = "visual executivo com imagens e diagramas" if wants_images else "visual executivo com hierarquia clara"
+        roadmap_title = "Roadmap de implementacao" if wants_steps else "Modelo operacional"
+        return f"""# {topic}
+## {visual_note.capitalize()} para decisao e apresentacao
+
+---
+
+## O problema que precisa ser resolvido
+- Inventarios incompletos reduzem visibilidade sobre hardware, software e contratos
+- Custos crescem quando licencas, garantias e ativos ociosos nao sao reconciliados
+- Riscos de seguranca aumentam quando ativos criticos nao tem dono, status e ciclo de vida claros
+
+---
+
+## Objetivos do programa
+- Visibilidade total - consolidar inventario, responsaveis, criticidade e localizacao
+- Controle financeiro - reduzir desperdicio, duplicidade e renovacoes sem uso
+- Governanca - criar regras para aquisicao, uso, manutencao e descarte
+- Seguranca - conectar ativos a vulnerabilidades, acessos e continuidade
+
+---
+
+## Normas e referencias aplicaveis
+{references_slide}
+
+---
+
+## Arquitetura de gestao
+- Base unica - CMDB, inventario, contratos e telemetria integrados
+- Dono do ativo - responsabilidade clara por criticidade, custo e risco
+- Eventos de ciclo de vida - entrada, movimentacao, manutencao, renovacao e descarte
+- Indicadores - custo total, cobertura, conformidade, risco e disponibilidade
+
+---
+
+## {roadmap_title}
+- Diagnosticar - mapear fontes, lacunas, ativos criticos e contratos relevantes
+- Integrar - unificar inventario, descoberta automatica e dados financeiros
+- Governar - definir papeis, politicas, aprovacao e trilhas de auditoria
+- Otimizar - revisar licencas, riscos, ativos ociosos e oportunidades de economia
+
+---
+
+## Indicadores para acompanhar
+- Cobertura de inventario - percentual de ativos conhecidos e classificados
+- Custo evitado - economia por reuso, renegociacao e remocao de desperdicio
+- Risco reduzido - ativos criticos com patch, dono e controle de acesso
+- Conformidade - aderencia a politicas internas, normas e evidencias de auditoria
+
+---
+
+## Fechamento
+- Comece pelos ativos criticos e fontes mais confiaveis
+- Transforme inventario em decisao financeira, operacional e de seguranca
+- Mantenha revisoes recorrentes para que a base nao volte a ficar obsoleta
+"""
 
     def _polish_slide_deck(self, slides: list[str], title: str, slide_visuals: dict[int, str]) -> list[str]:
         polished: list[str] = []
@@ -1876,7 +1983,7 @@ class DocumentService:
         text = " ".join(user_request.split()).strip()
         text = re.sub(r"^(me\s+)?(gere|gerar|gera|crie|criar|fa[cç]a|fazer|monte|montar|produza|produzir)\s+", "", text, flags=re.I)
         text = re.sub(r"^(um|uma|o|a)\s+", "", text, flags=re.I)
-        text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown)\b", "", text, flags=re.I)
+        text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown|slide|slides|deck|pptx?|apresenta[cç][aã]o)\b", "", text, flags=re.I)
         text = re.sub(r"\s{2,}", " ", text).strip(" .:-")
         patterns = [
             r"(?:sobre|do|da|de)\s+(.+)$",
@@ -1980,6 +2087,22 @@ class DocumentService:
         doc.save(path)
 
     def _build_pdf(self, path: Path, title: str, blocks: list[Block], user_request: str, session_id: str) -> str:
+        if self._is_slide_request(user_request):
+            source_text = "\n".join(
+                f"## {block.text}" if block.kind == "heading" else f"- {block.text}" if block.kind in {"bullet", "numbered"} else block.text
+                for block in blocks
+                if block.text
+            )
+            normalized_source = self._fallback_slide_deck_text(user_request, title) if self._needs_slide_fallback(source_text, user_request) else self._normalize_slide_source(source_text)
+            raw_slides = self._split_raw_slides(normalized_source) if self._looks_like_marp_deck(normalized_source) else self._split_into_slides(normalized_source)
+            if len(raw_slides) < 6:
+                raw_slides = self._split_into_slides(self._fallback_slide_deck_text(user_request, title))
+            slides = self._build_slide_models(raw_slides, title, {})
+            html_path = path.with_suffix(".html")
+            markdown_path = path.with_suffix(".md")
+            html_path.write_text(self._build_presentation_html(title, slides, user_request), encoding="utf-8")
+            markdown_path.write_text(self._build_marp_markdown(title, normalized_source), encoding="utf-8")
+            return self._build_presentation_pdf(markdown_path, html_path, path, slides)
         html = self._build_html(title, blocks, user_request, session_id)
         if self.settings.gotenberg_url:
             try:
