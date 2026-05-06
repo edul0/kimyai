@@ -22,6 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
+from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import ListFlowable, ListItem, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .config import Settings
@@ -702,7 +703,7 @@ class DocumentService:
         slides: list[str],
         folder: Path,
     ) -> dict[int, str]:
-        if not self.settings.pollinations_api_key or not slides:
+        if not self.settings.pollinations_api_key or not slides or not self._wants_ai_slide_images(user_request):
             return {}
         selected_indexes = self._select_visual_slides(slides, user_request)
         if not selected_indexes:
@@ -740,6 +741,24 @@ class DocumentService:
             if item not in deduped:
                 deduped.append(item)
         return deduped[:4]
+
+    def _wants_ai_slide_images(self, user_request: str) -> bool:
+        lowered = user_request.lower()
+        return any(
+            token in lowered
+            for token in [
+                "com imagem",
+                "com imagens",
+                "com foto",
+                "com fotos",
+                "ilustrado",
+                "ilustrações",
+                "ilustracoes",
+                "visual com imagem",
+                "use imagens",
+                "usar imagens",
+            ]
+        )
 
     def _slide_image_prompt(
         self,
@@ -977,7 +996,7 @@ class DocumentService:
       break-after: auto;
     }}
     .slide-content {{
-      padding: 64px 68px 60px;
+      padding: 48px 56px 48px;
       display: flex;
       flex-direction: column;
       min-width: 0;
@@ -1005,15 +1024,15 @@ class DocumentService:
     }}
     .slide-title {{
       margin: 0;
-      font-size: 58px;
-      line-height: .98;
-      letter-spacing: -.04em;
+      font-size: 50px;
+      line-height: 1.02;
+      letter-spacing: 0;
       color: #0c2848;
       max-width: 12ch;
     }}
     .slide-subtitle {{
       margin: 0;
-      font-size: 22px;
+      font-size: 20px;
       line-height: 1.45;
       color: #41556f;
       max-width: 30ch;
@@ -1035,6 +1054,74 @@ class DocumentService:
       inset: 0;
       background: linear-gradient(90deg, rgba(247,251,255,0.02) 0%, rgba(12, 28, 49, 0.18) 100%);
     }}
+    .visual-map {{
+      position: absolute;
+      inset: 54px;
+      display: grid;
+      place-items: center;
+      color: rgba(255,255,255,0.92);
+    }}
+    .visual-orbit {{
+      position: relative;
+      width: 360px;
+      height: 360px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background:
+        radial-gradient(circle at center, rgba(255,255,255,0.20), transparent 28%),
+        radial-gradient(circle at 30% 20%, rgba(94,234,212,0.26), transparent 20%);
+    }}
+    .visual-node {{
+      position: absolute;
+      width: 118px;
+      min-height: 54px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.20);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      backdrop-filter: blur(14px);
+    }}
+    .visual-node:nth-child(1) {{
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }}
+    .visual-node:nth-child(2) {{
+      right: -38px;
+      top: 48%;
+      transform: translateY(-50%);
+    }}
+    .visual-node:nth-child(3) {{
+      bottom: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }}
+    .visual-node:nth-child(4) {{
+      left: -38px;
+      top: 48%;
+      transform: translateY(-50%);
+    }}
+    .visual-core {{
+      position: absolute;
+      inset: 122px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 20px;
+      background: rgba(255,255,255,0.92);
+      color: #0c2848;
+      font-size: 20px;
+      font-weight: 900;
+      box-shadow: 0 22px 54px rgba(4, 17, 34, 0.20);
+    }}
     .content-stack {{
       display: flex;
       flex-direction: column;
@@ -1053,8 +1140,8 @@ class DocumentService:
       grid-template-columns: 14px minmax(0, 1fr);
       gap: 14px;
       align-items: start;
-      font-size: 24px;
-      line-height: 1.45;
+      font-size: 21px;
+      line-height: 1.36;
       color: #132942;
     }}
     .bullet-list li::before {{
@@ -1074,14 +1161,14 @@ class DocumentService:
     .agenda-card, .metric-card, .highlight-card {{
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 24px;
-      padding: 26px 28px;
+      border-radius: 20px;
+      padding: 20px 22px;
       box-shadow: var(--shadow);
       min-height: 0;
     }}
     .highlight-card {{
       background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,249,255,0.94));
-      min-height: 190px;
+      min-height: 150px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
@@ -1097,14 +1184,14 @@ class DocumentService:
     }}
     .agenda-card span {{
       display: block;
-      font-size: 30px;
+      font-size: 24px;
       line-height: 1.22;
       color: #10233d;
       font-weight: 700;
     }}
     .metric-value {{
       display: block;
-      font-size: 42px;
+      font-size: 34px;
       line-height: 1;
       letter-spacing: -.04em;
       color: #0c2848;
@@ -1129,14 +1216,14 @@ class DocumentService:
       text-transform: uppercase;
     }}
     .highlight-text {{
-      font-size: 28px;
-      line-height: 1.22;
+      font-size: 22px;
+      line-height: 1.24;
       color: #10233d;
       font-weight: 700;
       letter-spacing: -.03em;
     }}
     .highlight-detail {{
-      font-size: 18px;
+      font-size: 15px;
       line-height: 1.45;
       color: #51657f;
     }}
@@ -1150,8 +1237,8 @@ class DocumentService:
       min-height: 52px;
       display: flex;
       align-items: center;
-      font-size: 24px;
-      line-height: 1.4;
+      font-size: 21px;
+      line-height: 1.34;
       color: #10233d;
     }}
     .timeline-step::before {{
@@ -1225,8 +1312,8 @@ class DocumentService:
     }}
     .lead .slide-title {{
       color: #fff;
-      font-size: 72px;
-      max-width: 10ch;
+      font-size: 64px;
+      max-width: 11ch;
     }}
     .lead .slide-subtitle {{
       font-size: 25px;
@@ -1286,10 +1373,18 @@ class DocumentService:
       display: none;
     }}
     .slide.copy-heavy .bullet-list li {{
-      font-size: 21px;
+      font-size: 18px;
     }}
     .slide.copy-heavy .slide-title {{
-      font-size: 50px;
+      font-size: 42px;
+    }}
+    .slide.long-title .slide-title {{
+      font-size: 42px;
+      max-width: 18ch;
+    }}
+    .lead.long-title .slide-title {{
+      font-size: 54px;
+      max-width: 13ch;
     }}
     .deck-nav {{
       position: fixed;
@@ -1378,7 +1473,12 @@ class DocumentService:
     def _render_slide_html(self, slide: Slide, index: int, total: int) -> str:
         classes = [slide.layout if slide.layout in {"lead", "agenda", "metrics", "timeline", "compare", "closing", "highlights"} else "content"]
         if not slide.visual:
-            classes.append("no-visual")
+            if slide.layout in {"agenda", "metrics", "timeline", "compare", "highlights"}:
+                classes.append("no-visual")
+            else:
+                classes.append("generated-visual")
+        if len(slide.title) > 44:
+            classes.append("long-title")
         if len(slide.bullets or []) >= 4:
             classes.append("copy-heavy")
         content = self._render_slide_content(slide)
@@ -1402,9 +1502,23 @@ class DocumentService:
 
     def _render_visual_html(self, slide: Slide) -> str:
         if not slide.visual:
-            return '<aside class="slide-visual"></aside>'
+            return self._render_generated_visual_html(slide)
         visual = quote(slide.visual.replace("\\", "/"), safe="/:.-_")
         return f'<aside class="slide-visual"><img src="{visual}" alt="{self._escape_html(slide.title)}" /></aside>'
+
+    def _render_generated_visual_html(self, slide: Slide) -> str:
+        labels = [self._split_card_item(item)[0] for item in (slide.bullets or [])[:4]]
+        if len(labels) < 4:
+            labels.extend(["Inventario", "Risco", "Custo", "Governanca"][len(labels) : 4])
+        nodes = "".join(f'<span class="visual-node">{self._escape_html(label[:26])}</span>' for label in labels[:4])
+        core = self._escape_html((slide.title or "Estrategia")[:32])
+        return (
+            '<aside class="slide-visual">'
+            '<div class="visual-map">'
+            f'<div class="visual-orbit">{nodes}<strong class="visual-core">{core}</strong></div>'
+            '</div>'
+            '</aside>'
+        )
 
     def _render_slide_content(self, slide: Slide) -> str:
         if slide.layout == "agenda":
@@ -1623,77 +1737,121 @@ class DocumentService:
             return "reportlab-slides"
 
     def _build_slide_pdf_with_reportlab(self, path: Path, slides: list[Slide]) -> None:
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            "SlideDeckTitle",
-            parent=styles["Heading1"],
-            fontName="Helvetica-Bold",
-            fontSize=24,
-            leading=28,
-            textColor=colors.HexColor("#0c2848"),
-            spaceAfter=12,
-        )
-        kicker_style = ParagraphStyle(
-            "SlideDeckKicker",
-            parent=styles["BodyText"],
-            fontName="Helvetica-Bold",
-            fontSize=9,
-            leading=12,
-            textColor=colors.HexColor("#1f5ea8"),
-            spaceAfter=8,
-        )
-        body_style = ParagraphStyle(
-            "SlideDeckBody",
-            parent=styles["BodyText"],
-            fontName="Helvetica",
-            fontSize=14,
-            leading=19,
-            textColor=colors.HexColor("#132942"),
-            spaceAfter=10,
-        )
-        bullet_style = ParagraphStyle(
-            "SlideDeckBullet",
-            parent=body_style,
-            leftIndent=12,
-            firstLineIndent=0,
-        )
-
-        def draw_frame(canvas: Any, doc: Any) -> None:
-            canvas.saveState()
-            canvas.setFillColor(colors.HexColor("#f7fbff"))
-            canvas.rect(0, 0, LETTER[0], LETTER[1], fill=1, stroke=0)
-            canvas.setFillColor(colors.HexColor("#0f2f52"))
-            canvas.rect(0, LETTER[1] - 18, LETTER[0], 18, fill=1, stroke=0)
-            canvas.setFillColor(colors.HexColor("#1f5ea8"))
-            canvas.rect(0, 0, LETTER[0], 10, fill=1, stroke=0)
-            canvas.restoreState()
-
-        story: list[Any] = []
+        width, height = 13.333 * inch, 7.5 * inch
+        pdf = pdf_canvas.Canvas(str(path), pagesize=(width, height))
         for index, slide in enumerate(slides):
-            story.append(Paragraph(self._escape_reportlab(slide.kicker or f"Slide {index + 1}"), kicker_style))
-            story.append(Paragraph(self._escape_reportlab(slide.title), title_style))
-            if slide.body:
-                for line in slide.body[:2]:
-                    story.append(Paragraph(self._escape_reportlab(line), body_style))
-            items = slide.bullets or []
-            if items:
-                bullet_items = [ListItem(Paragraph(self._escape_reportlab(item), bullet_style)) for item in items[:5]]
-                story.append(ListFlowable(bullet_items, bulletType="bullet", leftIndent=18))
-            elif slide.rows:
-                story.append(self._build_pdf_table(slide.rows, body_style, body_style))
-            story.append(Spacer(1, 0.25 * inch))
-            if index < len(slides) - 1:
-                story.append(PageBreak())
+            self._draw_slide_page(pdf, slide, index, len(slides), width, height)
+            pdf.showPage()
+        pdf.save()
 
-        pdf = SimpleDocTemplate(
-            str(path),
-            pagesize=LETTER,
-            leftMargin=0.6 * inch,
-            rightMargin=0.6 * inch,
-            topMargin=0.6 * inch,
-            bottomMargin=0.6 * inch,
-        )
-        pdf.build(story, onFirstPage=draw_frame, onLaterPages=draw_frame)
+    def _draw_slide_page(self, pdf: Any, slide: Slide, index: int, total: int, width: float, height: float) -> None:
+        dark = slide.layout in {"lead", "closing"}
+        bg = colors.HexColor("#123657") if dark else colors.HexColor("#f3f8fd")
+        accent = colors.HexColor("#27a6b8")
+        ink = colors.white if dark else colors.HexColor("#0c2848")
+        muted = colors.HexColor("#d7e8f7") if dark else colors.HexColor("#49637f")
+        pdf.setFillColor(bg)
+        pdf.rect(0, 0, width, height, fill=1, stroke=0)
+        pdf.setFillColor(colors.HexColor("#1e5a84") if dark else colors.HexColor("#dfeaf4"))
+        pdf.rect(width * 0.56, 0, width * 0.44, height, fill=1, stroke=0)
+        pdf.setFillColor(accent)
+        pdf.circle(width * 0.86, height * 0.25, 90, fill=1, stroke=0)
+        pdf.setFillColor(colors.Color(1, 1, 1, alpha=0.12) if dark else colors.Color(1, 1, 1, alpha=0.62))
+        pdf.circle(width * 0.84, height * 0.68, 145, fill=1, stroke=0)
+
+        left = 0.62 * inch
+        top = height - 0.68 * inch
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawString(left, top, (slide.kicker or f"Slide {index + 1}").upper()[:72])
+        pdf.drawRightString(width - 0.62 * inch, top, f"{index + 1} / {total}")
+
+        title_size = 42 if len(slide.title) <= 34 else 34
+        title_lines = self._wrap_text(slide.title, 24 if title_size >= 40 else 32, max_lines=3)
+        y = top - 0.58 * inch
+        pdf.setFillColor(ink)
+        pdf.setFont("Helvetica-Bold", title_size)
+        for line in title_lines:
+            pdf.drawString(left, y, line)
+            y -= title_size * 1.06
+
+        if slide.layout == "lead" and slide.body:
+            pdf.setFillColor(muted)
+            pdf.setFont("Helvetica", 18)
+            for line in self._wrap_text(slide.body[0], 34, max_lines=2):
+                pdf.drawString(left, y - 8, line)
+                y -= 24
+            y -= 18
+
+        items = (slide.bullets or slide.body or [])[:4]
+        if slide.layout in {"highlights", "agenda", "metrics"} and items:
+            self._draw_slide_cards(pdf, items, left, 0.82 * inch, width * 0.50, max(y - 0.2 * inch, 2.8 * inch), dark)
+        elif items:
+            pdf.setFont("Helvetica", 16)
+            pdf.setFillColor(ink)
+            for item in items:
+                label, detail = self._split_card_item(item)
+                text = detail if detail and detail != "Ponto principal do slide" else label
+                for line_index, line in enumerate(self._wrap_text(text, 58, max_lines=2)):
+                    if line_index == 0:
+                        pdf.setFillColor(accent)
+                        pdf.circle(left + 7, y - 5, 4, fill=1, stroke=0)
+                        pdf.setFillColor(ink)
+                    pdf.drawString(left + 24, y - 12, line)
+                    y -= 22
+                y -= 10
+
+    def _draw_slide_cards(self, pdf: Any, items: list[str], left: float, bottom: float, width: float, top: float, dark: bool) -> None:
+        card_gap = 0.22 * inch
+        card_w = (width - card_gap) / 2
+        card_h = max(1.08 * inch, (top - bottom - card_gap) / 2)
+        ink = colors.HexColor("#0c2848")
+        muted = colors.HexColor("#49637f")
+        accent = colors.HexColor("#1f5ea8")
+        for idx, item in enumerate(items[:4]):
+            col = idx % 2
+            row = idx // 2
+            x = left + col * (card_w + card_gap)
+            y = top - (row + 1) * card_h - row * card_gap
+            pdf.setFillColor(colors.white if not dark else colors.HexColor("#f7fbff"))
+            pdf.roundRect(x, y, card_w, card_h, 14, fill=1, stroke=0)
+            label, detail = self._split_card_item(item)
+            pdf.setFillColor(accent)
+            pdf.setFont("Helvetica-Bold", 8)
+            pdf.drawString(x + 18, y + card_h - 24, label.upper()[:34])
+            pdf.setFillColor(ink)
+            pdf.setFont("Helvetica-Bold", 18)
+            text = detail if detail and detail != "Ponto principal do slide" else label
+            text_lines = self._wrap_text(text, 22, max_lines=3)
+            line_y = y + card_h - 52
+            for line in text_lines:
+                pdf.drawString(x + 18, line_y, line)
+                line_y -= 21
+            pdf.setFillColor(muted)
+            pdf.setFont("Helvetica", 9)
+            support = self._short_support_copy(text)
+            for line in self._wrap_text(support, 30, max_lines=2):
+                pdf.drawString(x + 18, max(y + 18, line_y - 4), line)
+                line_y -= 12
+
+    def _wrap_text(self, text: str, max_chars: int, max_lines: int = 4) -> list[str]:
+        words = self._clean_inline_markdown(text).split()
+        lines: list[str] = []
+        current: list[str] = []
+        for word in words:
+            candidate = " ".join(current + [word])
+            if current and len(candidate) > max_chars:
+                lines.append(" ".join(current))
+                current = [word]
+                if len(lines) >= max_lines:
+                    break
+            else:
+                current.append(word)
+        if current and len(lines) < max_lines:
+            lines.append(" ".join(current))
+        if len(lines) == max_lines and len(" ".join(words)) > len(" ".join(lines)):
+            lines[-1] = lines[-1].rstrip(".,;:") + "."
+        return lines or [""]
 
     def _infer_slide_class(self, slide: str, index: int, total: int) -> str:
         lower = slide.lower()
@@ -1984,6 +2142,14 @@ class DocumentService:
         text = re.sub(r"^(me\s+)?(gere|gerar|gera|crie|criar|fa[cç]a|fazer|monte|montar|produza|produzir)\s+", "", text, flags=re.I)
         text = re.sub(r"^(um|uma|o|a)\s+", "", text, flags=re.I)
         text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown|slide|slides|deck|pptx?|apresenta[cç][aã]o)\b", "", text, flags=re.I)
+        text = re.split(
+            r"\b(citando|com|incluindo|inclua|usando|use|no estilo|em estilo|formato|de forma|para|nivel|nível)\b",
+            text,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+        text = re.sub(r"\b(suas|devidas|devida|devido)\b", "", text, flags=re.I)
+        text = re.sub(r"\bisos?\b", "ISO", text, flags=re.I)
         text = re.sub(r"\s{2,}", " ", text).strip(" .:-")
         patterns = [
             r"(?:sobre|do|da|de)\s+(.+)$",
@@ -1994,8 +2160,31 @@ class DocumentService:
             if match:
                 topic = match.group(1).strip(" .:-")
                 if topic:
-                    return topic[:90].capitalize()
-        return (text[:90] or "Documento solicitado").capitalize()
+                    return self._polish_topic_title(topic)
+        return self._polish_topic_title(text[:90] or "Documento solicitado")
+
+    def _polish_topic_title(self, topic: str) -> str:
+        cleaned = self._clean_inline_markdown(topic).strip(" .:-")
+        replacements = {
+            "gestao de ativos na tecnologia da informacao": "Gestao de Ativos de TI",
+            "gestão de ativos na tecnologia da informação": "Gestao de Ativos de TI",
+            "gestao de ativos em ti": "Gestao de Ativos de TI",
+            "gestão de ativos em ti": "Gestao de Ativos de TI",
+        }
+        lowered = cleaned.lower()
+        for needle, replacement in replacements.items():
+            if needle in lowered:
+                return replacement
+        small_words = {"de", "da", "do", "das", "dos", "e", "em", "na", "no", "para", "com"}
+        words: list[str] = []
+        for word in cleaned.split():
+            if word.upper() in {"TI", "ISO", "ISOS", "LGPD", "IA"}:
+                words.append(word.upper().replace("ISOS", "ISO"))
+            elif word.lower() in small_words:
+                words.append(word.lower())
+            else:
+                words.append(word[:1].upper() + word[1:].lower())
+        return " ".join(words)[:80] or "Apresentacao"
 
     def _parse_blocks(self, text: str) -> list[Block]:
         blocks: list[Block] = []
