@@ -10,12 +10,32 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const on = (id, event, handler) => {
+  const element = $(id);
+  if (!element) {
+    console.warn(`[Kemy UI] Elemento #${id} não encontrado para ${event}.`);
+    return;
+  }
+  element.addEventListener(event, handler);
+};
+
+function updateThemeIcon(theme) {
+  const sunIcon = document.querySelector(".icon-sun");
+  const moonIcon = document.querySelector(".icon-moon");
+  if (!sunIcon || !moonIcon) return;
+  sunIcon.classList.toggle("hidden", theme === "dark");
+  moonIcon.classList.toggle("hidden", theme !== "dark");
+}
 
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("kemy.theme", theme);
-  $("themeToggle").setAttribute("aria-label", theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro");
-  $("themeToggle").setAttribute("title", theme === "dark" ? "Modo claro" : "Modo escuro");
+  const toggle = $("themeToggle");
+  if (toggle) {
+    toggle.setAttribute("aria-label", theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro");
+    toggle.setAttribute("title", theme === "dark" ? "Modo claro" : "Modo escuro");
+  }
+  updateThemeIcon(theme);
 }
 
 function sessionStorageKey(user = state.currentUser) {
@@ -98,9 +118,9 @@ function setAuthMode(mode) {
   $("authTitle").textContent = register ? "Criar conta na Kemy" : "Entrar na Kemy";
   $("authSubtitle").textContent = register
     ? "Crie um acesso por email e senha para manter conversas, tarefas e contexto."
-    : "Use email e senha para acessar suas conversas, tarefas e memoria do workspace.";
-  $("authSubmit").textContent = register ? "Criar conta" : "Entrar no Workspace";
-  $("authModeBtn").textContent = register ? "Ja tenho conta" : "Criar conta";
+    : "Use email ou usuário e senha para acessar suas conversas, tarefas e memória do workspace.";
+  $("authSubmit").textContent = register ? "Criar conta" : "Entrar no workspace";
+  $("authModeBtn").textContent = register ? "Já tenho conta" : "Criar conta";
 }
 
 async function checkAuth() {
@@ -508,13 +528,13 @@ function appendResult(result, fallbackText) {
       const node = document.createElement("div");
       node.className = "message assistant";
       node.innerHTML = `
-        <div style="background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); padding: 20px; margin-top: 16px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <strong style="color: var(--ink-strong); font-size: 16px;">${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
-            <span style="font-size: 12px; color: var(--muted); text-transform: uppercase;">${escapeHtml((result.provider || "kemy") + " - " + (result.model || ""))}</span>
+        <div class="result-card">
+          <div class="result-card-head">
+            <strong>${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
+            <span class="result-meta">${escapeHtml((result.provider || "kemy") + " - " + (result.model || ""))}</span>
           </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
-            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn" style="text-decoration: none;">Download ${escapeHtml(file.name)}</a>`).join("")}
+          <div class="file-actions">
+            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn">Download ${escapeHtml(file.name)}</a>`).join("")}
           </div>
           ${fallbackText ? parseMarkdown(fallbackText) : ""}
         </div>
@@ -529,13 +549,13 @@ function appendResult(result, fallbackText) {
   const node = document.createElement("div");
   node.className = "message assistant";
   node.innerHTML = `
-    <div style="background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); padding: 20px; margin-top: 16px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <strong style="color: var(--ink-strong); font-size: 16px;">${escapeHtml(result.summary || "Imagem gerada")}</strong>
+    <div class="result-card">
+      <div class="result-card-head">
+        <strong>${escapeHtml(result.summary || "Imagem gerada")}</strong>
       </div>
-      <img src="${escapeHtml(imageSource)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem")}" style="max-width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--line); margin-bottom: 16px;" />
-      <div style="display: flex; gap: 8px;">
-        <a href="${escapeHtml(imageSource)}" target="_blank" rel="noreferrer" class="secondary-btn" style="text-decoration: none;">Abrir Original</a>
+      <img src="${escapeHtml(imageSource)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem")}" />
+      <div class="result-actions">
+        <a href="${escapeHtml(imageSource)}" target="_blank" rel="noreferrer" class="secondary-btn">Abrir original</a>
       </div>
       ${fallbackText ? parseMarkdown(fallbackText) : ""}
     </div>
@@ -676,9 +696,9 @@ function renderAttachments() {
     target.classList.remove("hidden");
     target.innerHTML = state.attachments
       .map((item, index) => `
-        <span class="attachment-chip" style="background: var(--surface-2); padding: 4px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; margin: 4px;">
-          ${escapeHtml(item.name)}
-          <button type="button" data-remove-attachment="${index}" aria-label="Remover anexo" style="background: none; border: none; cursor: pointer; color: var(--muted);">&times;</button>
+        <span class="attachment-chip">
+          <span>${escapeHtml(item.name)}</span>
+          <button type="button" data-remove-attachment="${index}" aria-label="Remover anexo">&times;</button>
         </span>
       `)
       .join("");
@@ -698,26 +718,27 @@ function clearAttachments() {
   renderAttachments();
 }
 
-$("authForm").addEventListener("submit", submitAuth);
-$("authModeBtn").addEventListener("click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
-$("themeToggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
-$("logoutBtn").addEventListener("click", () => logout().catch(console.error));
-$("newSessionBtn").addEventListener("click", () => newSession({ openChat: true }).catch(console.error));
-$("backHomeBtn").addEventListener("click", showHome);
-$("refreshSessionsBtn").addEventListener("click", () => loadSessions().catch(console.error));
-$("copyBtn").addEventListener("click", () => navigator.clipboard.writeText(state.lastOutput || ""));
-$("systemToggle").addEventListener("click", async () => {
+on("authForm", "submit", submitAuth);
+on("authModeBtn", "click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
+on("themeToggle", "click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
+on("logoutBtn", "click", () => logout().catch(console.error));
+on("newSessionBtn", "click", () => newSession({ openChat: true }).catch(console.error));
+on("backHomeBtn", "click", showHome);
+on("refreshSessionsBtn", "click", () => loadSessions().catch(console.error));
+on("copyBtn", "click", () => navigator.clipboard.writeText(state.lastOutput || ""));
+on("systemToggle", "click", async () => {
   await loadStatus().catch(console.error);
   await loadSessionInsights();
-  $("systemDialog").showModal();
+  const dialog = $("systemDialog");
+  if (dialog && !dialog.open) dialog.showModal();
 });
-$("systemClose").addEventListener("click", () => $("systemDialog").close());
-$("chatForm").addEventListener("submit", (event) => {
+on("systemClose", "click", () => $("systemDialog")?.close());
+on("chatForm", "submit", (event) => {
   event.preventDefault();
   runAgents($("prompt").value, "chat").catch(showRunError);
 });
-$("homeRunBtn").addEventListener("click", () => runAgents($("homePrompt").value, "home").catch(showRunError));
-$("openSessionsBtn").addEventListener("click", async () => {
+on("homeRunBtn", "click", () => runAgents($("homePrompt").value, "home").catch(showRunError));
+on("openSessionsBtn", "click", async () => {
   await loadSessions();
   if (state.sessions[0]?.session_id) {
     await openSession(state.sessions[0].session_id).catch(showRunError);
@@ -726,25 +747,25 @@ $("openSessionsBtn").addEventListener("click", async () => {
   appendMessage("assistant", "Nenhuma conversa encontrada no Storage. Digite algo para inicializar a memória.");
   showChat();
 });
-$("plusBtn").addEventListener("click", () => $("chatFileInput").click());
-$("homeAttachBtn").addEventListener("click", () => $("homeFileInput").click());
-$("voiceBtn").addEventListener("click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS (Speech-to-Text) precisa ser conectada ao WebSocket primeiro."));
-$("closePreviewBtn").addEventListener("click", hidePreview);
-$("homeFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
-$("chatFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
+on("plusBtn", "click", () => $("chatFileInput")?.click());
+on("homeAttachBtn", "click", () => $("homeFileInput")?.click());
+on("voiceBtn", "click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS precisa ser conectada ao WebSocket primeiro."));
+on("closePreviewBtn", "click", hidePreview);
+on("homeFileInput", "change", (event) => handleFileSelection(event.target.files));
+on("chatFileInput", "change", (event) => handleFileSelection(event.target.files));
 
 document.querySelectorAll("[data-home-prompt]").forEach((button) => {
   button.addEventListener("click", () => setPromptAndMaybeRun(button.dataset.homePrompt, false));
 });
 
-$("homePrompt").addEventListener("keydown", (event) => {
+on("homePrompt", "keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     runAgents($("homePrompt").value, "home").catch(showRunError);
   }
 });
 
-$("prompt").addEventListener("keydown", (event) => {
+on("prompt", "keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     runAgents($("prompt").value, "chat").catch(showRunError);
