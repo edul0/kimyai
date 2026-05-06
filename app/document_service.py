@@ -116,12 +116,8 @@ class DocumentService:
         folder.mkdir(parents=True, exist_ok=True)
 
         file_stem = self._filename_stem(user_request, title)
-        markdown_name = self._safe_filename(file_stem, ".md")
         pptx_name = self._safe_filename(file_stem, ".pptx")
-        pdf_name = self._safe_filename(file_stem, ".pdf")
-        markdown_path = folder / markdown_name
         pptx_path = folder / pptx_name
-        pdf_path = folder / pdf_name
 
         normalized_source = self._normalize_slide_source(source_text)
         if self._needs_slide_fallback(normalized_source, user_request):
@@ -131,11 +127,8 @@ class DocumentService:
             normalized_source = self._fallback_slide_deck_text(user_request, title)
             raw_slides = self._split_into_slides(normalized_source)
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
-        marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
-        markdown_path.write_text(marp_markdown, encoding="utf-8")
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
         pptx_provider = self._build_presentation_pptx(pptx_path, title, slides, folder)
-        pdf_provider = self._build_presentation_pdf_from_pptx(pptx_path, pdf_path, slides)
 
         files: list[dict[str, Any]] = []
         if pptx_path.exists():
@@ -147,47 +140,23 @@ class DocumentService:
                     "download_url": f"/api/artefatos/{job_id}/{pptx_name}",
                 }
             )
-        if pdf_path.exists():
-            files.append(
-                {
-                    "name": pdf_name,
-                    "path": str(pdf_path).replace("\\", "/"),
-                    "mime_type": "application/pdf",
-                    "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
-                }
-            )
-        files.append(
-            {
-                "name": markdown_name,
-                "path": str(markdown_path).replace("\\", "/"),
-                "mime_type": "text/markdown",
-                "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
-            }
-        )
 
         summary = "Apresentacao profissional gerada em PPTX."
         if slide_visuals:
             summary = "Apresentacao profissional gerada em PPTX com composicao visual e imagens IA."
-        if pdf_path.exists():
-            summary += " PDF entregue junto."
-        raw = (
-            f"Apresentacao gerada com sucesso: `{pptx_name}`"
-            + (f", `{pdf_name}`" if pdf_path.exists() else "")
-            + f" e `{markdown_name}`."
-            " Use o PPTX como arquivo principal de edicao e apresentacao."
-        )
+        raw = f"Apresentacao gerada com sucesso: `{pptx_name}`. Use o PPTX como arquivo principal de edicao, apresentacao e exportacao para PDF."
         if slide_visuals:
             raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
         return {
             "provider": draft.get("provider", "kimi-slides"),
-            "model": f"{draft.get('model', 'kimi-slides')} + {pptx_provider} + {pdf_provider}",
+            "model": f"{draft.get('model', 'kimi-slides')} + {pptx_provider}",
             "summary": summary,
             "raw": raw,
             "document_title": title,
             "files": files,
             "preview_url": "",
             "slide_deck": True,
-            "tools_used": ["python-pptx", pdf_provider, "markdown-deck", *(["pollinations-image"] if slide_visuals else [])],
+            "tools_used": ["python-pptx", *(["pollinations-image"] if slide_visuals else [])],
         }
 
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
@@ -932,17 +901,16 @@ class DocumentService:
         folder: Path,
     ) -> None:
         dark = slide.layout in {"lead", "closing"}
-        bg = self._pptx_color("#123657" if dark else "#f4f8fc")
-        band = self._pptx_color("#214f7a" if dark else "#e3edf6")
-        ink = self._pptx_color("#ffffff" if dark else "#0c2848")
-        muted = self._pptx_color("#d4e2f1" if dark else "#5d738d")
-        accent = self._pptx_color("#29a6b9")
+        bg = self._pptx_color("#102b47" if dark else "#f6f9fc")
+        band = self._pptx_color("#1c456e" if dark else "#edf3f8")
+        ink = self._pptx_color("#ffffff" if dark else "#15385e")
+        muted = self._pptx_color("#dbe7f2" if dark else "#6a8098")
+        accent = self._pptx_color("#23b7c8")
         panel = self._pptx_color("#ffffff")
 
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.95, 0, 4.383, 7.5, band)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 10.45, 0.65, 2.05, 2.05, accent, transparency=0.84)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 9.65, 4.65, 2.55, 2.55, panel, line="#ffffff", transparency=0.45)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.92, 0, 4.413, 7.5, band)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.58, 0.68, 0.72, 0.06, accent)
 
         kicker = slide.kicker or deck_title
         self._pptx_add_textbox(ppt_slide, 0.58, 0.38, 4.7, 0.3, kicker.upper()[:72], 10, color=muted, bold=True)
@@ -959,13 +927,13 @@ class DocumentService:
             align=PP_ALIGN.RIGHT,
         )
 
-        title_size = 28 if len(slide.title) <= 28 else 24 if len(slide.title) <= 42 else 20
-        title_height = 1.55 if title_size >= 24 else 1.8
-        content_width = 6.7 if slide.layout not in {"timeline", "compare"} else 8.0
+        title_size = 30 if slide.layout == "lead" else 26 if len(slide.title) <= 28 else 22 if len(slide.title) <= 42 else 19
+        title_height = 1.42 if title_size >= 26 else 1.75
+        content_width = 6.4 if slide.layout not in {"timeline", "compare"} else 7.9
         self._pptx_add_textbox(
             ppt_slide,
             0.58,
-            1.05,
+            1.0,
             content_width,
             title_height,
             slide.title,
@@ -974,12 +942,12 @@ class DocumentService:
             bold=True,
         )
 
-        current_top = 2.2 if slide.layout == "lead" else 2.05
+        current_top = 2.08 if slide.layout == "lead" else 1.98
         if slide.layout == "lead" and slide.body:
-            self._pptx_add_textbox(ppt_slide, 0.58, current_top, 5.7, 0.95, slide.body[0], 18, color=muted)
-            current_top += 0.92
-            self._pptx_add_chip(ppt_slide, 0.58, current_top, 2.75, 0.42, "Deck personalizado para leitura executiva", dark)
-            current_top += 0.7
+            self._pptx_add_textbox(ppt_slide, 0.58, current_top, 5.25, 0.72, slide.body[0], 18, color=muted)
+            current_top += 0.88
+            self._pptx_add_chip(ppt_slide, 0.58, current_top, 2.5, 0.4, "Leitura executiva", dark)
+            current_top += 0.62
 
         if slide.layout == "agenda":
             self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.0, 6.3, 4.55)
@@ -1001,62 +969,120 @@ class DocumentService:
     def _pptx_add_visual_panel(self, ppt_slide: Any, slide: Slide, folder: Path, dark: bool) -> None:
         image_added = False
         if slide.visual:
-            image_added = self._pptx_try_add_image(ppt_slide, slide.visual, folder, 8.95, 0.92, 4.0, 5.55)
+            image_added = self._pptx_try_add_image(ppt_slide, slide.visual, folder, 9.22, 0.95, 3.65, 5.2)
         if image_added:
             self._pptx_add_shape(
                 ppt_slide,
                 MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-                9.28,
-                6.0,
-                3.3,
-                0.52,
+                9.18,
+                0.88,
+                3.74,
+                5.34,
                 self._pptx_color("#ffffff"),
-                line="#ffffff",
-                transparency=0.72,
+                line="#d7e3ef",
+            )
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                9.35,
+                6.28,
+                3.35,
+                0.54,
+                self._pptx_color("#ffffff"),
+                line="#d7e3ef",
             )
             self._pptx_add_textbox(
                 ppt_slide,
-                9.5,
-                6.12,
-                2.9,
-                0.22,
-                "Visual editorial gerado para o tema",
-                10,
-                color=self._pptx_color("#113357"),
+                9.55,
+                6.42,
+                2.95,
+                0.2,
+                "Visual editorial",
+                9,
+                color=self._pptx_color("#5e7690"),
                 bold=True,
                 align=PP_ALIGN.CENTER,
             )
             return
 
-        orbit = self._pptx_add_shape(
+        self._pptx_add_shape(
             ppt_slide,
-            MSO_AUTO_SHAPE_TYPE.OVAL,
-            9.35,
-            1.85,
-            3.3,
-            3.3,
-            self._pptx_color("#2c6da2"),
-            line="#7fc0d7",
-            transparency=0.88,
+            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+            9.18,
+            0.88,
+            3.72,
+            5.92,
+            self._pptx_color("#ffffff" if dark else "#fbfdff"),
+            line="#d6e2ee",
         )
-        orbit.line.width = PptxPt(1.2)
-        labels = [self._split_card_item(item)[0] for item in (slide.bullets or slide.body or [])[:4]]
-        defaults = ["Visao", "Risco", "Custo", "Acao"]
-        while len(labels) < 4:
-            labels.append(defaults[len(labels)])
-        positions = [(10.55, 1.5), (11.95, 3.15), (10.55, 4.9), (9.15, 3.15)]
-        for label, (x_pos, y_pos) in zip(labels[:4], positions, strict=False):
-            self._pptx_add_chip(ppt_slide, x_pos, y_pos, 1.25, 0.42, label[:24], dark)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 10.36, 2.82, 1.22, 1.22, self._pptx_color("#ffffff"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.48, 1.18, 0.72, 0.06, self._pptx_color("#23b7c8"))
         self._pptx_add_textbox(
             ppt_slide,
-            10.5,
-            3.08,
+            9.48,
+            1.35,
+            2.6,
+            0.22,
+            "EM FOCO",
+            9,
+            color=self._pptx_color("#6a8098"),
+            bold=True,
+        )
+        hero_line = self._pptx_visual_heading(slide)
+        self._pptx_add_textbox(
+            ppt_slide,
+            9.48,
+            1.68,
+            2.9,
             0.95,
-            0.55,
-            self._truncate_words(slide.title, 4),
-            12,
+            hero_line,
+            18,
             color=self._pptx_color("#15385e"),
+            bold=True,
+        )
+        insights = self._pptx_visual_points(slide)
+        block_top = 2.72
+        for index, insight in enumerate(insights[:3]):
+            y_pos = block_top + index * 1.0
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                9.46,
+                y_pos,
+                3.0,
+                0.76,
+                self._pptx_color("#f4f8fc"),
+                line="#d9e4ef",
+            )
+            self._pptx_add_textbox(
+                ppt_slide,
+                9.66,
+                y_pos + 0.15,
+                2.64,
+                0.42,
+                insight,
+                11,
+                color=self._pptx_color("#26486b"),
+                bold=True,
+            )
+        self._pptx_add_shape(
+            ppt_slide,
+            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+            9.46,
+            5.88,
+            2.2,
+            0.44,
+            self._pptx_color("#15385e"),
+            line="#15385e",
+        )
+        self._pptx_add_textbox(
+            ppt_slide,
+            9.68,
+            6.0,
+            1.78,
+            0.18,
+            slide.kicker[:30],
+            9,
+            color=self._pptx_color("#ffffff"),
             bold=True,
             align=PP_ALIGN.CENTER,
         )
@@ -1217,9 +1243,9 @@ class DocumentService:
         if not items:
             return
         for index, item in enumerate(items[:4]):
-            y_pos = top + index * 0.78
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, left, y_pos + 0.09, 0.12, 0.12, accent)
-            self._pptx_add_textbox(ppt_slide, left + 0.24, y_pos, width - 0.24, min(height, 0.58), item, 16, color=ink)
+            y_pos = top + index * 0.84
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, left, y_pos + 0.1, 0.1, 0.1, accent)
+            self._pptx_add_textbox(ppt_slide, left + 0.28, y_pos, width - 0.28, min(height, 0.62), item, 15, color=ink)
 
     def _pptx_add_chip(self, ppt_slide: Any, left: float, top: float, width: float, height: float, text: str, dark: bool) -> None:
         fill = "#34597d" if dark else "#e6eef6"
@@ -1304,6 +1330,29 @@ class DocumentService:
     def _truncate_words(self, text: str, count: int) -> str:
         words = self._clean_inline_markdown(text).split()
         return "\n".join(words[:count]) if words else "Tema"
+
+    def _pptx_visual_heading(self, slide: Slide) -> str:
+        for source in [slide.body or [], slide.bullets or []]:
+            for item in source:
+                text = self._clean_inline_markdown(item).strip()
+                if text:
+                    return self._truncate_words(text, 6)
+        return self._truncate_words(slide.title, 6)
+
+    def _pptx_visual_points(self, slide: Slide) -> list[str]:
+        points: list[str] = []
+        source = slide.bullets or slide.body or []
+        for item in source:
+            label, detail = self._split_card_item(item)
+            candidate = detail if detail and detail != "Ponto principal do slide" else label
+            candidate = self._clean_inline_markdown(candidate).strip()
+            if candidate:
+                points.append(self._truncate_words(candidate, 7).replace("\n", " "))
+        if not points:
+            points.append(self._truncate_words(slide.title, 7).replace("\n", " "))
+        while len(points) < 3:
+            points.append("Direcao clara para decisao executiva")
+        return points[:3]
 
     def _humanize_slide_title(self, raw_title: str, index: int, deck_title: str) -> str:
         cleaned = self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", raw_title or "")).strip()
