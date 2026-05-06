@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     cerebras_api_key: str | None = Field(default=None, alias="CEREBRAS_API_KEY")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "CHATGPT_API_KEY"))
+    openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
     serper_api_key: str | None = Field(default=None, alias="SERPER_API_KEY")
     e2b_api_key: str | None = Field(default=None, alias="E2B_API_KEY")
@@ -64,6 +66,7 @@ class Settings(BaseSettings):
             "groq": bool(self.groq_api_key),
             "cerebras": bool(self.cerebras_api_key),
             "openrouter": bool(self.openrouter_api_key),
+            "openai": bool(self.openai_api_key),
         }
 
     @property

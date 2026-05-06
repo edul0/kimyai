@@ -867,7 +867,7 @@ class DocumentService:
                     bullets=bullets,
                     rows=rows,
                     layout=layout,
-                    visual=slide_visuals.get(index),
+                    visual=slide_visuals.get(index) or self._slide_visual_fallback_url(deck_title, raw_slide, index, total),
                 )
             )
         return slides
@@ -897,6 +897,14 @@ class DocumentService:
         }
         return mapping.get(layout, f"Slide {index + 1}")
 
+    def _slide_visual_fallback_url(self, deck_title: str, raw_slide: str, index: int, total: int) -> str | None:
+        if index not in {0, 2, 4}:
+            return None
+        prompt = self._slide_image_prompt(deck_title, deck_title, raw_slide, index, total)
+        prompt = f"{prompt} dark mode, neon blue accents, professional, minimalist, editorial presentation"
+        encoded = quote(prompt, safe="")
+        return f"https://pollinations.ai/p/{encoded}?width=1280&height=720&nologo=true"
+
     def _build_presentation_html(self, deck_title: str, slides: list[Slide], user_request: str = "") -> str:
         theme_css = self._deck_theme_css(user_request, deck_title)
         slide_markup = "\n".join(self._render_slide_html(slide, index, len(slides)) for index, slide in enumerate(slides))
@@ -919,8 +927,8 @@ class DocumentService:
       --accent-2: #27a6b8;
       --shadow: 0 28px 60px rgba(14, 31, 53, 0.12);
       --radius: 28px;
-      --slide-w: 1600px;
-      --slide-h: 900px;
+      --slide-w: 1280px;
+      --slide-h: 720px;
     }}
     {theme_css}
     @page {{
@@ -944,24 +952,33 @@ class DocumentService:
       padding: 24px;
     }}
     .deck {{
-      width: min(100%, calc(var(--slide-w) * 1px));
+      width: min(100%, var(--slide-w));
       display: grid;
       gap: 26px;
     }}
     body.pdf-export {{
-      width: 1600px;
+      width: 1280px;
       min-height: auto;
       display: block;
       padding: 0;
       background: #fff;
     }}
     body.pdf-export .deck {{
-      width: 1600px;
+      width: 1280px;
       gap: 0;
     }}
+    .slide-container {{
+      width: var(--slide-w);
+      max-width: 100%;
+      break-inside: avoid;
+      page-break-after: always;
+    }}
+    .slide-container:last-child {{
+      page-break-after: auto;
+    }}
     body.pdf-export .slide {{
-      width: 1600px;
-      height: 900px;
+      width: 1280px;
+      height: 720px;
       aspect-ratio: auto;
       border-radius: 0;
       box-shadow: none;
@@ -977,8 +994,10 @@ class DocumentService:
     }}
     .slide {{
       position: relative;
-      width: 100%;
-      aspect-ratio: 16 / 9;
+      width: var(--slide-w);
+      max-width: 100%;
+      min-height: var(--slide-h);
+      height: var(--slide-h);
       overflow: hidden;
       border-radius: 30px;
       background:
@@ -986,21 +1005,16 @@ class DocumentService:
         linear-gradient(180deg, #f7fbff 0%, #eef4fa 100%);
       box-shadow: 0 42px 90px rgba(8, 19, 36, 0.28);
       display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
-      page-break-after: always;
-      break-after: page;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr);
       isolation: isolate;
     }}
-    .slide:last-child {{
-      page-break-after: auto;
-      break-after: auto;
-    }}
     .slide-content {{
+      padding: 48px 56px 48px;
       padding: 48px 56px 48px;
       display: flex;
       flex-direction: column;
       min-width: 0;
-      gap: 22px;
+      gap: 16px;
       z-index: 2;
     }}
     .slide-meta {{
@@ -1015,7 +1029,7 @@ class DocumentService:
     .slide-kicker {{
       text-transform: uppercase;
       letter-spacing: .12em;
-      font-size: 12px;
+      font-size: 11px;
       color: var(--accent);
       font-weight: 800;
     }}
@@ -1028,14 +1042,16 @@ class DocumentService:
       line-height: 1.02;
       letter-spacing: 0;
       color: #0c2848;
-      max-width: 12ch;
+      max-width: 11ch;
+      text-wrap: balance;
     }}
     .slide-subtitle {{
       margin: 0;
       font-size: 20px;
       line-height: 1.45;
       color: #41556f;
-      max-width: 30ch;
+      max-width: 27ch;
+      text-wrap: balance;
     }}
     .slide-visual {{
       position: relative;
@@ -1125,7 +1141,7 @@ class DocumentService:
     .content-stack {{
       display: flex;
       flex-direction: column;
-      gap: 18px;
+      gap: 14px;
       min-width: 0;
     }}
     .bullet-list {{
@@ -1133,7 +1149,7 @@ class DocumentService:
       margin: 0;
       padding: 0;
       display: grid;
-      gap: 14px;
+      gap: 12px;
     }}
     .bullet-list li {{
       display: grid;
@@ -1156,7 +1172,7 @@ class DocumentService:
     .agenda-grid, .metrics-grid, .highlights-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 20px;
+      gap: 16px;
     }}
     .agenda-card, .metric-card, .highlight-card {{
       background: var(--panel);
@@ -1188,6 +1204,7 @@ class DocumentService:
       line-height: 1.22;
       color: #10233d;
       font-weight: 700;
+      text-wrap: balance;
     }}
     .metric-value {{
       display: block;
@@ -1295,14 +1312,14 @@ class DocumentService:
       border-bottom: 0;
     }}
     .lead {{
-      grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr);
+      grid-template-columns: minmax(0, 1.02fr) minmax(320px, .98fr);
       background:
         radial-gradient(circle at top left, rgba(36, 172, 196, 0.24), transparent 26%),
         linear-gradient(135deg, #0e1f33 0%, #163658 52%, #215b83 100%);
     }}
     .lead .slide-content {{
-      padding-top: 76px;
-      padding-bottom: 76px;
+      padding-top: 58px;
+      padding-bottom: 58px;
       justify-content: center;
     }}
     .lead .slide-kicker,
@@ -1310,14 +1327,17 @@ class DocumentService:
     .lead .slide-subtitle {{
       color: rgba(255,255,255,0.8);
     }}
+    .lead .slide-page {{
+      color: rgba(255,255,255,0.9);
+    }}
     .lead .slide-title {{
       color: #fff;
-      font-size: 64px;
-      max-width: 11ch;
+      font-size: 58px;
+      max-width: 8.8ch;
     }}
     .lead .slide-subtitle {{
-      font-size: 25px;
-      max-width: 24ch;
+      font-size: 22px;
+      max-width: 22ch;
     }}
     .lead .bullet-list li {{
       color: rgba(255,255,255,0.78);
@@ -1337,6 +1357,15 @@ class DocumentService:
       font-size: 15px;
       width: fit-content;
       backdrop-filter: blur(12px);
+    }}
+    .lead .bullet-list li {{
+      color: rgba(255,255,255,0.95);
+      font-size: 18px;
+      line-height: 1.3;
+    }}
+    .lead .bullet-list li::before {{
+      background: linear-gradient(135deg, #68ecff, #d8faff);
+      box-shadow: 0 0 0 8px rgba(255,255,255,0.08);
     }}
     .closing {{
       background:
@@ -1367,7 +1396,7 @@ class DocumentService:
     }}
     .content.no-visual .slide-content,
     .closing.no-visual .slide-content {{
-      max-width: 1120px;
+      max-width: 940px;
     }}
     .slide.no-visual .slide-visual {{
       display: none;
@@ -1420,7 +1449,11 @@ class DocumentService:
       .deck {{
         gap: 12px;
       }}
+      .slide-container,
       .slide {{
+        width: 100%;
+        min-height: auto;
+        height: auto;
         border-radius: 18px;
       }}
       .slide-content {{
@@ -1440,6 +1473,35 @@ class DocumentService:
       @page {{
         size: 13.333in 7.5in;
         margin: 0;
+      }}
+      * {{
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }}
+      html,
+      body {{
+        background: #fff;
+        padding: 0;
+        margin: 0;
+      }}
+      .deck {{
+        width: 100%;
+        gap: 0;
+      }}
+      .slide-container {{
+        width: 1280px !important;
+        height: 720px !important;
+        overflow: hidden;
+        page-break-after: always;
+        break-after: page;
+        break-inside: avoid;
+      }}
+      .slide {{
+        width: 1280px !important;
+        height: 720px !important;
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
       }}
       .deck-nav {{
         display: none !important;
@@ -1488,22 +1550,25 @@ class DocumentService:
         subtitle = self._escape_html(slide.body[0]) if slide.layout == "lead" and slide.body else ""
         lead_chip = '<div class="lead-chip">Deck personalizado para leitura executiva</div>' if slide.layout == "lead" else ""
         return (
-            f'<section class="slide {" ".join(classes)}" id="slide-{index + 1}">'
+            f'<article class="slide-container"><section class="slide {" ".join(classes)}" id="slide-{index + 1}">'
             '<div class="slide-content">'
-            f'<div class="slide-meta"><span class="slide-kicker">{kicker}</span><span class="slide-page">{index + 1} / {total}</span></div>'
-            f'<h1 class="slide-title">{title}</h1>'
-            + (f'<p class="slide-subtitle">{subtitle}</p>' if subtitle else "")
+            f'<div class="slide-meta"><span class="slide-kicker" contenteditable="true">{kicker}</span><span class="slide-page">{index + 1} / {total}</span></div>'
+            f'<h1 class="slide-title" contenteditable="true">{title}</h1>'
+            + (f'<p class="slide-subtitle" contenteditable="true">{subtitle}</p>' if subtitle else "")
             + lead_chip
             + f'<div class="content-stack">{content}</div>'
             + '</div>'
             + visual_html
-            + '</section>'
+            + '</section></article>'
         )
 
     def _render_visual_html(self, slide: Slide) -> str:
         if not slide.visual:
             return self._render_generated_visual_html(slide)
-        visual = quote(slide.visual.replace("\\", "/"), safe="/:.-_")
+        if slide.visual.startswith(("http://", "https://", "data:")):
+            visual = self._escape_html(slide.visual)
+        else:
+            visual = quote(slide.visual.replace("\\", "/"), safe="/:.-_")
         return f'<aside class="slide-visual"><img src="{visual}" alt="{self._escape_html(slide.title)}" /></aside>'
 
     def _render_generated_visual_html(self, slide: Slide) -> str:
@@ -1528,8 +1593,8 @@ class DocumentService:
                 label, detail = self._split_agenda_item(item)
                 cards.append(
                     '<article class="agenda-card">'
-                    f'<strong>{self._escape_html(label)}</strong>'
-                    f'<span>{self._escape_html(detail)}</span>'
+                    f'<strong contenteditable="true">{self._escape_html(label)}</strong>'
+                    f'<span contenteditable="true">{self._escape_html(detail)}</span>'
                     '</article>'
                 )
             return f'<div class="agenda-grid">{"".join(cards)}</div>'
@@ -1539,16 +1604,16 @@ class DocumentService:
                 label, value, detail = self._parse_metric_bullet(f"- {bullet}")
                 cards.append(
                     '<article class="metric-card">'
-                    f'<span class="metric-label">{self._escape_html(label)}</span>'
-                    f'<span class="metric-value">{self._escape_html(value)}</span>'
-                    f'<span class="metric-text">{self._escape_html(detail)}</span>'
+                    f'<span class="metric-label" contenteditable="true">{self._escape_html(label)}</span>'
+                    f'<span class="metric-value" contenteditable="true">{self._escape_html(value)}</span>'
+                    f'<span class="metric-text" contenteditable="true">{self._escape_html(detail)}</span>'
                     '</article>'
                 )
             return f'<div class="metrics-grid">{"".join(cards)}</div>'
         if slide.layout == "timeline":
             steps = []
             for idx, bullet in enumerate((slide.bullets or [])[:5], start=1):
-                steps.append(f'<div class="timeline-step" data-step="{idx}">{self._escape_html(bullet)}</div>')
+                steps.append(f'<div class="timeline-step" data-step="{idx}" contenteditable="true">{self._escape_html(bullet)}</div>')
             return f'<div class="timeline">{"".join(steps)}</div>'
         if slide.layout == "highlights":
             cards = []
@@ -1566,14 +1631,14 @@ class DocumentService:
             return self._render_custom_table(slide.rows)
         items = slide.bullets or slide.body or []
         if items:
-            bullets = "".join(f"<li><span>{self._format_inline_html(item)}</span></li>" for item in items)
+            bullets = "".join(f'<li contenteditable="true"><span>{self._format_inline_html(item)}</span></li>' for item in items)
             return f'<ul class="bullet-list">{bullets}</ul>'
-        return f'<p class="slide-subtitle">{self._escape_html(slide.kicker)}</p>'
+        return f'<p class="slide-subtitle" contenteditable="true">{self._escape_html(slide.kicker)}</p>'
 
     def _render_custom_table(self, rows: list[list[str]]) -> str:
-        header = "".join(f"<th>{self._escape_html(cell)}</th>" for cell in rows[0])
+        header = "".join(f'<th contenteditable="true">{self._escape_html(cell)}</th>' for cell in rows[0])
         body = "".join(
-            "<tr>" + "".join(f"<td>{self._format_inline_html(cell)}</td>" for cell in row) + "</tr>"
+            "<tr>" + "".join(f'<td contenteditable="true">{self._format_inline_html(cell)}</td>' for cell in row) + "</tr>"
             for row in rows[1:]
         )
         return f'<table class="compare-table"><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>'
@@ -1717,13 +1782,13 @@ class DocumentService:
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1.5)
+                page = browser.new_page(viewport={"width": 1280, "height": 720}, device_scale_factor=1.5)
                 page.set_content(html_text, wait_until="networkidle")
-                page.emulate_media(media="screen")
+                page.emulate_media(media="print")
                 page.pdf(
                     path=str(pdf_path),
-                    width="1600px",
-                    height="900px",
+                    width="1280px",
+                    height="720px",
                     print_background=True,
                     margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
                 )

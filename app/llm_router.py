@@ -18,17 +18,18 @@ class LLMRouter:
     """Chooses free-tier providers and keeps paid fallbacks opt-in."""
 
     ROUTES = {
-        "coding": ["groq", "gemini", "cerebras", "openrouter"],
-        "site": ["gemini", "groq", "cerebras", "openrouter"],
-        "auditoria": ["cerebras", "groq", "gemini", "openrouter"],
-        "planejamento": ["gemini", "groq", "cerebras", "openrouter"],
-        "documento": ["gemini", "groq", "cerebras", "openrouter"],
+        "coding": ["groq", "gemini", "cerebras", "openrouter", "openai"],
+        "site": ["gemini", "groq", "cerebras", "openrouter", "openai"],
+        "auditoria": ["cerebras", "groq", "gemini", "openrouter", "openai"],
+        "planejamento": ["gemini", "groq", "cerebras", "openrouter", "openai"],
+        "documento": ["gemini", "groq", "cerebras", "openrouter", "openai"],
     }
 
     MODELS = {
         "groq": "openai/gpt-oss-120b",
         "cerebras": "llama3.1-70b",
         "openrouter": "openrouter/free",
+        "openai": "gpt-4.1-mini",
     }
 
     def __init__(self, settings: Settings):
@@ -54,7 +55,11 @@ class LLMRouter:
     def route_for(self, mode: str = "coding", has_visual: bool = False) -> list[str]:
         configured = self.settings.configured_providers
         route = self.ROUTES.get(mode, self.ROUTES["coding"])
-        available = [provider for provider in route if configured.get(provider)]
+        available = [
+            provider
+            for provider in route
+            if configured.get(provider) and (provider != "openai" or not self.settings.free_only)
+        ]
         if has_visual and "gemini" in available:
             return ["gemini"] + [provider for provider in available if provider != "gemini"]
         return available
@@ -64,6 +69,8 @@ class LLMRouter:
             return self.settings.default_model.replace("groq/", "", 1)
         if provider == "gemini":
             return self.gemini_state["active_model"]
+        if provider == "openai":
+            return self.settings.openai_model
         return self.MODELS[provider]
 
     def reason_for(self, provider: str, mode: str) -> str:
@@ -72,6 +79,7 @@ class LLMRouter:
             "gemini": "melhor rota gratuita para contexto longo, planejamento e leitura visual",
             "cerebras": "melhor rota gratuita para revisao e auditoria rapida",
             "openrouter": "fallback pago/externo habilitado explicitamente",
+            "openai": "rota oficial da OpenAI habilitada explicitamente fora do modo gratuito",
         }
         return f"{reasons[provider]} em modo {mode}"
 
@@ -100,6 +108,8 @@ class LLMRouter:
                     result = await self._cerebras(prompt, current, mode)
                 elif provider == "openrouter":
                     result = await self._openrouter(prompt, current, mode)
+                elif provider == "openai":
+                    result = await self._openai(prompt, current, mode)
                 else:
                     continue
                 result = self._apply_provider_notice(result, provider)
@@ -364,6 +374,24 @@ class LLMRouter:
             content = response.json()["choices"][0]["message"]["content"]
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
 
+    async def _openai(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {self.settings.openai_api_key}"}
+        payload = {
+            "model": choice.model,
+            "messages": [
+                {"role": "system", "content": self._system_prompt("openai", mode)},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.1,
+        }
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+        return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
+
     def _system_prompt(self, provider: str, mode: str) -> str:
         base = (
             "Voce e um engenheiro senior de produto e coding. Responda em Markdown, nunca em JSON cru. "
@@ -386,6 +414,8 @@ class LLMRouter:
                 "escreva bullets com lideres fortes como `**Ponto**` seguido da explicacao; para metricas, prefira linhas curtas no formato `**Metrica** - valor ou insight`; para comparacoes, prefira tabela curta; para processos, prefira 3 a 5 etapas nominais; "
                 "pense visualmente: cada slide deve sugerir uma cena, simbolo ou imagem editorial clara, mesmo sem explicitar instrucoes tecnicas no texto final; "
                 "prefira linguagem concreta, cinematica e especifica, para que um gerador de imagem consiga criar artes coerentes com a narrativa do deck; "
+                "quando devolver HTML de apresentacao, inclua CSS de impressao com `@media print`, `@page { size: 1280px 720px; margin: 0; }`, `print-color-adjust: exact !important` e wrappers que evitem quebra de slide; "
+                "quando devolver HTML de apresentacao, aplique `contenteditable=\"true\"` em titulos, paragrafos e itens editaveis; "
                 "evite blocos longos de texto, definicoes genericas, enchimento e repeticao; escreva como apresentacao pronta para cliente, diretoria ou pitch, nao como rascunho cru. "
                 "Nao escreva notas do apresentador, nao explique a estrutura, nao fale sobre Gamma/Canva no conteudo final, nao use emojis, e nao repita o mesmo tipo de slide varias vezes seguidas. "
                 "Entregue conteudo pensado para um renderizador que aplica layouts profissionais automaticamente a capa, agenda, metricas, comparacao, timeline e fechamento. "
