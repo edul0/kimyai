@@ -669,7 +669,13 @@ function readAttachment(file) {
     };
     reader.onerror = () => resolve(null);
     const mimeType = file.type || inferMimeType(file.name);
-    if (mimeType.startsWith("image/") || mimeType === "application/pdf" || mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || mimeType === "application/msword") {
+    if (
+      mimeType.startsWith("image/") ||
+      mimeType === "application/pdf" ||
+      mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+      mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      mimeType === "application/msword"
+    ) {
       reader.readAsDataURL(file);
       return;
     }
@@ -680,6 +686,7 @@ function readAttachment(file) {
 function inferMimeType(filename) {
   const lower = String(filename || "").toLowerCase();
   if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   if (lower.endsWith(".doc")) return "application/msword";
   return "text/plain";

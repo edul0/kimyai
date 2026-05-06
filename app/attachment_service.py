@@ -3,10 +3,14 @@ from __future__ import annotations
 import base64
 import io
 import re
+import zipfile
+from collections import Counter
+from xml.etree import ElementTree as ET
 from typing import Any
 
 from docx import Document
 from pypdf import PdfReader
+from pptx import Presentation
 
 
 def _compact_text(value: str, limit: int = 12000) -> str:
@@ -47,6 +51,170 @@ def _extract_docx_text(data: bytes) -> str:
     return _compact_text("\n".join(parts), 18000)
 
 
+def _safe_xml_text(root: ET.Element | None, path: str, namespace: dict[str, str]) -> str:
+    if root is None:
+        return ""
+    node = root.find(path, namespace)
+    return (node.text or "").strip() if node is not None and node.text else ""
+
+
+def _safe_xml_attr(root: ET.Element | None, path: str, attr: str, namespace: dict[str, str]) -> str:
+    if root is None:
+        return ""
+    node = root.find(path, namespace)
+    return (node.attrib.get(attr, "") or "").strip() if node is not None else ""
+
+
+def _extract_pptx_theme(data: bytes) -> dict[str, str]:
+    ns = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    }
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            theme_name = ""
+            heading_font = ""
+            body_font = ""
+            accent_colors: list[str] = []
+
+            if "ppt/theme/theme1.xml" in archive.namelist():
+                root = ET.fromstring(archive.read("ppt/theme/theme1.xml"))
+                theme_name = root.attrib.get("name", "").strip()
+                heading_font = _safe_xml_attr(root, ".//a:themeElements/a:fontScheme/a:majorFont/a:latin", "typeface", ns)
+                body_font = _safe_xml_attr(root, ".//a:themeElements/a:fontScheme/a:minorFont/a:latin", "typeface", ns)
+                for tag in ("accent1", "accent2", "accent3", "accent4", "accent5", "accent6"):
+                    node = root.find(f".//a:themeElements/a:clrScheme/a:{tag}", ns)
+                    if node is None:
+                        continue
+                    srgb = node.find("./a:srgbClr", ns)
+                    if srgb is not None:
+                        value = srgb.attrib.get("val", "").strip()
+                        if value:
+                            accent_colors.append(f"#{value}")
+            return {
+                "theme_name": theme_name,
+                "heading_font": heading_font,
+                "body_font": body_font,
+                "accent_colors": ", ".join(accent_colors[:4]),
+            }
+    except Exception:
+        return {"theme_name": "", "heading_font": "", "body_font": "", "accent_colors": ""}
+
+
+def _extract_pptx_thumbnail(data: bytes) -> tuple[str | None, bytes | None]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = archive.namelist()
+            for candidate in ("docProps/thumbnail.jpeg", "docProps/thumbnail.jpg", "docProps/thumbnail.png"):
+                if candidate in names:
+                    mime = "image/jpeg" if candidate.endswith((".jpeg", ".jpg")) else "image/png"
+                    return mime, archive.read(candidate)
+    except Exception:
+        pass
+    return None, None
+
+
+def _extract_pptx_text(data: bytes) -> tuple[str, dict[str, Any]]:
+    prs = Presentation(io.BytesIO(data))
+    layout_counter: Counter[str] = Counter()
+    slide_sections: list[str] = []
+    image_count = 0
+    table_count = 0
+
+    for index, slide in enumerate(list(prs.slides)[:20], start=1):
+        title_text = ""
+        try:
+            if slide.shapes.title and slide.shapes.title.text:
+                title_text = " ".join(slide.shapes.title.text.split())
+        except Exception:
+            title_text = ""
+
+        text_parts: list[str] = []
+        slide_image_count = 0
+        slide_table_count = 0
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False):
+                text = " ".join((shape.text or "").split())
+                if text:
+                    text_parts.append(text)
+            if getattr(shape, "shape_type", None) == 13:
+                slide_image_count += 1
+            if getattr(shape, "has_table", False):
+                slide_table_count += 1
+
+        image_count += slide_image_count
+        table_count += slide_table_count
+        layout_name = ""
+        try:
+            layout_name = (slide.slide_layout.name or "").strip()
+        except Exception:
+            layout_name = ""
+        if layout_name:
+            layout_counter[layout_name] += 1
+
+        unique_text: list[str] = []
+        seen: set[str] = set()
+        for chunk in text_parts:
+            if chunk not in seen:
+                unique_text.append(chunk)
+                seen.add(chunk)
+        body_excerpt = " | ".join(unique_text[:4])
+        label = title_text or f"Slide {index}"
+        section = f"Slide {index}: {label}"
+        if layout_name:
+            section += f" [layout: {layout_name}]"
+        if body_excerpt:
+            section += f"\n{body_excerpt}"
+        if slide_image_count or slide_table_count:
+            markers: list[str] = []
+            if slide_image_count:
+                markers.append(f"{slide_image_count} imagem(ns)")
+            if slide_table_count:
+                markers.append(f"{slide_table_count} tabela(s)")
+            section += f"\nElementos: {', '.join(markers)}"
+        slide_sections.append(section)
+
+    width = prs.slide_width
+    height = prs.slide_height
+    ratio = round(width / height, 3) if width and height else 0
+    if 1.7 <= ratio <= 1.8:
+        aspect = "16:9"
+    elif 1.2 <= ratio <= 1.4:
+        aspect = "4:3"
+    else:
+        aspect = f"{ratio}:1" if ratio else "desconhecido"
+
+    theme = _extract_pptx_theme(data)
+    layouts = ", ".join(f"{name} ({count})" for name, count in layout_counter.most_common(4))
+    header_parts = [
+        f"Apresentacao com {len(prs.slides)} slide(s).",
+        f"Formato: {aspect}.",
+    ]
+    if layouts:
+        header_parts.append(f"Layouts mais usados: {layouts}.")
+    if theme.get("theme_name"):
+        header_parts.append(f"Tema: {theme['theme_name']}.")
+    if theme.get("heading_font") or theme.get("body_font"):
+        header_parts.append(
+            "Fontes do tema: "
+            f"titulo={theme.get('heading_font') or 'n/d'}, corpo={theme.get('body_font') or 'n/d'}."
+        )
+    if theme.get("accent_colors"):
+        header_parts.append(f"Cores de destaque: {theme['accent_colors']}.")
+    if image_count or table_count:
+        header_parts.append(f"Total de imagens: {image_count}. Total de tabelas: {table_count}.")
+
+    text = "\n".join([" ".join(header_parts), *slide_sections])
+    metadata = {
+        "slides": len(prs.slides),
+        "aspect_ratio": aspect,
+        "layouts": dict(layout_counter),
+        "images": image_count,
+        "tables": table_count,
+        **theme,
+    }
+    return _compact_text(text, 18000), metadata
+
+
 def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, Any]:
     prepared: list[dict[str, Any]] = []
     prompt_sections: list[str] = []
@@ -57,6 +225,7 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
         declared_mime = str(item.get("mime_type") or "text/plain").strip().lower()
         kind = str(item.get("kind") or "text").strip().lower()
         content = str(item.get("content") or "")
+        pptx_meta: dict[str, Any] = {}
 
         resolved_mime, binary = _decode_data_url(content)
         mime_type = resolved_mime or declared_mime
@@ -66,6 +235,9 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
         if mime_type == "application/pdf" and binary:
             extracted_text = _extract_pdf_text(binary)
             notes.append("pdf")
+        elif mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation" and binary:
+            extracted_text, pptx_meta = _extract_pptx_text(binary)
+            notes.extend(["pptx", "presentation"])
         elif mime_type in {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/msword",
@@ -88,6 +260,18 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
         elif binary:
             notes.append("binary")
 
+        if mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation" and binary:
+            thumb_mime, thumb_bytes = _extract_pptx_thumbnail(binary)
+            if thumb_bytes and thumb_mime:
+                visual_items.append(
+                    {
+                        "name": f"{name}::thumbnail",
+                        "mime_type": thumb_mime,
+                        "data": thumb_bytes,
+                        "kind": "image",
+                    }
+                )
+
         if mime_type == "application/pdf" and binary:
             visual_items.append(
                 {
@@ -105,11 +289,18 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
             "bytes": binary,
             "text": extracted_text,
             "notes": notes,
-            "visual": bool(visual_items and visual_items[-1]["name"] == name),
+            "metadata": pptx_meta,
+            "visual": any(visual.get("name", "").startswith(name) for visual in visual_items),
         }
         prepared.append(prepared_item)
 
-        if extracted_text:
+        if mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            prompt_sections.append(
+                f"## {name} ({mime_type})\n"
+                "PPTX anexado. Trate este arquivo como referencia de criacao: reaproveite narrativa, organizacao dos slides, tema, layouts, proporcao e estilo quando o usuario pedir continuidade, ajuste ou nova apresentacao baseada nele.\n"
+                f"Resumo estrutural da apresentacao:\n{_compact_text(extracted_text, 7000)}"
+            )
+        elif extracted_text:
             prompt_sections.append(
                 f"## {name} ({mime_type})\nTexto extraido do anexo:\n{_compact_text(extracted_text, 6000)}"
             )
