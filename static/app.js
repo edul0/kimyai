@@ -99,7 +99,7 @@ function setAuthMode(mode) {
   $("authSubtitle").textContent = register
     ? "Crie um acesso por email e senha para manter conversas, tarefas e contexto."
     : "Use email e senha para acessar suas conversas, tarefas e memoria do workspace.";
-  $("authSubmit").textContent = register ? "Criar conta" : "Entrar";
+  $("authSubmit").textContent = register ? "Criar conta" : "Entrar no Workspace";
   $("authModeBtn").textContent = register ? "Ja tenho conta" : "Criar conta";
 }
 
@@ -161,19 +161,11 @@ async function loadStatus() {
   $("apiPill").textContent = data.status === "online" ? "Online" : "Offline";
   const cache = data.cache || {};
   $("statusList").innerHTML = `
-    <div><dt>API</dt><dd>${data.status}</dd></div>
-    <div><dt>Storage</dt><dd>${data.storage}</dd></div>
-    <div><dt>Cache</dt><dd>${cache.type || data.storage} - ${cache.keys ?? 0} keys</dd></div>
-    <div><dt>Supabase</dt><dd>${data.supabase ? "ativo" : "off"}</dd></div>
-    <div><dt>LLM</dt><dd>${data.llm_mode}</dd></div>
+    <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">API</dt><dd style="font-weight: 600; margin-top: 4px;">${data.status}</dd></div>
+    <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">Storage</dt><dd style="font-weight: 600; margin-top: 4px;">${data.storage}</dd></div>
+    <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">Cache</dt><dd style="font-weight: 600; margin-top: 4px;">${cache.keys ?? 0} keys</dd></div>
+    <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">LLM Mode</dt><dd style="font-weight: 600; margin-top: 4px;">${data.llm_mode}</dd></div>
   `;
-  const providers = Object.entries(data.providers || {})
-    .map(([name, enabled]) => `<span>${name}: ${enabled ? "ativo" : "off"}</span>`)
-    .join("");
-  const tools = Object.entries(data.tools || {})
-    .map(([name, enabled]) => `<span>${name}: ${enabled ? "ativo" : "off"}</span>`)
-    .join("");
-  $("toolStatus").innerHTML = providers + tools;
 }
 
 async function loadSessionInsights() {
@@ -187,15 +179,11 @@ async function loadSessionInsights() {
     const context = await api(`/api/sessao/${state.sessionId}/contexto`).catch(() => null);
     const summary = context?.contexto_compacto?.summary || "";
     target.innerHTML = `
-      <div>
-        <strong>Sessao atual</strong>
-        <span>${data.total_jobs || 0} jobs - ${data.message_count || 0} mensagens - ${data.generated_files || 0} arquivos</span>
+      <div style="margin-top: 24px;">
+        <h3 style="font-size: 14px; margin-bottom: 8px;">Dados da Sessão</h3>
+        <p style="color: var(--muted); font-size: 13px;">${data.total_jobs || 0} jobs executados | ${data.message_count || 0} mensagens | ${data.generated_files || 0} arquivos</p>
       </div>
-      <div>
-        <strong>Confiabilidade</strong>
-        <span>${data.success_rate_pct || 0}% sucesso - ${data.failed_jobs || 0} falhas</span>
-      </div>
-      ${summary ? `<div><strong>Contexto aprendido</strong><span>${escapeHtml(summary)}</span></div>` : ""}
+      ${summary ? `<div style="margin-top: 16px;"><h3 style="font-size: 14px; margin-bottom: 8px;">Contexto Aprendido</h3><p style="color: var(--muted); font-size: 13px; line-height: 1.5;">${escapeHtml(summary)}</p></div>` : ""}
     `;
   } catch {
     target.innerHTML = "";
@@ -211,22 +199,20 @@ async function loadSessions() {
 function renderSessions() {
   if (!state.sessions.length) {
     $("sessionList").innerHTML = `
-      <div class="session-empty-state">
-        <span class="session-empty-kicker">Workspace vazio</span>
-        <strong>Nenhuma tarefa ainda</strong>
-        <p>Crie a primeira tarefa para começar a montar seu historico de trabalho.</p>
+      <div class="session-empty-state" style="padding: 16px; text-align: center; color: var(--muted); font-size: 13px; background: var(--surface-2); border-radius: var(--radius-md);">
+        <strong>Workspace vazio</strong>
+        <p style="margin-top: 8px;">Crie a primeira tarefa para começar.</p>
       </div>
     `;
     return;
   }
   $("sessionList").innerHTML = state.sessions
     .map((session) => `
-      <div class="saved-session ${session.session_id === state.sessionId ? "active" : ""}">
-        <button class="saved-session-main" data-session-id="${session.session_id}">
-          <strong>${escapeHtml(session.title || "Nova conversa")}</strong>
-          <small>${escapeHtml(session.preview || "Sem mensagens")}</small>
-        </button>
-        <button class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir conversa" title="Excluir conversa">×</button>
+      <div class="saved-session ${session.session_id === state.sessionId ? "active" : ""}" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="saved-session-main" data-session-id="${session.session_id}" style="overflow: hidden; flex: 1;">
+          <strong style="display: block; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">${escapeHtml(session.title || "Nova conversa")}</strong>
+        </div>
+        <button class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir" style="background: none; border: none; color: var(--danger); cursor: pointer; padding: 4px; opacity: 0.7;">×</button>
       </div>
     `)
     .join("");
@@ -250,7 +236,7 @@ async function newSession({ openChat = false } = {}) {
   $("sessionTitle").textContent = "Nova conversa";
   $("chatLog").innerHTML = "";
   hidePreview();
-  resetProgress(data.mensagem || "Nova conversa iniciada.");
+  resetProgress(data.mensagem || "Sistema inicializado. Aguardando instrução.");
   await loadSessions();
   if (openChat) showChat();
 }
@@ -303,7 +289,7 @@ async function openSession(sessionId, options = {}) {
   if (previewHtml) showPreview(previewHtml);
   else if (previewUrl) showPreviewUrl(previewUrl);
   else hidePreview();
-  resetProgress("Conversa carregada.");
+  resetProgress("Conversa carregada. Pronta para continuar.");
   renderSessions();
   if (!options.stayHome) showChat();
 }
@@ -321,16 +307,14 @@ async function deleteSession(sessionId) {
 }
 
 function resetProgress(message) {
-  $("jobBadge").textContent = "pronta";
-  $("progressBar").style.width = "0%";
-  $("timeline").innerHTML = `<li><span></span><p>${escapeHtml(message)}</p></li>`;
+  $("jobBadge").textContent = "Status: Aguardando";
+  $("timeline").innerHTML = `<li><p>${escapeHtml(message)}</p></li>`;
 }
 
 function renderJob(job) {
-  $("jobBadge").textContent = `${job.status} - ${job.progresso}%`;
-  $("progressBar").style.width = `${job.progresso}%`;
+  $("jobBadge").textContent = `Status: ${job.status} (${job.progresso}%)`;
   $("timeline").innerHTML = (job.eventos || [])
-    .map((event) => `<li><span></span><p><strong>${escapeHtml(event.agente)}</strong> ${escapeHtml(event.msg)}</p></li>`)
+    .map((event) => `<li><p><strong style="color: var(--ink-strong);">${escapeHtml(event.agente)}</strong>: ${escapeHtml(event.msg)}</p></li>`)
     .join("");
 
   if (job.resultado && job.status === "done" && !state.renderedJobs.has(job.job_id)) {
@@ -343,7 +327,7 @@ function renderJob(job) {
     else if (previewUrl) showPreviewUrl(previewUrl);
   }
   if (job.erro) {
-    appendMessage("assistant", `Erro: ${job.erro}`);
+    appendMessage("assistant", `**Erro na execução:** ${job.erro}`);
   }
 }
 
@@ -356,10 +340,10 @@ function formatResult(result) {
   }
   if (result.raw) return result.raw;
   if (result.summary && result.files?.length) {
-    return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n${file.content}`).join("\n\n")}`;
+    return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n")}`;
   }
   if (result.files?.length) {
-    return result.files.map((file) => `# ${file.path}\n\n${file.content}`).join("\n\n---\n\n");
+    return result.files.map((file) => `### ${file.path}\n\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n---\n\n");
   }
   return result.summary || "Concluido.";
 }
@@ -399,28 +383,7 @@ function resolveRequestedMode(text) {
   const selectedMode = $("mode").value;
   if (selectedMode !== "coding") return selectedMode;
   const lowered = String(text || "").toLowerCase();
-  const documentMarkers = [
-    ".docx",
-    ".pdf",
-    ".md",
-    "markdown",
-    "word",
-    "documento",
-    "relatorio",
-    "relatório",
-    "proposta",
-    "contrato",
-    "gerar pdf",
-    "gere pdf",
-    "gerar docx",
-    "gere docx",
-    "converter para pdf",
-    "converta para pdf",
-    "transformar em pdf",
-    "transforme em pdf",
-    "gerar arquivo",
-    "gere um arquivo",
-  ];
+  const documentMarkers = [".docx", ".pdf", ".md", "markdown", "documento", "gerar pdf"];
   if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
   return selectedMode;
 }
@@ -438,9 +401,8 @@ async function runAgents(prompt, source = "chat") {
   $("homePrompt").value = "";
   clearAttachments();
   $("sessionTitle").textContent = titleFromPrompt(text);
-  $("jobBadge").textContent = "enviando";
-  $("progressBar").style.width = "4%";
-  $("timeline").innerHTML = `<li><span></span><p>Mensagem recebida. A Kemy vai decidir se responde, pesquisa ou codifica.</p></li>`;
+  $("jobBadge").textContent = "Processando...";
+  $("timeline").innerHTML = `<li><p>Processando arquitetura da resposta e acionando agentes...</p></li>`;
 
   let data;
   const requestedMode = resolveRequestedMode(text);
@@ -464,10 +426,76 @@ async function runAgents(prompt, source = "chat") {
   if (source === "home") await loadSessions();
 }
 
+// ==========================================
+// KEMY MARKDOWN PARSER
+// Transforma o texto cru do LLM em HTML bonito
+// ==========================================
+function parseMarkdown(text) {
+  if (!text) return "";
+  
+  // 1. Escapar HTML para segurança
+  let html = escapeHtml(text);
+  
+  // 2. Proteger Blocos de Código (Ignorar formatação dentro deles)
+  const codeBlocks = [];
+  html = html.replace(/```[\s\S]*?```/g, (match) => {
+    codeBlocks.push(match);
+    return `%%%CODEBLOCK_${codeBlocks.length - 1}%%%`;
+  });
+
+  // 3. Formatar Títulos (Headers)
+  html = html.replace(/^### (.*$)/gim, '<h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 18px; color: var(--ink-strong);">$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2 style="margin-top: 32px; margin-bottom: 16px; font-size: 22px; color: var(--ink-strong);">$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1 style="margin-top: 32px; margin-bottom: 16px; font-size: 26px; color: var(--ink-strong);">$1</h1>');
+  
+  // 4. Formatar Negrito e Itálico
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--ink-strong);">$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  
+  // 5. Formatar Código Inline
+  html = html.replace(/`(.*?)`/g, '<code style="background: var(--surface-2); padding: 2px 6px; border-radius: 6px; font-family: \'JetBrains Mono\', monospace; font-size: 13px; color: var(--accent);">$1</code>');
+
+  // 6. Criar Parágrafos e Listas
+  html = html.split('\n\n').map(p => {
+    if (p.startsWith('<h') || p.startsWith('%%%CODEBLOCK')) return p;
+    
+    // Identifica se o bloco é uma lista
+    if (p.match(/^\s*[-*]\s/m) || p.match(/^\s*\d+\.\s/m)) {
+      const items = p.split('\n').filter(l => l.trim()).map(l => {
+        const content = l.replace(/^\s*[-*]\s/, '').replace(/^\s*\d+\.\s/, '');
+        return `<li style="margin-bottom: 8px; margin-left: 24px;">${content}</li>`;
+      }).join('');
+      return `<ul style="margin-bottom: 16px; padding: 0;">${items}</ul>`;
+    }
+    
+    // Converte quebras de linha simples em <br>
+    return `<p style="margin-bottom: 16px;">${p.replace(/\n/g, '<br>')}</p>`;
+  }).join('\n');
+
+  // 7. Restaurar Blocos de Código renderizados
+  html = html.replace(/%%%CODEBLOCK_(\d+)%%%/g, (match, i) => {
+    let block = codeBlocks[i];
+    // Remove as marcações de escape seguras apenas dentro do pre/code
+    block = block.replace(/```(\w*)\n([\s\S]*?)```/, '<pre style="background: var(--surface-2); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 16px 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$2</code></pre>');
+    // Fallback caso o LLM não envie o tipo de linguagem
+    block = block.replace(/```([\s\S]*?)```/, '<pre style="background: var(--surface-2); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 16px 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$1</code></pre>');
+    return block;
+  });
+
+  return html;
+}
+
+// Atualizamos a função para injetar o HTML processado
 function appendMessage(role, text) {
   const node = document.createElement("div");
   node.className = `message ${role === "user" ? "user" : "assistant"}`;
-  node.textContent = text;
+  
+  if (role === "user") {
+    node.textContent = text; // Mensagem do usuário continua como texto puro
+  } else {
+    node.innerHTML = parseMarkdown(text); // Kemy usa o parser
+  }
+  
   $("chatLog").appendChild(node);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
 }
@@ -480,15 +508,15 @@ function appendResult(result, fallbackText) {
       const node = document.createElement("div");
       node.className = "message assistant";
       node.innerHTML = `
-        <div class="image-result-card">
-          <div class="image-result-meta">
-            <strong>${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
-            <span>${escapeHtml((result.provider || "kimi") + " - " + (result.model || ""))}</span>
+        <div style="background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); padding: 20px; margin-top: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <strong style="color: var(--ink-strong); font-size: 16px;">${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
+            <span style="font-size: 12px; color: var(--muted); text-transform: uppercase;">${escapeHtml((result.provider || "kemy") + " - " + (result.model || ""))}</span>
           </div>
-          <div class="image-result-actions">
-            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer">${escapeHtml(file.name)}</a>`).join("")}
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn" style="text-decoration: none;">Download ${escapeHtml(file.name)}</a>`).join("")}
           </div>
-          ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
+          ${fallbackText ? parseMarkdown(fallbackText) : ""}
         </div>
       `;
       $("chatLog").appendChild(node);
@@ -501,16 +529,15 @@ function appendResult(result, fallbackText) {
   const node = document.createElement("div");
   node.className = "message assistant";
   node.innerHTML = `
-    <div class="image-result-card">
-      <div class="image-result-meta">
-        <strong>${escapeHtml(result.summary || "Imagem gerada")}</strong>
-        <span>${escapeHtml((result.provider || "pollinations") + " - " + (result.model || ""))}</span>
+    <div style="background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); padding: 20px; margin-top: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <strong style="color: var(--ink-strong); font-size: 16px;">${escapeHtml(result.summary || "Imagem gerada")}</strong>
       </div>
-      <img src="${escapeHtml(imageSource)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem gerada pela Kemy")}" />
-      <div class="image-result-actions">
-        <a href="${escapeHtml(imageSource)}" target="_blank" rel="noreferrer">Abrir imagem</a>
+      <img src="${escapeHtml(imageSource)}" alt="${escapeHtml(result.prompt || result.summary || "Imagem")}" style="max-width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--line); margin-bottom: 16px;" />
+      <div style="display: flex; gap: 8px;">
+        <a href="${escapeHtml(imageSource)}" target="_blank" rel="noreferrer" class="secondary-btn" style="text-decoration: none;">Abrir Original</a>
       </div>
-      ${fallbackText ? `<p>${escapeHtml(fallbackText)}</p>` : ""}
+      ${fallbackText ? parseMarkdown(fallbackText) : ""}
     </div>
   `;
   $("chatLog").appendChild(node);
@@ -568,7 +595,7 @@ function setPromptAndMaybeRun(text, run = false) {
 function showRunError(error) {
   $("runBtn").disabled = false;
   $("homeRunBtn").disabled = false;
-  appendMessage("assistant", `Erro: ${error.message}`);
+  appendMessage("assistant", `**Falha do Sistema:** ${error.message}`);
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
@@ -649,9 +676,9 @@ function renderAttachments() {
     target.classList.remove("hidden");
     target.innerHTML = state.attachments
       .map((item, index) => `
-        <span class="attachment-chip">
+        <span class="attachment-chip" style="background: var(--surface-2); padding: 4px 8px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; margin: 4px;">
           ${escapeHtml(item.name)}
-          <button type="button" data-remove-attachment="${index}" aria-label="Remover anexo">×</button>
+          <button type="button" data-remove-attachment="${index}" aria-label="Remover anexo" style="background: none; border: none; cursor: pointer; color: var(--muted);">&times;</button>
         </span>
       `)
       .join("");
@@ -696,12 +723,12 @@ $("openSessionsBtn").addEventListener("click", async () => {
     await openSession(state.sessions[0].session_id).catch(showRunError);
     return;
   }
-  appendMessage("assistant", "Ainda nao existe conversa salva. Crie a primeira mensagem e eu guardo o historico.");
+  appendMessage("assistant", "Nenhuma conversa encontrada no Storage. Digite algo para inicializar a memória.");
   showChat();
 });
 $("plusBtn").addEventListener("click", () => $("chatFileInput").click());
 $("homeAttachBtn").addEventListener("click", () => $("homeFileInput").click());
-$("voiceBtn").addEventListener("click", () => appendMessage("assistant", "Voz sera ligada em uma etapa propria: entrada por microfone, resposta em audio e historico salvo."));
+$("voiceBtn").addEventListener("click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS (Speech-to-Text) precisa ser conectada ao WebSocket primeiro."));
 $("closePreviewBtn").addEventListener("click", hidePreview);
 $("homeFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
 $("chatFileInput").addEventListener("change", (event) => handleFileSelection(event.target.files));
