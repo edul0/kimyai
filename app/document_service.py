@@ -901,15 +901,16 @@ class DocumentService:
         folder: Path,
     ) -> None:
         dark = slide.layout in {"lead", "closing"}
+        use_visual_panel = slide.layout in {"lead", "closing"}
         bg = self._pptx_color("#102b47" if dark else "#f6f9fc")
         band = self._pptx_color("#1c456e" if dark else "#edf3f8")
         ink = self._pptx_color("#ffffff" if dark else "#15385e")
         muted = self._pptx_color("#dbe7f2" if dark else "#6a8098")
         accent = self._pptx_color("#23b7c8")
-        panel = self._pptx_color("#ffffff")
 
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.92, 0, 4.413, 7.5, band)
+        if use_visual_panel:
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.92, 0, 4.413, 7.5, band)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.58, 0.68, 0.72, 0.06, accent)
 
         kicker = slide.kicker or deck_title
@@ -929,7 +930,10 @@ class DocumentService:
 
         title_size = 30 if slide.layout == "lead" else 26 if len(slide.title) <= 28 else 22 if len(slide.title) <= 42 else 19
         title_height = 1.42 if title_size >= 26 else 1.75
-        content_width = 6.4 if slide.layout not in {"timeline", "compare"} else 7.9
+        if use_visual_panel:
+            content_width = 6.4 if slide.layout not in {"timeline", "compare"} else 7.9
+        else:
+            content_width = 11.7 if slide.layout != "compare" else 12.0
         self._pptx_add_textbox(
             ppt_slide,
             0.58,
@@ -950,20 +954,29 @@ class DocumentService:
             current_top += 0.62
 
         if slide.layout == "agenda":
-            self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.0, 6.3, 4.55)
+            self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.0, 11.9 if not use_visual_panel else 6.3, 4.55)
         elif slide.layout == "metrics":
-            self._pptx_add_metric_cards(ppt_slide, slide, 0.72, 2.05, 6.25, 4.45)
+            self._pptx_add_metric_cards(ppt_slide, slide, 0.72, 2.05, 11.9 if not use_visual_panel else 6.25, 4.45)
         elif slide.layout == "timeline":
-            self._pptx_add_timeline(ppt_slide, slide, 0.72, 2.05, 7.7, 4.7)
+            self._pptx_add_timeline(ppt_slide, slide, 0.72, 2.05, 11.8 if not use_visual_panel else 7.7, 4.7)
         elif slide.layout == "compare" and slide.rows:
-            self._pptx_add_table(ppt_slide, slide.rows, 0.72, 2.15, 11.7, 3.9)
+            self._pptx_add_table(ppt_slide, slide.rows, 0.72, 2.15, 12.0, 3.9)
         elif slide.layout == "highlights":
-            self._pptx_add_highlight_cards(ppt_slide, slide, 0.72, 2.05, 6.25, 4.45)
+            self._pptx_add_highlight_cards(ppt_slide, slide, 0.72, 2.05, 11.9 if not use_visual_panel else 6.25, 4.45)
         else:
             items = slide.bullets or slide.body or []
-            self._pptx_add_bullets(ppt_slide, items[:4], 0.72, current_top, 6.6, 3.6, ink, accent)
+            self._pptx_add_bullets(
+                ppt_slide,
+                items[:4],
+                0.72,
+                current_top,
+                11.7 if not use_visual_panel else 6.6,
+                3.6,
+                ink,
+                accent,
+            )
 
-        if slide.layout in {"lead", "closing", "agenda", "metrics", "highlights", "section"}:
+        if use_visual_panel:
             self._pptx_add_visual_panel(ppt_slide, slide, folder, dark)
 
     def _pptx_add_visual_panel(self, ppt_slide: Any, slide: Slide, folder: Path, dark: bool) -> None:
@@ -1015,74 +1028,18 @@ class DocumentService:
             self._pptx_color("#ffffff" if dark else "#fbfdff"),
             line="#d6e2ee",
         )
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.48, 1.18, 0.72, 0.06, self._pptx_color("#23b7c8"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 9.95, 1.45, 2.1, 2.1, self._pptx_color("#23b7c8"), transparency=0.08)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 9.45, 3.65, 3.0, 3.0, self._pptx_color("#2a5f90"), transparency=0.08)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 10.5, 4.95, 1.5, 1.5, self._pptx_color("#ffffff"), line="#d7e3ef")
         self._pptx_add_textbox(
             ppt_slide,
-            9.48,
-            1.35,
-            2.6,
-            0.22,
-            "EM FOCO",
-            9,
-            color=self._pptx_color("#6a8098"),
-            bold=True,
-        )
-        hero_line = self._pptx_visual_heading(slide)
-        self._pptx_add_textbox(
-            ppt_slide,
-            9.48,
-            1.68,
-            2.9,
-            0.95,
-            hero_line,
-            18,
-            color=self._pptx_color("#15385e"),
-            bold=True,
-        )
-        insights = self._pptx_visual_points(slide)
-        block_top = 2.72
-        for index, insight in enumerate(insights[:3]):
-            y_pos = block_top + index * 1.0
-            self._pptx_add_shape(
-                ppt_slide,
-                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-                9.46,
-                y_pos,
-                3.0,
-                0.76,
-                self._pptx_color("#f4f8fc"),
-                line="#d9e4ef",
-            )
-            self._pptx_add_textbox(
-                ppt_slide,
-                9.66,
-                y_pos + 0.15,
-                2.64,
-                0.42,
-                insight,
-                11,
-                color=self._pptx_color("#26486b"),
-                bold=True,
-            )
-        self._pptx_add_shape(
-            ppt_slide,
-            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-            9.46,
-            5.88,
-            2.2,
-            0.44,
-            self._pptx_color("#15385e"),
-            line="#15385e",
-        )
-        self._pptx_add_textbox(
-            ppt_slide,
-            9.68,
-            6.0,
-            1.78,
-            0.18,
-            slide.kicker[:30],
-            9,
-            color=self._pptx_color("#ffffff"),
+            9.55,
+            6.12,
+            2.95,
+            0.28,
+            self._truncate_words(slide.title, 5).replace("\n", " "),
+            10,
+            color=self._pptx_color("#5e7690"),
             bold=True,
             align=PP_ALIGN.CENTER,
         )
@@ -1151,7 +1108,7 @@ class DocumentService:
             label, value, detail = self._parse_metric_bullet(f"- {item}")
             self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.18, card_width - 0.4, 0.22, label.upper()[:28], 10, color=self._pptx_color("#1f5ea8"), bold=True)
             self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.48, card_width - 0.4, 0.48, value, 24, color=self._pptx_color("#123657"), bold=True)
-            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 1.02, card_width - 0.4, 0.45, detail or label, 12, color=self._pptx_color("#5d738d"))
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 1.02, card_width - 0.4, 0.45, self._compact_copy(detail or label), 12, color=self._pptx_color("#5d738d"))
 
     def _pptx_add_highlight_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
         cards = (slide.bullets or slide.body or [])[:4]
@@ -1175,16 +1132,7 @@ class DocumentService:
             label, detail = self._split_card_item(item)
             self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.18, card_width - 0.4, 0.26, label.upper()[:32], 10, color=self._pptx_color("#1f5ea8"), bold=True)
             self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.46, card_width - 0.4, 0.62, detail or label, 16, color=self._pptx_color("#123657"), bold=True)
-            self._pptx_add_textbox(
-                ppt_slide,
-                card_left + 0.22,
-                card_top + 1.18,
-                card_width - 0.4,
-                0.45,
-                self._short_support_copy(detail or label),
-                11,
-                color=self._pptx_color("#5d738d"),
-            )
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 1.18, card_width - 0.4, 0.45, self._compact_copy(detail or label), 11, color=self._pptx_color("#5d738d"))
 
     def _pptx_add_timeline(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
         steps = (slide.bullets or slide.body or [])[:5]
@@ -1330,6 +1278,13 @@ class DocumentService:
     def _truncate_words(self, text: str, count: int) -> str:
         words = self._clean_inline_markdown(text).split()
         return "\n".join(words[:count]) if words else "Tema"
+
+    def _compact_copy(self, text: str, max_words: int = 8) -> str:
+        words = self._clean_inline_markdown(text).split()
+        compact = " ".join(words[:max_words]).strip()
+        if len(words) > max_words:
+            compact += "..."
+        return compact or text
 
     def _pptx_visual_heading(self, slide: Slide) -> str:
         for source in [slide.body or [], slide.bullets or []]:
