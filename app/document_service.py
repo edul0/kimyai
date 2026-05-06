@@ -594,6 +594,7 @@ class DocumentService:
         topic = self._clean_inline_markdown(self._extract_topic(user_request) or title)
         lowered = user_request.lower()
         direction = self._pptx_creative_direction(user_request, title)
+        return self._adaptive_fallback_slide_deck_text(topic, user_request, direction)
         if direction.domain == "food":
             return f"""# {topic}
 ## Sabor, desejo e decisao em uma historia simples
@@ -916,6 +917,100 @@ class DocumentService:
 - **30 dias** - consolidar fontes confiaveis
 - **60 dias** - priorizar custo e risco alto
 - **90 dias** - institucionalizar governanca recorrente
+"""
+
+    def _adaptive_fallback_slide_deck_text(self, topic: str, user_request: str, direction: DeckVisualDirection) -> str:
+        topic = self._clean_inline_markdown(topic or "Tema principal").strip(" .:-")
+        topic_l = topic.lower()
+        lowered = self._normalize_for_match(user_request)
+        wants_launch = any(token in lowered for token in ["anunciar", "divulgar", "vender", "promover", "lancar", "lançamento", "campanha"])
+        wants_teach = any(token in lowered for token in ["aula", "curso", "didatico", "ensinar", "explicar", "treinamento"])
+        wants_plan = any(token in lowered for token in ["plano", "roadmap", "passos", "implementar", "estrategia"])
+
+        if wants_launch:
+            promise = "uma campanha com desejo, clareza e acao"
+            tension = "o publico decide rapido quando a promessa fica concreta"
+            objective = "transformar atencao em interesse e interesse em acao"
+            closing = "publicar a versao mais forte, medir resposta e ajustar"
+            steps = ["Escolher gancho", "Criar prova visual", "Publicar oferta", "Medir resposta"]
+        elif wants_teach:
+            promise = "uma explicacao clara, memoravel e facil de seguir"
+            tension = "o aluno perde o fio quando tudo parece ter o mesmo peso"
+            objective = "organizar o tema em etapas, exemplos e pratica"
+            closing = "validar compreensao e reforcar o ponto mais dificil"
+            steps = ["Abrir contexto", "Explicar conceito", "Mostrar exemplo", "Fixar pratica"]
+        elif wants_plan:
+            promise = "um caminho objetivo para sair da ideia e chegar na execucao"
+            tension = "sem sequencia clara, o tema vira lista solta"
+            objective = "separar prioridade, responsavel, evidencia e proximo passo"
+            closing = "começar pequeno, medir sinal e evoluir a partir do resultado"
+            steps = ["Diagnosticar", "Priorizar", "Executar", "Aprender"]
+        else:
+            promise = "uma leitura visual feita para entender, decidir e lembrar"
+            tension = "o tema perde forca quando vira resumo generico"
+            objective = "dar forma ao assunto com contexto, contraste e exemplos"
+            closing = "transformar a leitura em uma decisao ou proximo passo"
+            steps = ["Contexto", "Contraste", "Evidencia", "Proximo passo"]
+
+        domain_angles = {
+            "food": ["sensorial", "produto", "experiencia", "oferta"],
+            "animals": ["habitat", "comportamento", "adaptacao", "cuidado"],
+            "fashion": ["silhueta", "textura", "identidade", "desejo"],
+            "health": ["cuidado", "prevencao", "seguranca", "continuidade"],
+            "education": ["conceito", "exemplo", "pratica", "retencao"],
+            "technology": ["sistema", "dados", "risco", "automacao"],
+            "business": ["valor", "risco", "prioridade", "decisao"],
+        }
+        angles = domain_angles.get(direction.domain, ["contexto", "valor", "prova", "acao"])
+        title_label = self._compact_title(topic, 8)
+        return f"""# {title_label}
+## {promise}
+
+---
+
+## Por que importa
+- **Tensao** - {tension}
+- **Intencao** - {objective}
+- **Leitura** - {direction.mood}
+
+---
+
+## O que destacar
+- **{angles[0].title()}** - ponto que abre a percepcao sobre {topic_l}
+- **{angles[1].title()}** - detalhe que torna o assunto especifico
+- **{angles[2].title()}** - evidencia que evita aparencia generica
+- **{angles[3].title()}** - acao esperada depois da leitura
+
+---
+
+## Narrativa visual
+- **Clima** - visual alinhado ao universo de {topic_l}
+- **Foco** - uma ideia dominante por slide
+- **Ritmo** - alternar impacto, detalhe e decisao
+- **Respiro** - menos texto, mais hierarquia
+
+---
+
+## Sequencia recomendada
+- **{steps[0]}** - abrir com o ponto mais reconhecivel
+- **{steps[1]}** - mostrar o contraste que muda a leitura
+- **{steps[2]}** - trazer prova, exemplo ou oferta
+- **{steps[3]}** - encerrar com acao objetiva
+
+---
+
+## Criterios de qualidade
+- **Pertinencia** - parecer feito para {topic_l}
+- **Clareza** - titulo forte e texto curto
+- **Identidade** - cor, imagem e tom coerentes
+- **Autonomia** - respeitar publico, canal e estilo pedidos
+
+---
+
+## Proximo passo
+- **Agora** - revisar a intencao principal
+- **Depois** - trocar exemplos pelo contexto real do usuario
+- **Final** - {closing}
 """
 
     def _polish_slide_deck(self, slides: list[str], title: str, slide_visuals: dict[int, str]) -> list[str]:
