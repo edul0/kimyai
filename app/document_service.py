@@ -53,6 +53,26 @@ class Slide:
     visual: str | None = None
 
 
+@dataclass(frozen=True)
+class DeckVisualDirection:
+    domain: str
+    mood: str
+    dark_bg: str
+    dark_divider: str
+    light_bg: str
+    card_bg: str
+    ink: str
+    muted: str
+    accent: str
+    accent_2: str
+    line: str
+    dark_muted: str
+    dark_line: str
+    cover_label: str
+    focus_label: str
+    image_style: str
+
+
 class DocumentService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -128,7 +148,7 @@ class DocumentService:
             raw_slides = self._split_into_slides(normalized_source)
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
-        pptx_provider = self._build_presentation_pptx(pptx_path, title, slides, folder)
+        pptx_provider = self._build_presentation_pptx(pptx_path, title, slides, folder, user_request)
 
         files: list[dict[str, Any]] = []
         if pptx_path.exists():
@@ -573,6 +593,257 @@ class DocumentService:
     def _fallback_slide_deck_text(self, user_request: str, title: str) -> str:
         topic = self._clean_inline_markdown(self._extract_topic(user_request) or title)
         lowered = user_request.lower()
+        direction = self._pptx_creative_direction(user_request, title)
+        if direction.domain == "food":
+            return f"""# {topic}
+## Sabor, desejo e decisao em uma historia simples
+
+---
+
+## Apetite imediato
+- **Primeira impressao** - promessa clara antes do preco
+- **Desejo visual** - ingrediente, textura e frescor em foco
+- **Escolha facil** - poucas opcoes, decisao rapida
+
+---
+
+## Experiencia servida
+- **Produto estrela** - destaque para o item mais memoravel
+- **Prova sensorial** - aroma, crocancia, cremosidade ou frescor
+- **Momento de consumo** - almoco, encontro, presente ou pausa
+- **Chamada direta** - pedir, reservar ou experimentar
+
+---
+
+## Cardapio com hierarquia
+- **Entrada** - despertar curiosidade sem cansar
+- **Principal** - concentrar valor no prato assinatura
+- **Complemento** - aumentar ticket sem poluir a escolha
+- **Finalizacao** - sobremesa, bebida ou combo
+
+---
+
+## Oferta que converte
+- **Foto honesta** - alimento reconhecivel e apetitoso
+- **Beneficio claro** - sabor, praticidade ou exclusividade
+- **Preco legivel** - sem esconder a decisao
+- **Urgencia leve** - horario, estoque ou promocao
+
+---
+
+## Lancamento em etapas
+- **Preparar** - selecionar prato, foto e promessa
+- **Testar** - validar mensagem com publico pequeno
+- **Divulgar** - canais, horarios e criativos
+- **Ajustar** - medir pedidos e repetir vencedores
+
+---
+
+## Decisao recomendada
+- **Hoje** - escolher o produto heroi
+- **7 dias** - produzir imagens e oferta
+- **30 dias** - medir conversao e ticket medio
+"""
+        if direction.domain == "animals":
+            return f"""# {topic}
+## Observacao, cuidado e contexto natural
+
+---
+
+## O que observar
+- **Comportamento** - sinais que revelam adaptacao
+- **Habitat** - ambiente molda rotina e sobrevivencia
+- **Interacao** - relacao com grupo, alimento e territorio
+
+---
+
+## Leitura do animal
+- **Aparencia** - marcas, porte e diferencas visiveis
+- **Rotina** - sono, busca por alimento e deslocamento
+- **Defesa** - fuga, camuflagem ou protecao
+- **Vinculo** - cuidado parental, bando ou independencia
+
+---
+
+## Habitat em foco
+- **Recursos** - alimento, agua e abrigo disponiveis
+- **Riscos** - predadores, clima e pressao humana
+- **Adaptacoes** - corpo e comportamento trabalhando juntos
+- **Equilibrio** - papel na cadeia e no ecossistema
+
+---
+
+## Cuidado responsavel
+- **Bem-estar** - espaco, estimulo e seguranca
+- **Saude** - prevencao, sinais e acompanhamento
+- **Manejo** - rotina coerente com a especie
+- **Educacao** - reduzir medo e aproximar com respeito
+
+---
+
+## Aprendizado em campo
+- **Identificar** - especie, ambiente e sinais
+- **Registrar** - fotos, notas e padroes
+- **Interpretar** - comportamento ligado ao contexto
+- **Proteger** - acao adequada ao risco observado
+
+---
+
+## Decisao recomendada
+- **Agora** - definir objetivo da observacao
+- **Proximo passo** - coletar evidencias visuais
+- **Continuo** - agir sem romper o habitat
+"""
+        if direction.domain == "education":
+            return f"""# {topic}
+## Aprender melhor com percurso claro
+
+---
+
+## Ponto de partida
+- **Objetivo** - uma competencia por vez
+- **Contexto** - por que isso importa agora
+- **Aplicacao** - onde o aluno usa o conhecimento
+
+---
+
+## Trilha de aula
+- **Conceito** - ideia central em linguagem simples
+- **Exemplo** - caso concreto para fixar
+- **Pratica** - exercicio curto e verificavel
+- **Feedback** - correcao objetiva e proximo passo
+
+---
+
+## Metodo de aprendizagem
+- **Atencao** - foco visual sem excesso
+- **Memoria** - repeticao com variacao
+- **Autonomia** - pequenas decisoes do aluno
+- **Evidencia** - prova do que foi entendido
+
+---
+
+## Material que ajuda
+- **Resumo** - pontos essenciais sem paragrafo longo
+- **Atividade** - tarefa conectada ao objetivo
+- **Rubrica** - criterio claro de avaliacao
+- **Revisao** - volta rapida ao que falhou
+
+---
+
+## Plano em etapas
+- **Diagnosticar** - nivel e duvidas reais
+- **Explicar** - conceito com exemplo visual
+- **Praticar** - desafio progressivo
+- **Consolidar** - revisao e criterio de dominio
+
+---
+
+## Decisao recomendada
+- **Hoje** - escolher a competencia central
+- **Aula** - alternar explicacao e pratica
+- **Depois** - revisar pelo erro mais comum
+"""
+        if direction.domain == "health":
+            return f"""# {topic}
+## Clareza, cuidado e decisao segura
+
+---
+
+## Necessidade principal
+- **Sintoma ou risco** - entender o ponto de atencao
+- **Contexto** - rotina, historico e fatores associados
+- **Conduta** - orientar sem gerar confusao
+
+---
+
+## Leitura do cuidado
+- **Prevencao** - agir antes da complicacao
+- **Acompanhamento** - sinais, progresso e retorno
+- **Adesao** - orientacao facil de seguir
+- **Seguranca** - limites e quando procurar ajuda
+
+---
+
+## Jornada do paciente
+- **Escuta** - queixa e objetivo real
+- **Avaliacao** - sinais e evidencias
+- **Plano** - passos claros e viaveis
+- **Retorno** - ajuste com base em resposta
+
+---
+
+## Indicadores de qualidade
+- **Entendimento** - paciente sabe o que fazer
+- **Continuidade** - cuidado nao para na consulta
+- **Risco** - sinais de alerta comunicados
+- **Resultado** - evolucao acompanhada com criterio
+
+---
+
+## Plano pratico
+- **Orientar** - linguagem simples e direta
+- **Registrar** - informacoes essenciais
+- **Monitorar** - sinais de melhora ou alerta
+- **Reavaliar** - decidir proximo passo
+
+---
+
+## Decisao recomendada
+- **Agora** - separar orientacao de alerta
+- **7 dias** - acompanhar resposta
+- **30 dias** - revisar plano e adesao
+"""
+        if direction.domain == "fashion":
+            return f"""# {topic}
+## Estilo, desejo e identidade visual
+
+---
+
+## Impressao imediata
+- **Silhueta** - forma comunica antes do detalhe
+- **Textura** - material cria percepcao de valor
+- **Contraste** - cor guia o olhar
+
+---
+
+## Narrativa da peca
+- **Ocasião** - quando e por que usar
+- **Atitude** - casual, sofisticada ou ousada
+- **Combinacao** - peca principal e apoio
+- **Desejo** - detalhe que torna memoravel
+
+---
+
+## Direcao visual
+- **Modelo** - postura alinhada ao publico
+- **Luz** - pele, tecido e volume favorecidos
+- **Cenario** - contexto sem competir com a peca
+- **Edicao** - recorte limpo e foco no produto
+
+---
+
+## Colecao com hierarquia
+- **Heroi** - peca assinatura
+- **Base** - itens de rotacao
+- **Acessorio** - elevar composicao
+- **Campanha** - frase curta e imagem forte
+
+---
+
+## Lancamento em etapas
+- **Curadoria** - selecionar pecas-chave
+- **Producao** - foto, styling e promessa
+- **Publicacao** - canais e sequencia
+- **Aprendizado** - medir interesse e conversao
+
+---
+
+## Decisao recomendada
+- **Hoje** - definir peca hero
+- **Semana** - produzir editorial enxuto
+- **Mes** - repetir visual vencedor
+"""
         wants_iso = any(token in lowered for token in ["iso", "norma", "normas", "certificacao", "certifica"])
         wants_steps = any(token in lowered for token in ["roadmap", "passos", "plano", "implementacao"])
         standards = [
@@ -750,13 +1021,14 @@ class DocumentService:
             if re.match(r"^[-*]\s+", line)
         ][:3]
         narrative = "; ".join(bullets)[:360]
-        style_hint = self._image_style_hint(user_request)
+        direction = self._pptx_creative_direction(user_request, deck_title)
+        style_hint = self._image_style_hint(user_request, direction)
         is_cover = slide_index == 0
         if is_cover:
             return (
                 f"Premium presentation cover image for '{deck_title}'. "
                 f"Theme: {heading}. "
-                f"Editorial, cinematic, polished corporate storytelling, high-end consulting deck aesthetic, "
+                f"Editorial, polished storytelling, {direction.mood}, "
                 f"{style_hint} clean composition with negative space for title text, subtle depth, modern lighting, no text, no watermark. "
                 f"Context: {user_request[:260]}"
             )
@@ -764,21 +1036,22 @@ class DocumentService:
             f"Presentation visual for slide {slide_index + 1} of {total_slides} about '{deck_title}'. "
             f"Slide topic: {heading}. "
             f"Key points: {narrative or user_request[:220]}. "
-            "Professional editorial illustration or photoreal concept for a boardroom-grade presentation, "
+            f"Subject-specific visual direction: {direction.mood}. "
+            "Professional editorial illustration or photoreal concept for a premium presentation, "
             f"{style_hint} clean composition, sophisticated color palette, suitable for split-slide layout, no text, no watermark."
         )
 
-    def _image_style_hint(self, user_request: str) -> str:
+    def _image_style_hint(self, user_request: str, direction: DeckVisualDirection | None = None) -> str:
         lowered = user_request.lower()
         if any(token in lowered for token in ["realista", "fotorealista", "foto"]):
-            return "Photoreal, realistic, premium business photography,"
+            return f"Photoreal, realistic, {direction.image_style if direction else 'premium editorial photography'},"
         if any(token in lowered for token in ["3d", "futurista", "neon"]):
-            return "Futuristic 3D render language,"
+            return f"Futuristic 3D render language, {direction.image_style if direction else 'premium editorial composition'},"
         if any(token in lowered for token in ["minimal", "minimalista", "clean"]):
-            return "Minimal editorial visual language,"
+            return f"Minimal editorial visual language, {direction.image_style if direction else 'premium subject-specific composition'},"
         if any(token in lowered for token in ["luxo", "premium", "executivo"]):
-            return "Luxury executive editorial visual language,"
-        return "Professional presentation visual language,"
+            return f"Luxury executive editorial visual language, {direction.image_style if direction else 'premium composition'},"
+        return f"{direction.image_style if direction else 'Professional presentation visual language'},"
 
     def _download_pollinations_image(self, prompt: str, output_path: Path) -> None:
         headers = {"Authorization": f"Bearer {self.settings.pollinations_api_key}"}
@@ -848,15 +1121,16 @@ class DocumentService:
             )
         return slides
 
-    def _build_presentation_pptx(self, path: Path, deck_title: str, slides: list[Slide], folder: Path) -> str:
+    def _build_presentation_pptx(self, path: Path, deck_title: str, slides: list[Slide], folder: Path, user_request: str = "") -> str:
         presentation = Presentation()
         presentation.slide_width = Inches(13.333)
         presentation.slide_height = Inches(7.5)
         blank_layout = presentation.slide_layouts[6]
         total = len(slides)
+        direction = self._pptx_creative_direction(user_request, deck_title)
         for index, slide in enumerate(slides):
             ppt_slide = presentation.slides.add_slide(blank_layout)
-            self._render_pptx_slide(ppt_slide, slide, deck_title, index, total, folder)
+            self._render_pptx_slide(ppt_slide, slide, deck_title, index, total, folder, direction)
         presentation.save(str(path))
         return "python-pptx"
 
@@ -897,23 +1171,24 @@ class DocumentService:
         index: int,
         total: int,
         folder: Path,
+        direction: DeckVisualDirection,
     ) -> None:
         if slide.layout == "lead":
-            self._render_pptx_cover(ppt_slide, slide, deck_title, index, total, folder)
+            self._render_pptx_cover(ppt_slide, slide, deck_title, index, total, folder, direction)
             return
         if slide.layout == "closing":
-            self._render_pptx_closing(ppt_slide, slide, deck_title, index, total, folder)
+            self._render_pptx_closing(ppt_slide, slide, deck_title, index, total, folder, direction)
             return
-        self._render_pptx_content(ppt_slide, slide, deck_title, index, total)
+        self._render_pptx_content(ppt_slide, slide, deck_title, index, total, direction)
 
-    def _render_pptx_cover(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int, folder: Path) -> None:
-        bg = self._pptx_color("#06120f")
+    def _render_pptx_cover(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int, folder: Path, direction: DeckVisualDirection) -> None:
+        bg = self._pptx_color(direction.dark_bg)
         ink = self._pptx_color("#ffffff")
-        muted = self._pptx_color("#b7cec5")
-        accent = self._pptx_color("#59e2b2")
+        muted = self._pptx_color(direction.dark_muted)
+        accent = self._pptx_color(direction.accent)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 0.12, 7.5, accent)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.7, 0, 0.012, 7.5, self._pptx_color("#17352d"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.7, 0, 0.012, 7.5, self._pptx_color(direction.dark_divider))
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.72, 0.86, 0.9, 0.045, accent)
         self._pptx_add_textbox(ppt_slide, 0.72, 0.48, 6.3, 0.26, deck_title.upper()[:74], 9.5, color=muted, bold=True)
         self._pptx_add_textbox(ppt_slide, 11.82, 0.48, 0.9, 0.24, f"{index + 1} / {total}", 10, color=muted, bold=True, align=PP_ALIGN.RIGHT)
@@ -924,21 +1199,21 @@ class DocumentService:
         self._pptx_add_textbox(ppt_slide, 0.74, 3.34, 5.95, 0.64, self._compact_copy(subtitle, 11), 17, color=muted)
 
         points = self._pptx_visual_points(slide)
-        self._pptx_add_textbox(ppt_slide, 9.2, 1.22, 2.6, 0.22, "LEITURA DO DECK", 9.5, color=accent, bold=True)
+        self._pptx_add_textbox(ppt_slide, 9.2, 1.22, 2.6, 0.22, direction.cover_label, 9.5, color=accent, bold=True)
         for idx, point in enumerate(points[:3], start=1):
             y_pos = 1.72 + (idx - 1) * 1.22
             self._pptx_add_textbox(ppt_slide, 9.18, y_pos, 0.42, 0.24, f"{idx:02d}", 10, color=accent, bold=True)
             self._pptx_add_textbox(ppt_slide, 9.78, y_pos - 0.03, 2.82, 0.42, self._compact_copy(point, 9), 13.5, color=ink, bold=True)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.18, y_pos + 0.62, 3.1, 0.012, self._pptx_color("#23453d"))
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.18, y_pos + 0.62, 3.1, 0.012, self._pptx_color(direction.dark_line))
 
         if slide.visual:
             self._pptx_try_add_image(ppt_slide, slide.visual, folder, 9.18, 5.28, 3.1, 1.24)
 
-    def _render_pptx_content(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int) -> None:
-        bg = self._pptx_color("#f7faf4")
-        ink = self._pptx_color("#0d241c")
-        muted = self._pptx_color("#667a70")
-        accent = self._pptx_color("#15966f")
+    def _render_pptx_content(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int, direction: DeckVisualDirection) -> None:
+        bg = self._pptx_color(direction.light_bg)
+        ink = self._pptx_color(direction.ink)
+        muted = self._pptx_color(direction.muted)
+        accent = self._pptx_color(direction.accent)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.0, 0.0, 0.1, 7.5, accent)
         self._pptx_add_textbox(ppt_slide, 0.72, 0.42, 4.9, 0.25, (slide.kicker or deck_title).upper()[:62], 9.5, color=muted, bold=True)
@@ -946,24 +1221,24 @@ class DocumentService:
         self._pptx_add_textbox(ppt_slide, 0.72, 0.98, 11.5, 0.78, self._compact_title(slide.title, 8), 25, color=ink, bold=True)
 
         if slide.layout == "agenda":
-            self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.02, 11.85, 4.55)
+            self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.02, 11.85, 4.55, direction)
         elif slide.layout == "metrics":
-            self._pptx_add_metric_cards(ppt_slide, slide, 0.72, 2.03, 11.85, 4.42)
+            self._pptx_add_metric_cards(ppt_slide, slide, 0.72, 2.03, 11.85, 4.42, direction)
         elif slide.layout == "timeline":
-            self._pptx_add_timeline(ppt_slide, slide, 0.72, 2.18, 11.85, 3.95)
+            self._pptx_add_timeline(ppt_slide, slide, 0.72, 2.18, 11.85, 3.95, direction)
         elif slide.layout == "compare" and slide.rows:
-            self._pptx_add_table(ppt_slide, slide.rows, 0.72, 2.0, 11.85, 4.2)
+            self._pptx_add_table(ppt_slide, slide.rows, 0.72, 2.0, 11.85, 4.2, direction)
         elif slide.layout == "highlights":
-            self._pptx_add_highlight_cards(ppt_slide, slide, 0.72, 2.03, 11.85, 4.42)
+            self._pptx_add_highlight_cards(ppt_slide, slide, 0.72, 2.03, 11.85, 4.42, direction)
         else:
             self._pptx_add_bullets(ppt_slide, (slide.bullets or slide.body or [])[:4], 0.9, 2.1, 11.2, 3.9, ink, accent)
-        self._pptx_add_footer_line(ppt_slide, deck_title)
+        self._pptx_add_footer_line(ppt_slide, deck_title, direction)
 
-    def _render_pptx_closing(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int, folder: Path) -> None:
-        bg = self._pptx_color("#06120f")
+    def _render_pptx_closing(self, ppt_slide: Any, slide: Slide, deck_title: str, index: int, total: int, folder: Path, direction: DeckVisualDirection) -> None:
+        bg = self._pptx_color(direction.dark_bg)
         ink = self._pptx_color("#ffffff")
-        muted = self._pptx_color("#b7cec5")
-        accent = self._pptx_color("#59e2b2")
+        muted = self._pptx_color(direction.dark_muted)
+        accent = self._pptx_color(direction.accent)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 0.12, 7.5, accent)
         self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.72, 0.82, 0.86, 0.045, accent)
@@ -975,13 +1250,13 @@ class DocumentService:
             y_pos = 3.2 + (idx - 1) * 0.74
             self._pptx_add_textbox(ppt_slide, 0.86, y_pos, 0.42, 0.22, f"{idx:02d}", 10, color=accent, bold=True)
             self._pptx_add_textbox(ppt_slide, 1.42, y_pos - 0.02, 6.7, 0.3, self._compact_copy(item, 13), 15, color=muted, bold=True)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.08, 1.38, 0.012, 4.42, self._pptx_color("#23453d"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.08, 1.38, 0.012, 4.42, self._pptx_color(direction.dark_line))
         self._pptx_add_textbox(ppt_slide, 9.44, 1.42, 2.9, 0.22, "PROXIMA ACAO", 9.5, color=accent, bold=True)
         self._pptx_add_textbox(ppt_slide, 9.44, 1.94, 2.8, 0.95, self._compact_copy(items[0] if items else slide.title, 14), 18, color=ink, bold=True)
         if slide.visual:
             self._pptx_try_add_image(ppt_slide, slide.visual, folder, 9.44, 4.72, 2.8, 1.02)
 
-    def _pptx_add_visual_panel(self, ppt_slide: Any, slide: Slide, folder: Path, dark: bool) -> None:
+    def _pptx_add_visual_panel(self, ppt_slide: Any, slide: Slide, folder: Path, dark: bool, direction: DeckVisualDirection) -> None:
         image_added = False
         if slide.visual:
             image_added = self._pptx_try_add_image(ppt_slide, slide.visual, folder, 9.28, 1.02, 3.35, 4.35)
@@ -993,9 +1268,9 @@ class DocumentService:
                 0.88,
                 0.035,
                 5.68,
-                self._pptx_color("#15966f"),
+                self._pptx_color(direction.accent),
             )
-            self._pptx_add_textbox(ppt_slide, 9.28, 5.62, 3.35, 0.22, "VISUAL DE APOIO", 8.5, color=self._pptx_color("#667a70"), bold=True)
+            self._pptx_add_textbox(ppt_slide, 9.28, 5.62, 3.35, 0.22, "VISUAL DE APOIO", 8.5, color=self._pptx_color(direction.muted), bold=True)
             return
 
         self._pptx_add_shape(
@@ -1005,24 +1280,24 @@ class DocumentService:
             0.98,
             0.045,
             5.42,
-            self._pptx_color("#15966f"),
+            self._pptx_color(direction.accent),
         )
-        self._pptx_add_textbox(ppt_slide, 9.42, 1.0, 2.8, 0.24, "EM FOCO", 8.5, color=self._pptx_color("#667a70"), bold=True)
-        self._pptx_add_textbox(ppt_slide, 9.42, 1.48, 2.92, 0.82, self._compact_title(slide.title, 6), 17, color=self._pptx_color("#0d241c"), bold=True)
+        self._pptx_add_textbox(ppt_slide, 9.42, 1.0, 2.8, 0.24, direction.focus_label, 8.5, color=self._pptx_color(direction.muted), bold=True)
+        self._pptx_add_textbox(ppt_slide, 9.42, 1.48, 2.92, 0.82, self._compact_title(slide.title, 6), 17, color=self._pptx_color(direction.ink), bold=True)
         for idx, point in enumerate(self._pptx_visual_points(slide)[:3], start=1):
             y_pos = 2.72 + (idx - 1) * 0.86
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.08, 0.2, 0.035, self._pptx_color("#15966f"))
-            self._pptx_add_textbox(ppt_slide, 9.78, y_pos - 0.04, 2.65, 0.32, self._compact_copy(point, 8), 10.5, color=self._pptx_color("#667a70"), bold=True)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.5, 2.75, 0.01, self._pptx_color("#d7e7df"))
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.08, 0.2, 0.035, self._pptx_color(direction.accent))
+            self._pptx_add_textbox(ppt_slide, 9.78, y_pos - 0.04, 2.65, 0.32, self._compact_copy(point, 8), 10.5, color=self._pptx_color(direction.muted), bold=True)
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.5, 2.75, 0.01, self._pptx_color(direction.line))
 
-    def _pptx_add_cover_art(self, ppt_slide: Any, slide: Slide) -> None:
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.08, 1.12, 0.035, 4.82, self._pptx_color("#59e2b2"))
-        self._pptx_add_textbox(ppt_slide, 9.42, 1.12, 2.85, 0.22, "SINTESE EXECUTIVA", 8.5, color=self._pptx_color("#b7cec5"), bold=True)
+    def _pptx_add_cover_art(self, ppt_slide: Any, slide: Slide, direction: DeckVisualDirection) -> None:
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.08, 1.12, 0.035, 4.82, self._pptx_color(direction.accent))
+        self._pptx_add_textbox(ppt_slide, 9.42, 1.12, 2.85, 0.22, direction.cover_label, 8.5, color=self._pptx_color(direction.dark_muted), bold=True)
         for idx, point in enumerate(self._pptx_visual_points(slide)[:3], start=1):
             y_pos = 1.72 + (idx - 1) * 1.08
-            self._pptx_add_textbox(ppt_slide, 9.42, y_pos, 0.35, 0.18, f"{idx:02d}", 8.5, color=self._pptx_color("#59e2b2"), bold=True)
+            self._pptx_add_textbox(ppt_slide, 9.42, y_pos, 0.35, 0.18, f"{idx:02d}", 8.5, color=self._pptx_color(direction.accent), bold=True)
             self._pptx_add_textbox(ppt_slide, 9.98, y_pos - 0.02, 2.48, 0.38, self._compact_copy(point, 8), 11.5, color=self._pptx_color("#ffffff"), bold=True)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.58, 2.8, 0.01, self._pptx_color("#23453d"))
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 9.42, y_pos + 0.58, 2.8, 0.01, self._pptx_color(direction.dark_line))
 
     def _pptx_try_add_image(self, ppt_slide: Any, visual: str, folder: Path, left: float, top: float, width: float, height: float) -> bool:
         try:
@@ -1045,22 +1320,22 @@ class DocumentService:
             return False
         return False
 
-    def _pptx_add_agenda_rows(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+    def _pptx_add_agenda_rows(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float, direction: DeckVisualDirection) -> None:
         items = slide.bullets or slide.body or []
         item_count = min(len(items), 6)
         if not item_count:
             return
         row_height = min(0.72, height / item_count)
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.42, top + 0.12, 0.016, row_height * item_count, self._pptx_color("#b7d8cc"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.42, top + 0.12, 0.016, row_height * item_count, self._pptx_color(direction.line))
         for index, item in enumerate(items[:6], start=1):
             row_top = top + (index - 1) * row_height
             label, detail = self._split_agenda_item(item)
-            self._pptx_add_textbox(ppt_slide, left, row_top + 0.04, 0.3, 0.16, f"{index:02d}", 9.5, color=self._pptx_color("#15966f"), bold=True, align=PP_ALIGN.RIGHT)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.41, row_top + 0.16, 0.08, 0.08, self._pptx_color("#15966f"))
-            self._pptx_add_textbox(ppt_slide, left + 0.72, row_top - 0.01, 3.25, 0.28, self._compact_title(label, 5), 15.5, color=self._pptx_color("#0d241c"), bold=True)
-            self._pptx_add_textbox(ppt_slide, left + 4.15, row_top + 0.02, width - 4.2, 0.24, self._compact_copy(detail, 12), 11.5, color=self._pptx_color("#667a70"))
+            self._pptx_add_textbox(ppt_slide, left, row_top + 0.04, 0.3, 0.16, f"{index:02d}", 9.5, color=self._pptx_color(direction.accent), bold=True, align=PP_ALIGN.RIGHT)
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.41, row_top + 0.16, 0.08, 0.08, self._pptx_color(direction.accent))
+            self._pptx_add_textbox(ppt_slide, left + 0.72, row_top - 0.01, 3.25, 0.28, self._compact_title(label, 5), 15.5, color=self._pptx_color(direction.ink), bold=True)
+            self._pptx_add_textbox(ppt_slide, left + 4.15, row_top + 0.02, width - 4.2, 0.24, self._compact_copy(detail, 12), 11.5, color=self._pptx_color(direction.muted))
 
-    def _pptx_add_metric_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+    def _pptx_add_metric_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float, direction: DeckVisualDirection) -> None:
         cards = (slide.bullets or slide.body or [])[:4]
         card_width = (width - 0.28) / 2
         card_height = (height - 0.26) / 2
@@ -1076,16 +1351,16 @@ class DocumentService:
                 card_top,
                 card_width,
                 card_height,
-                self._pptx_color("#ffffff"),
-                line="#d7e7df",
+                self._pptx_color(direction.card_bg),
+                line=direction.line,
             )
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, card_left, card_top, card_width, 0.045, self._pptx_color("#15966f"))
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, card_left, card_top, card_width, 0.045, self._pptx_color(direction.accent))
             label, value, detail = self._parse_metric_bullet(f"- {item}")
-            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 0.26, card_width - 0.52, 0.22, label.upper()[:30], 9.5, color=self._pptx_color("#15966f"), bold=True)
-            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 0.62, card_width - 0.52, 0.44, value, 24, color=self._pptx_color("#0d241c"), bold=True)
-            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 1.22, card_width - 0.52, 0.42, self._compact_copy(detail or label), 11, color=self._pptx_color("#667a70"))
+            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 0.26, card_width - 0.52, 0.22, label.upper()[:30], 9.5, color=self._pptx_color(direction.accent), bold=True)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 0.62, card_width - 0.52, 0.44, value, 24, color=self._pptx_color(direction.ink), bold=True)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.28, card_top + 1.22, card_width - 0.52, 0.42, self._compact_copy(detail or label), 11, color=self._pptx_color(direction.muted))
 
-    def _pptx_add_highlight_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+    def _pptx_add_highlight_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float, direction: DeckVisualDirection) -> None:
         cards = (slide.bullets or slide.body or [])[:4]
         for index, item in enumerate(cards):
             col = index % 2
@@ -1094,23 +1369,23 @@ class DocumentService:
             block_left = left + col * (col_width + 0.72)
             block_top = top + row * 1.72
             label, detail = self._split_card_item(item)
-            self._pptx_add_textbox(ppt_slide, block_left, block_top, 0.42, 0.18, f"{index + 1:02d}", 9.5, color=self._pptx_color("#15966f"), bold=True)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.62, block_top + 0.06, 0.58, 0.035, self._pptx_color("#15966f"))
-            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 0.32, col_width - 0.66, 0.26, label.upper()[:34], 9.5, color=self._pptx_color("#15966f"), bold=True)
-            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 0.72, col_width - 0.66, 0.46, self._compact_title(detail or label, 7), 16, color=self._pptx_color("#0d241c"), bold=True)
-            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 1.24, col_width - 0.66, 0.26, self._compact_copy(detail or label, 8), 9.5, color=self._pptx_color("#667a70"))
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.62, block_top + 1.6, col_width - 0.72, 0.012, self._pptx_color("#d7e7df"))
+            self._pptx_add_textbox(ppt_slide, block_left, block_top, 0.42, 0.18, f"{index + 1:02d}", 9.5, color=self._pptx_color(direction.accent), bold=True)
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.62, block_top + 0.06, 0.58, 0.035, self._pptx_color(direction.accent))
+            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 0.32, col_width - 0.66, 0.26, label.upper()[:34], 9.5, color=self._pptx_color(direction.accent), bold=True)
+            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 0.72, col_width - 0.66, 0.46, self._compact_title(detail or label, 7), 16, color=self._pptx_color(direction.ink), bold=True)
+            self._pptx_add_textbox(ppt_slide, block_left + 0.62, block_top + 1.24, col_width - 0.66, 0.26, self._compact_copy(detail or label, 8), 9.5, color=self._pptx_color(direction.muted))
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.62, block_top + 1.6, col_width - 0.72, 0.012, self._pptx_color(direction.line))
 
-    def _pptx_add_timeline(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+    def _pptx_add_timeline(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float, direction: DeckVisualDirection) -> None:
         steps = (slide.bullets or slide.body or [])[:5]
         if not steps:
             return
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.34, top + 0.24, width - 0.68, 0.025, self._pptx_color("#b7d8cc"))
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.34, top + 0.24, width - 0.68, 0.025, self._pptx_color(direction.line))
         step_width = (width - 0.34 * (len(steps) - 1)) / len(steps)
         for index, item in enumerate(steps, start=1):
             block_left = left + (index - 1) * (step_width + 0.34)
-            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.14, top + 0.11, 0.22, 0.22, self._pptx_color("#15966f"))
-            self._pptx_add_textbox(ppt_slide, block_left + 0.13, top + 0.46, 0.34, 0.13, f"{index:02d}", 8.5, color=self._pptx_color("#15966f"), bold=True, align=PP_ALIGN.CENTER)
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, block_left + 0.14, top + 0.11, 0.22, 0.22, self._pptx_color(direction.accent))
+            self._pptx_add_textbox(ppt_slide, block_left + 0.13, top + 0.46, 0.34, 0.13, f"{index:02d}", 8.5, color=self._pptx_color(direction.accent), bold=True, align=PP_ALIGN.CENTER)
             self._pptx_add_shape(
                 ppt_slide,
                 MSO_AUTO_SHAPE_TYPE.RECTANGLE,
@@ -1118,13 +1393,13 @@ class DocumentService:
                 top + 0.72,
                 step_width,
                 height - 0.92,
-                self._pptx_color("#ffffff"),
-                line="#d7e7df",
+                self._pptx_color(direction.card_bg),
+                line=direction.line,
             )
-            self._pptx_add_textbox(ppt_slide, block_left + 0.22, top + 1.02, step_width - 0.44, 0.92, self._compact_title(item, 8), 13, color=self._pptx_color("#0d241c"), bold=True)
-            self._pptx_add_textbox(ppt_slide, block_left + 0.22, top + 2.05, step_width - 0.44, 0.44, self._compact_copy(item, 8), 9.5, color=self._pptx_color("#667a70"))
+            self._pptx_add_textbox(ppt_slide, block_left + 0.22, top + 1.02, step_width - 0.44, 0.92, self._compact_title(item, 8), 13, color=self._pptx_color(direction.ink), bold=True)
+            self._pptx_add_textbox(ppt_slide, block_left + 0.22, top + 2.05, step_width - 0.44, 0.44, self._compact_copy(item, 8), 9.5, color=self._pptx_color(direction.muted))
 
-    def _pptx_add_table(self, ppt_slide: Any, rows: list[list[str]], left: float, top: float, width: float, height: float) -> None:
+    def _pptx_add_table(self, ppt_slide: Any, rows: list[list[str]], left: float, top: float, width: float, height: float, direction: DeckVisualDirection) -> None:
         if not rows:
             return
         cols = max(len(row) for row in rows)
@@ -1135,14 +1410,14 @@ class DocumentService:
                 text = row[col_index] if col_index < len(row) else ""
                 cell.text = text
                 cell.fill.solid()
-                cell.fill.fore_color.rgb = self._pptx_color("#123657" if row_index == 0 else "#ffffff")
+                cell.fill.fore_color.rgb = self._pptx_color(direction.ink if row_index == 0 else direction.card_bg)
                 cell.text_frame.word_wrap = True
                 for paragraph in cell.text_frame.paragraphs:
                     paragraph.alignment = PP_ALIGN.LEFT
                     for run in paragraph.runs:
                         run.font.size = PptxPt(12 if row_index == 0 else 11)
                         run.font.bold = row_index == 0
-                        run.font.color.rgb = self._pptx_color("#ffffff" if row_index == 0 else "#15385e")
+                        run.font.color.rgb = self._pptx_color("#ffffff" if row_index == 0 else direction.ink)
 
     def _pptx_add_bullets(
         self,
@@ -1243,6 +1518,206 @@ class DocumentService:
         normalized = value.strip().lstrip("#")
         return PptxRGBColor(int(normalized[0:2], 16), int(normalized[2:4], 16), int(normalized[4:6], 16))
 
+    def _pptx_creative_direction(self, user_request: str, deck_title: str) -> DeckVisualDirection:
+        text = self._normalize_for_match(f"{user_request} {deck_title}")
+        directions = [
+            (
+                "food",
+                ["comida", "alimento", "restaurante", "cardapio", "menu", "pizza", "hamburguer", "sushi", "cafe", "doce", "bolo", "gastronomia", "delivery", "cozinha"],
+                DeckVisualDirection(
+                    domain="food",
+                    mood="sensorial, appetite-forward, warm editorial gastronomy",
+                    dark_bg="#1a1009",
+                    dark_divider="#3a2416",
+                    light_bg="#fff8ef",
+                    card_bg="#fffdf7",
+                    ink="#2a160b",
+                    muted="#7c6655",
+                    accent="#e86f1f",
+                    accent_2="#7a9f42",
+                    line="#ead7c4",
+                    dark_muted="#f0d6be",
+                    dark_line="#4f3320",
+                    cover_label="SABOR E EXPERIENCIA",
+                    focus_label="NO PRATO",
+                    image_style="premium food photography, natural light, appetizing composition, warm editorial restaurant aesthetic",
+                ),
+            ),
+            (
+                "animals",
+                ["animal", "animais", "cachorro", "gato", "ave", "passaro", "peixe", "cavalo", "fauna", "selvagem", "veterinaria", "pet", "zoologia", "biologia", "habitat", "especie", "especies", "onca", "felino", "mamifero", "reptil", "inseto", "biodiversidade"],
+                DeckVisualDirection(
+                    domain="animals",
+                    mood="natural, organic, field-guide clarity",
+                    dark_bg="#0d1711",
+                    dark_divider="#20382b",
+                    light_bg="#f5faf2",
+                    card_bg="#ffffff",
+                    ink="#14251a",
+                    muted="#627465",
+                    accent="#4f9f52",
+                    accent_2="#c08a2c",
+                    line="#cfe1ce",
+                    dark_muted="#c9dec9",
+                    dark_line="#2c4a37",
+                    cover_label="HABITAT E COMPORTAMENTO",
+                    focus_label="EM CAMPO",
+                    image_style="premium nature photography, habitat-aware, organic textures, documentary editorial style",
+                ),
+            ),
+            (
+                "fashion",
+                ["moda", "fashion", "roupa", "look", "beleza", "estetica", "maquiagem", "marca pessoal", "luxo", "joia", "cosmetico"],
+                DeckVisualDirection(
+                    domain="fashion",
+                    mood="elegant, editorial, high-fashion magazine",
+                    dark_bg="#120d12",
+                    dark_divider="#322332",
+                    light_bg="#fbf7f9",
+                    card_bg="#ffffff",
+                    ink="#221821",
+                    muted="#7a6877",
+                    accent="#b65c86",
+                    accent_2="#d8b36a",
+                    line="#ead9e3",
+                    dark_muted="#ead4df",
+                    dark_line="#493143",
+                    cover_label="ESTILO E DESEJO",
+                    focus_label="NO LOOK",
+                    image_style="premium fashion editorial, refined styling, magazine layout, elegant lighting, luxury visual language",
+                ),
+            ),
+            (
+                "health",
+                ["saude", "saúde", "medico", "médico", "clinica", "clínica", "hospital", "bem-estar", "fitness", "nutricao", "nutrição", "terapia"],
+                DeckVisualDirection(
+                    domain="health",
+                    mood="clean, trustworthy, calm clinical editorial",
+                    dark_bg="#071718",
+                    dark_divider="#14383b",
+                    light_bg="#f3fbfa",
+                    card_bg="#ffffff",
+                    ink="#0f2b2d",
+                    muted="#5f7778",
+                    accent="#17a7a0",
+                    accent_2="#75b86b",
+                    line="#cbe6e3",
+                    dark_muted="#c7e4e2",
+                    dark_line="#244b4f",
+                    cover_label="CUIDADO E CLAREZA",
+                    focus_label="EM CUIDADO",
+                    image_style="clean healthcare editorial, human-centered, calm light, credible medical wellness visual language",
+                ),
+            ),
+            (
+                "education",
+                ["aula", "curso", "educacao", "educação", "escola", "ensino", "professor", "aprendizagem", "treinamento", "workshop", "didatico", "didático"],
+                DeckVisualDirection(
+                    domain="education",
+                    mood="clear, didactic, modern learning system",
+                    dark_bg="#0d1426",
+                    dark_divider="#25345e",
+                    light_bg="#f6f8ff",
+                    card_bg="#ffffff",
+                    ink="#14213d",
+                    muted="#65718f",
+                    accent="#4969e8",
+                    accent_2="#f0b429",
+                    line="#d9e0fb",
+                    dark_muted="#ccd6ff",
+                    dark_line="#31427a",
+                    cover_label="TRILHA DE APRENDIZADO",
+                    focus_label="EM AULA",
+                    image_style="modern education editorial, clear diagrams, calm study environment, premium learning design",
+                ),
+            ),
+            (
+                "technology",
+                ["tecnologia", "software", "ia", "inteligencia artificial", "dados", "api", "sistema", "app", "cloud", "cyber", "seguranca", "segurança", "automacao"],
+                DeckVisualDirection(
+                    domain="technology",
+                    mood="precise, modern, systems-oriented",
+                    dark_bg="#07131b",
+                    dark_divider="#173344",
+                    light_bg="#f3f8fa",
+                    card_bg="#ffffff",
+                    ink="#102631",
+                    muted="#607681",
+                    accent="#18a4a6",
+                    accent_2="#62c370",
+                    line="#cde5e5",
+                    dark_muted="#c0dde0",
+                    dark_line="#254a59",
+                    cover_label="SISTEMA E DECISAO",
+                    focus_label="EM SISTEMA",
+                    image_style="premium technology editorial, precise interface details, subtle depth, modern systems visual language",
+                ),
+            ),
+            (
+                "business",
+                ["empresa", "negocio", "negócio", "vendas", "marketing", "financeiro", "gestao", "gestão", "estrategia", "estratégia", "produto", "startup", "mercado"],
+                DeckVisualDirection(
+                    domain="business",
+                    mood="executive, strategic, consulting-grade",
+                    dark_bg="#06120f",
+                    dark_divider="#17352d",
+                    light_bg="#f7faf4",
+                    card_bg="#ffffff",
+                    ink="#0d241c",
+                    muted="#667a70",
+                    accent="#15966f",
+                    accent_2="#d6a33d",
+                    line="#d7e7df",
+                    dark_muted="#b7cec5",
+                    dark_line="#23453d",
+                    cover_label="LEITURA DO DECK",
+                    focus_label="EM FOCO",
+                    image_style="premium consulting presentation visual language, editorial business photography, restrained executive composition",
+                ),
+            ),
+        ]
+        for _, keywords, direction in directions:
+            if any(keyword in text for keyword in keywords):
+                return direction
+        return DeckVisualDirection(
+            domain="adaptive",
+            mood="adaptive, editorial, user-intent aware",
+            dark_bg="#101114",
+            dark_divider="#2d3035",
+            light_bg="#f8f8f4",
+            card_bg="#ffffff",
+            ink="#202124",
+            muted="#6c706d",
+            accent="#5d8f6a",
+            accent_2="#b98e42",
+            line="#deded6",
+            dark_muted="#d8d8ce",
+            dark_line="#3c403d",
+            cover_label="IDEIA CENTRAL",
+            focus_label="EM CONTEXTO",
+            image_style="premium editorial presentation visual language, subject-specific, tasteful, minimal, no generic template look",
+        )
+
+    def _normalize_for_match(self, value: str) -> str:
+        normalized = value.lower()
+        replacements = {
+            "á": "a",
+            "à": "a",
+            "â": "a",
+            "ã": "a",
+            "é": "e",
+            "ê": "e",
+            "í": "i",
+            "ó": "o",
+            "ô": "o",
+            "õ": "o",
+            "ú": "u",
+            "ç": "c",
+        }
+        for old, new in replacements.items():
+            normalized = normalized.replace(old, new)
+        return normalized
+
     def _truncate_words(self, text: str, count: int) -> str:
         words = self._clean_inline_markdown(text).split()
         return "\n".join(words[:count]) if words else "Tema"
@@ -1261,9 +1736,9 @@ class DocumentService:
             compact += "..."
         return compact or text
 
-    def _pptx_add_footer_line(self, ppt_slide: Any, deck_title: str) -> None:
-        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.72, 6.92, 0.6, 0.04, self._pptx_color("#27c1cc"))
-        self._pptx_add_textbox(ppt_slide, 1.44, 6.83, 5.6, 0.22, self._compact_copy(deck_title, 8).upper(), 8, color=self._pptx_color("#7a8fa5"), bold=True)
+    def _pptx_add_footer_line(self, ppt_slide: Any, deck_title: str, direction: DeckVisualDirection) -> None:
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0.72, 6.92, 0.6, 0.04, self._pptx_color(direction.accent))
+        self._pptx_add_textbox(ppt_slide, 1.44, 6.83, 5.6, 0.22, self._compact_copy(deck_title, 8).upper(), 8, color=self._pptx_color(direction.muted), bold=True)
 
     def _pptx_visual_heading(self, slide: Slide) -> str:
         for source in [slide.body or [], slide.bullets or []]:
@@ -2661,6 +3136,13 @@ class DocumentService:
         text = re.sub(r"^(me\s+)?(gere|gerar|gera|crie|criar|fa[cç]a|fazer|monte|montar|produza|produzir)\s+", "", text, flags=re.I)
         text = re.sub(r"^(um|uma|o|a)\s+", "", text, flags=re.I)
         text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown|slide|slides|deck|pptx?|apresenta[cç][aã]o)\b", "", text, flags=re.I)
+        intent_match = re.search(
+            r"\bpara\s+(?:anunciar|divulgar|vender|promover|explicar|ensinar|apresentar)\s+(?:um|uma|o|a)?\s*(.+)$",
+            text,
+            re.I,
+        )
+        if intent_match and intent_match.group(1).strip(" .:-"):
+            return self._polish_topic_title(intent_match.group(1).strip(" .:-"))
         text = re.split(
             r"\b(citando|com|incluindo|inclua|usando|use|no estilo|em estilo|formato|de forma|para|nivel|nível)\b",
             text,
