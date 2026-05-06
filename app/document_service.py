@@ -4,6 +4,7 @@ import base64
 import re
 import shutil
 import subprocess
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,9 +16,14 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches as DocxInches, Pt, RGBColor
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
+from pptx import Presentation
+from pptx.dml.color import RGBColor as PptxRGBColor
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.util import Inches, Pt as PptxPt
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -111,10 +117,10 @@ class DocumentService:
 
         file_stem = self._filename_stem(user_request, title)
         markdown_name = self._safe_filename(file_stem, ".md")
-        html_name = self._safe_filename(file_stem, ".html")
+        pptx_name = self._safe_filename(file_stem, ".pptx")
         pdf_name = self._safe_filename(file_stem, ".pdf")
         markdown_path = folder / markdown_name
-        html_path = folder / html_name
+        pptx_path = folder / pptx_name
         pdf_path = folder / pdf_name
 
         normalized_source = self._normalize_slide_source(source_text)
@@ -128,11 +134,19 @@ class DocumentService:
         marp_markdown = self._build_marp_markdown(title, normalized_source, slide_visuals=slide_visuals)
         markdown_path.write_text(marp_markdown, encoding="utf-8")
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
-        presentation_html = self._inline_slide_assets(self._build_presentation_html(title, slides, user_request), folder)
-        html_path.write_text(presentation_html, encoding="utf-8")
-        pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
+        pptx_provider = self._build_presentation_pptx(pptx_path, title, slides, folder)
+        pdf_provider = self._build_presentation_pdf_from_pptx(pptx_path, pdf_path, slides)
 
         files: list[dict[str, Any]] = []
+        if pptx_path.exists():
+            files.append(
+                {
+                    "name": pptx_name,
+                    "path": str(pptx_path).replace("\\", "/"),
+                    "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    "download_url": f"/api/artefatos/{job_id}/{pptx_name}",
+                }
+            )
         if pdf_path.exists():
             files.append(
                 {
@@ -140,15 +154,6 @@ class DocumentService:
                     "path": str(pdf_path).replace("\\", "/"),
                     "mime_type": "application/pdf",
                     "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
-                }
-            )
-        if html_path.exists():
-            files.append(
-                {
-                    "name": html_name,
-                    "path": str(html_path).replace("\\", "/"),
-                    "mime_type": "text/html",
-                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
                 }
             )
         files.append(
@@ -160,27 +165,29 @@ class DocumentService:
             }
         )
 
-        summary = "Apresentacao profissional gerada com HTML e PDF sincronizados."
+        summary = "Apresentacao profissional gerada em PPTX."
         if slide_visuals:
-            summary = "Apresentacao profissional gerada em HTML e PDF com composicao visual e imagens IA."
-        else:
-            summary = "Apresentacao profissional gerada em HTML e PDF com layout visual personalizado."
+            summary = "Apresentacao profissional gerada em PPTX com composicao visual e imagens IA."
+        if pdf_path.exists():
+            summary += " PDF entregue junto."
         raw = (
-            f"Apresentacao gerada com sucesso: `{html_name}`, `{pdf_name}` e `{markdown_name}`."
-            " Abra o HTML para revisar o deck visual e use o PDF para entrega final."
+            f"Apresentacao gerada com sucesso: `{pptx_name}`"
+            + (f", `{pdf_name}`" if pdf_path.exists() else "")
+            + f" e `{markdown_name}`."
+            " Use o PPTX como arquivo principal de edicao e apresentacao."
         )
         if slide_visuals:
             raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
         return {
             "provider": draft.get("provider", "kimi-slides"),
-            "model": f"{draft.get('model', 'kimi-slides')} + {pdf_provider}",
+            "model": f"{draft.get('model', 'kimi-slides')} + {pptx_provider} + {pdf_provider}",
             "summary": summary,
             "raw": raw,
             "document_title": title,
             "files": files,
-            "preview_url": f"/api/artefatos/{job_id}/{html_name}" if html_path.exists() else "",
+            "preview_url": "",
             "slide_deck": True,
-            "tools_used": ["presentation-html", "playwright", "marp-cli", *(["pollinations-image"] if slide_visuals else [])],
+            "tools_used": ["python-pptx", pdf_provider, "markdown-deck", *(["pollinations-image"] if slide_visuals else [])],
         }
 
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
@@ -873,6 +880,430 @@ class DocumentService:
                 )
             )
         return slides
+
+    def _build_presentation_pptx(self, path: Path, deck_title: str, slides: list[Slide], folder: Path) -> str:
+        presentation = Presentation()
+        presentation.slide_width = Inches(13.333)
+        presentation.slide_height = Inches(7.5)
+        blank_layout = presentation.slide_layouts[6]
+        total = len(slides)
+        for index, slide in enumerate(slides):
+            ppt_slide = presentation.slides.add_slide(blank_layout)
+            self._render_pptx_slide(ppt_slide, slide, deck_title, index, total, folder)
+        presentation.save(str(path))
+        return "python-pptx"
+
+    def _build_presentation_pdf_from_pptx(self, pptx_path: Path, pdf_path: Path, slides: list[Slide]) -> str:
+        office_binary = shutil.which("soffice") or shutil.which("libreoffice")
+        if office_binary:
+            try:
+                subprocess.run(
+                    [
+                        office_binary,
+                        "--headless",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        str(pdf_path.parent),
+                        str(pptx_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
+                generated = pdf_path.parent / f"{pptx_path.stem}.pdf"
+                if generated.exists() and generated != pdf_path:
+                    generated.replace(pdf_path)
+                if pdf_path.exists():
+                    return "libreoffice-pptx"
+            except Exception:
+                pass
+        self._build_slide_pdf_with_reportlab(pdf_path, slides)
+        return "reportlab-slides"
+
+    def _render_pptx_slide(
+        self,
+        ppt_slide: Any,
+        slide: Slide,
+        deck_title: str,
+        index: int,
+        total: int,
+        folder: Path,
+    ) -> None:
+        dark = slide.layout in {"lead", "closing"}
+        bg = self._pptx_color("#123657" if dark else "#f4f8fc")
+        band = self._pptx_color("#214f7a" if dark else "#e3edf6")
+        ink = self._pptx_color("#ffffff" if dark else "#0c2848")
+        muted = self._pptx_color("#d4e2f1" if dark else "#5d738d")
+        accent = self._pptx_color("#29a6b9")
+        panel = self._pptx_color("#ffffff")
+
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 0, 0, 13.333, 7.5, bg)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, 8.95, 0, 4.383, 7.5, band)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 10.45, 0.65, 2.05, 2.05, accent, transparency=0.84)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 9.65, 4.65, 2.55, 2.55, panel, line="#ffffff", transparency=0.45)
+
+        kicker = slide.kicker or deck_title
+        self._pptx_add_textbox(ppt_slide, 0.58, 0.38, 4.7, 0.3, kicker.upper()[:72], 10, color=muted, bold=True)
+        self._pptx_add_textbox(
+            ppt_slide,
+            11.86,
+            0.38,
+            0.9,
+            0.3,
+            f"{index + 1} / {total}",
+            10,
+            color=muted,
+            bold=True,
+            align=PP_ALIGN.RIGHT,
+        )
+
+        title_size = 28 if len(slide.title) <= 28 else 24 if len(slide.title) <= 42 else 20
+        title_height = 1.55 if title_size >= 24 else 1.8
+        content_width = 6.7 if slide.layout not in {"timeline", "compare"} else 8.0
+        self._pptx_add_textbox(
+            ppt_slide,
+            0.58,
+            1.05,
+            content_width,
+            title_height,
+            slide.title,
+            title_size,
+            color=ink,
+            bold=True,
+        )
+
+        current_top = 2.2 if slide.layout == "lead" else 2.05
+        if slide.layout == "lead" and slide.body:
+            self._pptx_add_textbox(ppt_slide, 0.58, current_top, 5.7, 0.95, slide.body[0], 18, color=muted)
+            current_top += 0.92
+            self._pptx_add_chip(ppt_slide, 0.58, current_top, 2.75, 0.42, "Deck personalizado para leitura executiva", dark)
+            current_top += 0.7
+
+        if slide.layout == "agenda":
+            self._pptx_add_agenda_rows(ppt_slide, slide, 0.72, 2.0, 6.3, 4.55)
+        elif slide.layout == "metrics":
+            self._pptx_add_metric_cards(ppt_slide, slide, 0.72, 2.05, 6.25, 4.45)
+        elif slide.layout == "timeline":
+            self._pptx_add_timeline(ppt_slide, slide, 0.72, 2.05, 7.7, 4.7)
+        elif slide.layout == "compare" and slide.rows:
+            self._pptx_add_table(ppt_slide, slide.rows, 0.72, 2.15, 11.7, 3.9)
+        elif slide.layout == "highlights":
+            self._pptx_add_highlight_cards(ppt_slide, slide, 0.72, 2.05, 6.25, 4.45)
+        else:
+            items = slide.bullets or slide.body or []
+            self._pptx_add_bullets(ppt_slide, items[:4], 0.72, current_top, 6.6, 3.6, ink, accent)
+
+        if slide.layout in {"lead", "closing", "agenda", "metrics", "highlights", "section"}:
+            self._pptx_add_visual_panel(ppt_slide, slide, folder, dark)
+
+    def _pptx_add_visual_panel(self, ppt_slide: Any, slide: Slide, folder: Path, dark: bool) -> None:
+        image_added = False
+        if slide.visual:
+            image_added = self._pptx_try_add_image(ppt_slide, slide.visual, folder, 8.95, 0.92, 4.0, 5.55)
+        if image_added:
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                9.28,
+                6.0,
+                3.3,
+                0.52,
+                self._pptx_color("#ffffff"),
+                line="#ffffff",
+                transparency=0.72,
+            )
+            self._pptx_add_textbox(
+                ppt_slide,
+                9.5,
+                6.12,
+                2.9,
+                0.22,
+                "Visual editorial gerado para o tema",
+                10,
+                color=self._pptx_color("#113357"),
+                bold=True,
+                align=PP_ALIGN.CENTER,
+            )
+            return
+
+        orbit = self._pptx_add_shape(
+            ppt_slide,
+            MSO_AUTO_SHAPE_TYPE.OVAL,
+            9.35,
+            1.85,
+            3.3,
+            3.3,
+            self._pptx_color("#2c6da2"),
+            line="#7fc0d7",
+            transparency=0.88,
+        )
+        orbit.line.width = PptxPt(1.2)
+        labels = [self._split_card_item(item)[0] for item in (slide.bullets or slide.body or [])[:4]]
+        defaults = ["Visao", "Risco", "Custo", "Acao"]
+        while len(labels) < 4:
+            labels.append(defaults[len(labels)])
+        positions = [(10.55, 1.5), (11.95, 3.15), (10.55, 4.9), (9.15, 3.15)]
+        for label, (x_pos, y_pos) in zip(labels[:4], positions, strict=False):
+            self._pptx_add_chip(ppt_slide, x_pos, y_pos, 1.25, 0.42, label[:24], dark)
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, 10.36, 2.82, 1.22, 1.22, self._pptx_color("#ffffff"))
+        self._pptx_add_textbox(
+            ppt_slide,
+            10.5,
+            3.08,
+            0.95,
+            0.55,
+            self._truncate_words(slide.title, 4),
+            12,
+            color=self._pptx_color("#15385e"),
+            bold=True,
+            align=PP_ALIGN.CENTER,
+        )
+
+    def _pptx_try_add_image(self, ppt_slide: Any, visual: str, folder: Path, left: float, top: float, width: float, height: float) -> bool:
+        try:
+            if visual.startswith(("http://", "https://")):
+                with httpx.Client(timeout=90, follow_redirects=True) as client:
+                    response = client.get(visual)
+                    response.raise_for_status()
+                image_stream = BytesIO(response.content)
+                ppt_slide.shapes.add_picture(image_stream, Inches(left), Inches(top), Inches(width), Inches(height))
+                return True
+            if visual.startswith("data:") and "," in visual:
+                encoded = visual.split(",", 1)[1]
+                ppt_slide.shapes.add_picture(BytesIO(base64.b64decode(encoded)), Inches(left), Inches(top), Inches(width), Inches(height))
+                return True
+            local_path = (folder / visual).resolve() if not Path(visual).is_absolute() else Path(visual)
+            if local_path.exists():
+                ppt_slide.shapes.add_picture(str(local_path), Inches(left), Inches(top), Inches(width), Inches(height))
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _pptx_add_agenda_rows(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+        items = slide.bullets or slide.body or []
+        row_height = min(0.88, height / max(1, min(len(items), 5)))
+        for index, item in enumerate(items[:5], start=1):
+            row_top = top + (index - 1) * (row_height + 0.12)
+            shape = self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                left,
+                row_top,
+                width,
+                row_height,
+                self._pptx_color("#ffffff"),
+                line="#d7e2ed",
+            )
+            shape.shadow.inherit = False
+            label, detail = self._split_agenda_item(item)
+            self._pptx_add_textbox(ppt_slide, left + 0.18, row_top + 0.18, 0.62, 0.32, f"{index:02d}", 12, color=self._pptx_color("#1f5ea8"), bold=True)
+            self._pptx_add_textbox(ppt_slide, left + 0.9, row_top + 0.13, width - 1.0, 0.26, label, 18, color=self._pptx_color("#123657"), bold=True)
+            self._pptx_add_textbox(ppt_slide, left + 0.9, row_top + 0.45, width - 1.0, 0.22, detail, 12, color=self._pptx_color("#5d738d"))
+
+    def _pptx_add_metric_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+        cards = (slide.bullets or slide.body or [])[:4]
+        card_width = (width - 0.18) / 2
+        card_height = (height - 0.18) / 2
+        for index, item in enumerate(cards):
+            col = index % 2
+            row = index // 2
+            card_left = left + col * (card_width + 0.18)
+            card_top = top + row * (card_height + 0.18)
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                card_left,
+                card_top,
+                card_width,
+                card_height,
+                self._pptx_color("#ffffff"),
+                line="#d7e2ed",
+            )
+            label, value, detail = self._parse_metric_bullet(f"- {item}")
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.18, card_width - 0.4, 0.22, label.upper()[:28], 10, color=self._pptx_color("#1f5ea8"), bold=True)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.48, card_width - 0.4, 0.48, value, 24, color=self._pptx_color("#123657"), bold=True)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 1.02, card_width - 0.4, 0.45, detail or label, 12, color=self._pptx_color("#5d738d"))
+
+    def _pptx_add_highlight_cards(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+        cards = (slide.bullets or slide.body or [])[:4]
+        card_width = (width - 0.2) / 2
+        card_height = (height - 0.2) / 2
+        for index, item in enumerate(cards):
+            col = index % 2
+            row = index // 2
+            card_left = left + col * (card_width + 0.2)
+            card_top = top + row * (card_height + 0.2)
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                card_left,
+                card_top,
+                card_width,
+                card_height,
+                self._pptx_color("#ffffff"),
+                line="#d7e2ed",
+            )
+            label, detail = self._split_card_item(item)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.18, card_width - 0.4, 0.26, label.upper()[:32], 10, color=self._pptx_color("#1f5ea8"), bold=True)
+            self._pptx_add_textbox(ppt_slide, card_left + 0.22, card_top + 0.46, card_width - 0.4, 0.62, detail or label, 16, color=self._pptx_color("#123657"), bold=True)
+            self._pptx_add_textbox(
+                ppt_slide,
+                card_left + 0.22,
+                card_top + 1.18,
+                card_width - 0.4,
+                0.45,
+                self._short_support_copy(detail or label),
+                11,
+                color=self._pptx_color("#5d738d"),
+            )
+
+    def _pptx_add_timeline(self, ppt_slide: Any, slide: Slide, left: float, top: float, width: float, height: float) -> None:
+        steps = (slide.bullets or slide.body or [])[:5]
+        if not steps:
+            return
+        self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.RECTANGLE, left + 0.34, top + 0.12, 0.04, height - 0.32, self._pptx_color("#29a6b9"))
+        step_gap = min(0.18, height / max(5, len(steps) + 1))
+        block_height = (height - step_gap * (len(steps) - 1)) / len(steps)
+        for index, item in enumerate(steps, start=1):
+            block_top = top + (index - 1) * (block_height + step_gap)
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, left + 0.1, block_top + 0.15, 0.34, 0.34, self._pptx_color("#29a6b9"))
+            self._pptx_add_shape(
+                ppt_slide,
+                MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+                left + 0.68,
+                block_top,
+                width - 0.68,
+                block_height,
+                self._pptx_color("#ffffff"),
+                line="#d7e2ed",
+            )
+            self._pptx_add_textbox(ppt_slide, left + 0.85, block_top + 0.18, 0.45, 0.24, f"{index:02d}", 10, color=self._pptx_color("#1f5ea8"), bold=True)
+            self._pptx_add_textbox(ppt_slide, left + 1.38, block_top + 0.14, width - 1.6, block_height - 0.22, item, 15, color=self._pptx_color("#123657"), bold=True)
+
+    def _pptx_add_table(self, ppt_slide: Any, rows: list[list[str]], left: float, top: float, width: float, height: float) -> None:
+        if not rows:
+            return
+        cols = max(len(row) for row in rows)
+        table = ppt_slide.shapes.add_table(len(rows), cols, Inches(left), Inches(top), Inches(width), Inches(height)).table
+        for row_index, row in enumerate(rows):
+            for col_index in range(cols):
+                cell = table.cell(row_index, col_index)
+                text = row[col_index] if col_index < len(row) else ""
+                cell.text = text
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = self._pptx_color("#123657" if row_index == 0 else "#ffffff")
+                cell.text_frame.word_wrap = True
+                for paragraph in cell.text_frame.paragraphs:
+                    paragraph.alignment = PP_ALIGN.LEFT
+                    for run in paragraph.runs:
+                        run.font.size = PptxPt(12 if row_index == 0 else 11)
+                        run.font.bold = row_index == 0
+                        run.font.color.rgb = self._pptx_color("#ffffff" if row_index == 0 else "#15385e")
+
+    def _pptx_add_bullets(
+        self,
+        ppt_slide: Any,
+        items: list[str],
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+        ink: PptxRGBColor,
+        accent: PptxRGBColor,
+    ) -> None:
+        if not items:
+            return
+        for index, item in enumerate(items[:4]):
+            y_pos = top + index * 0.78
+            self._pptx_add_shape(ppt_slide, MSO_AUTO_SHAPE_TYPE.OVAL, left, y_pos + 0.09, 0.12, 0.12, accent)
+            self._pptx_add_textbox(ppt_slide, left + 0.24, y_pos, width - 0.24, min(height, 0.58), item, 16, color=ink)
+
+    def _pptx_add_chip(self, ppt_slide: Any, left: float, top: float, width: float, height: float, text: str, dark: bool) -> None:
+        fill = "#34597d" if dark else "#e6eef6"
+        font = "#ffffff" if dark else "#143458"
+        self._pptx_add_shape(
+            ppt_slide,
+            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+            left,
+            top,
+            width,
+            height,
+            self._pptx_color(fill),
+            line=fill,
+            transparency=0.1 if dark else 0.0,
+        )
+        self._pptx_add_textbox(
+            ppt_slide,
+            left + 0.08,
+            top + 0.09,
+            width - 0.16,
+            height - 0.08,
+            text,
+            10,
+            color=self._pptx_color(font),
+            bold=True,
+            align=PP_ALIGN.CENTER,
+        )
+
+    def _pptx_add_shape(
+        self,
+        ppt_slide: Any,
+        shape_type: Any,
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+        fill_color: PptxRGBColor,
+        line: str | None = None,
+        transparency: float = 0.0,
+    ) -> Any:
+        shape = ppt_slide.shapes.add_shape(shape_type, Inches(left), Inches(top), Inches(width), Inches(height))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = fill_color
+        if transparency:
+            shape.fill.transparency = max(0.0, min(transparency, 1.0))
+        if line is None:
+            shape.line.fill.background()
+        else:
+            shape.line.color.rgb = self._pptx_color(line)
+        return shape
+
+    def _pptx_add_textbox(
+        self,
+        ppt_slide: Any,
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+        text: str,
+        font_size: float,
+        color: PptxRGBColor,
+        bold: bool = False,
+        align: PP_ALIGN = PP_ALIGN.LEFT,
+    ) -> None:
+        textbox = ppt_slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        frame = textbox.text_frame
+        frame.clear()
+        frame.word_wrap = True
+        frame.vertical_anchor = MSO_ANCHOR.TOP
+        paragraph = frame.paragraphs[0]
+        paragraph.alignment = align
+        run = paragraph.add_run()
+        run.text = text
+        run.font.size = PptxPt(font_size)
+        run.font.bold = bold
+        run.font.color.rgb = color
+
+    def _pptx_color(self, value: str) -> PptxRGBColor:
+        normalized = value.strip().lstrip("#")
+        return PptxRGBColor(int(normalized[0:2], 16), int(normalized[2:4], 16), int(normalized[4:6], 16))
+
+    def _truncate_words(self, text: str, count: int) -> str:
+        words = self._clean_inline_markdown(text).split()
+        return "\n".join(words[:count]) if words else "Tema"
 
     def _humanize_slide_title(self, raw_title: str, index: int, deck_title: str) -> str:
         cleaned = self._clean_inline_markdown(re.sub(r"^#{1,3}\s*", "", raw_title or "")).strip()
@@ -2358,10 +2789,10 @@ class DocumentService:
     def _build_docx(self, path: Path, title: str, blocks: list[Block], user_request: str) -> None:
         doc = Document()
         section = doc.sections[0]
-        section.top_margin = Inches(1)
-        section.bottom_margin = Inches(1)
-        section.left_margin = Inches(1)
-        section.right_margin = Inches(1)
+        section.top_margin = DocxInches(1)
+        section.bottom_margin = DocxInches(1)
+        section.left_margin = DocxInches(1)
+        section.right_margin = DocxInches(1)
 
         self._configure_styles(doc)
         self._configure_header(section, title)

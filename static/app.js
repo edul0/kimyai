@@ -536,10 +536,14 @@ function prioritizeFiles(files) {
 function filePriority(file) {
   const mime = String(file?.mime_type || "").toLowerCase();
   const name = String(file?.name || "").toLowerCase();
-  if (mime === "text/html" || name.endsWith(".html")) return 0;
+  if (
+    mime === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    name.endsWith(".pptx")
+  ) return 0;
   if (mime === "application/pdf" || name.endsWith(".pdf")) return 1;
   if (mime.includes("word") || name.endsWith(".docx")) return 2;
   if (mime === "text/markdown" || name.endsWith(".md")) return 3;
+  if (mime === "text/html" || name.endsWith(".html")) return 4;
   return 10;
 }
 
