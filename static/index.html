@@ -3,26 +3,117 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kimi AI</title>
+    <title>Kemy AI Workspace</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    
+    <!-- UI Fixes e Componentes Nativos (Injetado para blindar o design) -->
+    <style>
+      /* Padronização de botões secundários */
+      .secondary-btn, .glass-select {
+        background: var(--surface-2);
+        border: 1px solid var(--line-strong);
+        padding: 8px 16px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        color: var(--ink-strong);
+        transition: all 0.2s ease;
+        font-family: inherit;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      .secondary-btn:hover, .glass-select:hover {
+        background: var(--surface);
+        border-color: var(--accent);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow);
+      }
+      
+      /* Dropdown blindado contra o estilo do Windows */
+      .glass-select {
+        appearance: none;
+        padding-right: 36px;
+        background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        background-size: 14px;
+        color: var(--ink-strong);
+      }
+      .glass-select:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      /* Painel do Agente / Timeline de Execução */
+      .agent-progress {
+        max-width: 840px;
+        width: 100%;
+        margin: 0 auto 32px auto;
+        padding: 16px 24px;
+        background: var(--surface-2);
+        border-radius: var(--radius-md);
+        border: 1px dashed var(--line-strong);
+        font-size: 14px;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+      }
+      .progress-head {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 12px;
+        color: var(--ink-strong);
+      }
+      #jobBadge {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .timeline { list-style: none; padding: 0; margin: 0; color: var(--muted); }
+      .timeline li { display: flex; gap: 10px; align-items: center; font-size: 13px;}
+      .timeline li::before { content: ''; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; display: inline-block;}
+      
+      /* Status Pill (Ex: Online) */
+      .status-pill {
+        display: inline-block;
+        background: var(--success);
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+        box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+      }
+
+      /* Refinamento da Sidebar */
+      .sidebar-note { font-size: 13px; color: var(--muted); margin-top: 16px; line-height: 1.5; }
+      .task-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; letter-spacing: 0.05em;}
+      .sidebar-top { margin-bottom: 32px; display: flex; flex-direction: column; gap: 8px; }
+    </style>
   </head>
   <body>
+    <!-- Botão de Tema Flutuante -->
     <button id="themeToggle" class="theme-toggle" aria-label="Alternar tema" title="Alternar tema">
       <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.64 5.64 4.22 4.22M19.78 19.78l-1.42-1.42M18.36 5.64l1.42-1.42M4.22 19.78l1.42-1.42" />
         <circle cx="12" cy="12" r="4" />
       </svg>
-      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+      <svg class="icon-moon hidden" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M20.2 14.8A8.6 8.6 0 0 1 9.2 3.8 8.7 8.7 0 1 0 20.2 14.8Z" />
       </svg>
     </button>
 
+    <!-- TELA DE LOGIN -->
     <section id="loginView" class="login-view">
       <div class="login-shell">
         <form id="authForm" class="login-card">
-          <div class="auth-brand">
-            <span class="brand-logo">K</span>
-            <button type="button" id="authModeBtn">Criar conta</button>
+          <div class="auth-brand" style="display: flex; justify-content: space-between; margin-bottom: 24px;">
+            <span class="brand-symbol">K</span>
+            <button type="button" id="authModeBtn" class="secondary-btn">Criar conta</button>
           </div>
           <h1 id="authTitle">Entrar na Kemy</h1>
           <p id="authSubtitle">Use email e senha para acessar suas conversas, tarefas e memoria do workspace.</p>
@@ -40,12 +131,12 @@
             <input id="loginPass" type="password" autocomplete="current-password" placeholder="Minimo 8 caracteres" />
           </label>
 
-          <button id="authSubmit" type="submit">Entrar</button>
-          <small id="loginError"></small>
+          <button id="authSubmit" type="submit">Entrar no Workspace</button>
+          <small id="loginError" style="color: var(--danger); margin-top: 12px; display: block;"></small>
         </form>
 
         <aside class="login-proof">
-          <span>Workspace persistente</span>
+          <span style="color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700;">Workspace Persistente</span>
           <h2>Conversas, tarefas e documentos no mesmo lugar.</h2>
           <ul>
             <li>Cada tarefa vira uma conversa separada na lateral.</li>
@@ -56,122 +147,128 @@
       </div>
     </section>
 
+    <!-- WORKSPACE PRINCIPAL -->
     <main id="appView" class="app hidden">
       <header class="home-nav">
         <a class="nav-brand" href="/" aria-label="Kemy home">
           <span class="brand-symbol">K</span>
           <strong>kemy</strong>
         </a>
-        <div class="nav-actions">
-          <button id="systemToggle" type="button">Sistema</button>
-          <button id="logoutBtn" type="button">Sair</button>
+        <div class="nav-actions" style="display: flex; gap: 8px;">
+          <button id="systemToggle" class="secondary-btn" type="button">Sistema</button>
+          <button id="logoutBtn" class="secondary-btn" type="button">Sair</button>
         </div>
       </header>
 
+      <!-- VIEW INICIAL (HOME) -->
       <section id="homeView" class="home-view">
         <section class="hero-composer home-minimal" aria-label="Nova tarefa">
           <div class="home-minimal-copy">
             <h1>No que vamos trabalhar?</h1>
-            <p>Uma nova tarefa abre uma nova conversa. Para continuar outra, use as conversas salvas.</p>
+            <p>Uma nova tarefa abre uma nova conversa. Para continuar outra, use as conversas salvas na barra lateral.</p>
           </div>
 
           <div class="home-command-deck home-composer-shell">
             <div class="hero-input">
-              <textarea id="homePrompt" spellcheck="true" placeholder="Descreva a nova tarefa que voce quer abrir"></textarea>
+              <textarea id="homePrompt" spellcheck="true" placeholder="Descreva a nova tarefa que voce quer abrir..."></textarea>
               <input id="homeFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
               <div id="homeAttachments" class="attachment-list hidden"></div>
-              <p class="composer-hint">Enter quebra linha. Ctrl+Enter ou Cmd+Enter cria a tarefa.</p>
               <div class="hero-actions">
-                <button id="homeAttachBtn" type="button" title="Adicionar anexos">+</button>
-                <button id="homeRunBtn" type="button" aria-label="Criar nova tarefa">Criar tarefa</button>
+                <button id="homeAttachBtn" class="secondary-btn" type="button" title="Adicionar anexos">+ Arquivo</button>
+                <button id="homeRunBtn" type="button" aria-label="Criar nova tarefa">Criar Tarefa</button>
               </div>
-            </div>
-            <div class="home-secondary-actions">
-              <button id="openSessionsBtn" class="home-sessions-link" type="button">Abrir conversas salvas</button>
-              <span class="home-secondary-copy">Documentos, imagens e coding no mesmo workspace.</span>
             </div>
           </div>
         </section>
       </section>
 
+      <!-- VIEW DE CHAT E TAREFAS -->
       <section id="chatView" class="chat-view hidden">
+        
+        <!-- BARRA LATERAL -->
         <aside class="task-sidebar">
           <div class="sidebar-top">
-            <button id="newSessionBtn" class="new-task" type="button">Nova tarefa</button>
-            <button id="backHomeBtn" class="side-link" type="button">Inicio</button>
+            <button id="newSessionBtn" class="new-task" type="button">Nova Tarefa</button>
+            <button id="backHomeBtn" class="secondary-btn" type="button" style="width: 100%;">Voltar ao Início</button>
             <p class="sidebar-note">Cada tarefa fica separada. Abra uma conversa antiga para continuar daquele ponto.</p>
           </div>
 
           <div class="task-head">
-            <span>Todas as tarefas</span>
-            <button id="refreshSessionsBtn" type="button" aria-label="Atualizar tarefas">Atualizar</button>
+            <span>Suas Tarefas</span>
+            <button id="refreshSessionsBtn" class="secondary-btn" type="button" aria-label="Atualizar tarefas" style="padding: 4px 8px; font-size: 11px;">Atualizar</button>
           </div>
           <div id="sessionList" class="session-list"></div>
         </aside>
 
+        <!-- ÁREA DE CONVERSA -->
         <section class="conversation">
           <div class="conversation-head">
             <div>
               <span id="apiPill" class="status-pill">Online</span>
               <h2 id="sessionTitle">Nova conversa</h2>
             </div>
-            <div class="conversation-actions">
-              <select id="mode" aria-label="Modo da tarefa">
+            <div class="conversation-actions" style="display: flex; gap: 12px; align-items: center;">
+              <select id="mode" class="glass-select" aria-label="Modo da tarefa">
                 <option value="coding">Auto / Coding</option>
                 <option value="site">Site</option>
-                <option value="documento">Documento</option>
+                <option value="documento">Documentos</option>
                 <option value="imagem">Imagem</option>
                 <option value="auditoria">Auditoria</option>
                 <option value="planejamento">Planejamento</option>
               </select>
-              <button id="copyBtn" type="button">Copiar ultima</button>
+              <button id="copyBtn" class="secondary-btn" type="button">Copiar Código</button>
             </div>
           </div>
 
-          <div id="chatLog" class="messages" aria-live="polite"></div>
-
+          <!-- MOTOR DE EXECUÇÃO / TIMELINE -->
           <section class="agent-progress" aria-label="Progresso dos agentes">
             <div class="progress-head">
-              <strong>Kemy</strong>
-              <span id="jobBadge">pronta</span>
+              <strong>Motor de Raciocínio Kemy</strong>
+              <span id="jobBadge">Status: Aguardando</span>
             </div>
-            <div class="progress"><span id="progressBar"></span></div>
             <ol id="timeline" class="timeline">
-              <li><span></span><p>Aguardando sua mensagem.</p></li>
+              <li><p>Sistema inicializado. Aguardando primeira instrução.</p></li>
             </ol>
           </section>
 
+          <!-- LOG DE MENSAGENS -->
+          <div id="chatLog" class="messages" aria-live="polite"></div>
+
+          <!-- COMPOSER FLUTUANTE -->
           <form id="chatForm" class="chat-composer">
-            <textarea id="prompt" spellcheck="true" placeholder="Enviar mensagem para Kemy"></textarea>
+            <textarea id="prompt" spellcheck="true" placeholder="Instrua a Kemy ou envie um feedback..."></textarea>
             <input id="chatFileInput" type="file" class="hidden" multiple accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.csv,.log,.yml,.yaml,.doc,.docx,.pdf,image/*" />
             <div id="chatAttachments" class="attachment-list hidden"></div>
-            <p class="composer-hint">Enter quebra linha. Ctrl+Enter ou Cmd+Enter envia.</p>
+            
             <div class="composer-actions">
-              <button id="plusBtn" type="button" title="Adicionar contexto">+</button>
-              <button id="voiceBtn" type="button" title="Voz entra na proxima etapa">Voz</button>
+              <div style="display: flex; gap: 8px;">
+                <button id="plusBtn" class="secondary-btn" type="button" title="Adicionar contexto">+ Contexto</button>
+                <button id="voiceBtn" class="secondary-btn" type="button" title="Ditar comando">🎤 Voz</button>
+              </div>
               <button id="runBtn" type="submit" aria-label="Enviar">Enviar</button>
             </div>
           </form>
         </section>
 
+        <!-- PAINEL DE PREVIEW DE SITES (Oculto por padrão) -->
         <aside id="previewPanel" class="preview-panel hidden">
           <div class="preview-head">
-            <strong>Live preview</strong>
-            <button id="closePreviewBtn" type="button">Fechar</button>
+            <strong>Live Preview</strong>
+            <button id="closePreviewBtn" class="secondary-btn" type="button">Fechar</button>
           </div>
-          <iframe id="previewFrame" title="Preview do site gerado"></iframe>
+          <iframe id="previewFrame" title="Preview do site gerado" style="width: 100%; height: 100%; border: none;"></iframe>
         </aside>
       </section>
 
+      <!-- DIALOG DO SISTEMA (Para debug e status da API) -->
       <dialog id="systemDialog">
-        <div class="dialog-head">
-          <h2>Sistema</h2>
-          <button id="systemClose" type="button">Fechar</button>
+        <div class="dialog-head" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+          <h2 style="font-size: 20px; font-weight: 700;">Status do Sistema</h2>
+          <button id="systemClose" class="secondary-btn" type="button">Fechar</button>
         </div>
-        <dl id="statusList">
-          <div><dt>API</dt><dd>carregando</dd></div>
-          <div><dt>Storage</dt><dd>-</dd></div>
-          <div><dt>Modo</dt><dd>-</dd></div>
+        <dl id="statusList" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+          <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">Conexão API</dt><dd style="font-weight: 600; margin-top: 4px;">Carregando...</dd></div>
+          <div style="background: var(--surface-2); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);"><dt style="font-size: 12px; color: var(--muted); text-transform: uppercase;">Storage Supabase</dt><dd style="font-weight: 600; margin-top: 4px;">Pronto</dd></div>
         </dl>
         <div id="sessionInsights" class="session-insights"></div>
         <div id="toolStatus" class="tool-status"></div>
@@ -179,5 +276,22 @@
     </main>
 
     <script src="/static/app.js"></script>
+    <script>
+      // Pequeno script para alternar os icones de sol e lua do botão de tema já que injetei no HTML novo
+      const themeToggle = document.getElementById('themeToggle');
+      const sunIcon = document.querySelector('.icon-sun');
+      const moonIcon = document.querySelector('.icon-moon');
+      
+      themeToggle.addEventListener('click', () => {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+          sunIcon.classList.remove('hidden');
+          moonIcon.classList.add('hidden');
+        } else {
+          sunIcon.classList.add('hidden');
+          moonIcon.classList.remove('hidden');
+        }
+      });
+    </script>
   </body>
 </html>
