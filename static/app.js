@@ -536,6 +536,7 @@ function appendResult(result, fallbackText) {
           <div class="file-actions">
             ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn">Download ${escapeHtml(file.name)}</a>`).join("")}
           </div>
+          ${renderCodeFileTable(downloadableFiles)}
           ${fallbackText ? parseMarkdown(fallbackText) : ""}
         </div>
       `;
@@ -592,6 +593,34 @@ function filePriority(file) {
   if (mime === "text/markdown" || name.endsWith(".md")) return 3;
   if (mime === "text/html" || name.endsWith(".html")) return 4;
   return 10;
+}
+
+function renderCodeFileTable(files) {
+  const codeFiles = (files || []).filter((file) => file.content);
+  if (!codeFiles.length) return "";
+  return `
+    <div class="code-file-table" aria-label="Arquivos de codigo gerados">
+      <div class="code-file-table-head">
+        <span>Arquivos do projeto</span>
+        <small>${codeFiles.length} arquivo(s) com codigo visivel</small>
+      </div>
+      ${codeFiles.map((file, index) => `
+        <details class="code-file-row" ${index === 0 ? "open" : ""}>
+          <summary>
+            <span class="code-file-path">${escapeHtml(file.relative_path || file.name)}</span>
+            <span class="code-file-lang">${escapeHtml(file.language || inferLanguage(file.name))}</span>
+          </summary>
+          <pre><code>${escapeHtml(file.content)}</code></pre>
+        </details>
+      `).join("")}
+    </div>
+  `;
+}
+
+function inferLanguage(name) {
+  const suffix = String(name || "").split(".").pop()?.toLowerCase() || "text";
+  const map = { js: "javascript", ts: "typescript", jsx: "jsx", tsx: "tsx", md: "markdown" };
+  return map[suffix] || suffix;
 }
 
 function titleFromPrompt(text) {

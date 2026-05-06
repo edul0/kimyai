@@ -229,6 +229,17 @@ def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str,
         if is_slide_request
         else ""
     )
+    site_quality = (
+        "- Se for site/app/dashboard/SaaS/CRUD, agir como full-stack senior + designer de produto.\n"
+        "- Fluxo obrigatorio: objetivo -> publico -> telas -> funcionalidades -> estilo visual -> dados simulados -> estrutura -> codigo -> preview.\n"
+        "- Usar React + Vite + TypeScript + Tailwind por padrao em sistemas; HTML/CSS/JS apenas para projetos simples.\n"
+        "- Entregar codigo real, completo e executavel, sem comentarios de trecho faltante, sem APIs pagas e com dados mockados/localStorage quando necessario.\n"
+        "- Incluir `preview.html` self-contained para iframe da Kemy e tambem arquivos reais do projeto Vite quando aplicavel.\n"
+        "- Incluir `README.md` com `npm install`, `npm run dev`, URL `http://localhost:5173` e como testar.\n"
+        "- Qualidade visual minima: layout moderno, responsivo, cards, icones, hover, microinteracoes, hierarquia forte, paleta coerente e nada de tela branca crua.\n"
+        if mode == "site"
+        else ""
+    )
     return (
         "## Objetivo\n"
         f"- Resolver o pedido em modo `{mode}` sem perder o foco no resultado final.\n\n"
@@ -242,6 +253,7 @@ def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str,
         "## Criterios de qualidade\n"
         "- Saida final consistente, especifica e testavel.\n\n"
         f"{slide_quality}"
+        f"{site_quality}"
         "## Proximo passo do orquestrador\n"
         "- Planejar a execucao, escolher o motor e produzir a entrega final.\n"
     )

@@ -183,24 +183,33 @@ class JobManager:
         files: list[dict[str, Any]] = []
         preview_url = ""
         for artifact in parsed.files:
-            safe_name = Path(artifact.path).name or "index.html"
+            original_path = artifact.path.replace("\\", "/").strip().lstrip("/")
+            safe_name = original_path.replace("/", "__") or "index.html"
             target = folder / safe_name
             target.write_text(artifact.content, encoding="utf-8")
             mime_type = "text/plain"
             if safe_name.endswith(".html"):
                 mime_type = "text/html"
-                if not preview_url:
+                if not preview_url or safe_name.lower().endswith("preview.html"):
                     preview_url = f"/api/artefatos/{job.job_id}/{safe_name}"
             elif safe_name.endswith(".js"):
                 mime_type = "application/javascript"
             elif safe_name.endswith(".css"):
                 mime_type = "text/css"
+            elif safe_name.endswith(".json"):
+                mime_type = "application/json"
+            elif safe_name.endswith(".md"):
+                mime_type = "text/markdown"
+            language = self._artifact_language(original_path)
             files.append(
                 {
                     "name": safe_name,
+                    "relative_path": original_path,
                     "path": str(target).replace("\\", "/"),
                     "mime_type": mime_type,
                     "download_url": f"/api/artefatos/{job.job_id}/{safe_name}",
+                    "content": artifact.content[:120000],
+                    "language": language,
                 }
             )
         result = dict(result)
@@ -215,6 +224,22 @@ class JobManager:
             used.append("kemy-artifact")
         result["tools_used"] = used
         return result
+
+    def _artifact_language(self, path: str) -> str:
+        suffix = Path(path).suffix.lower().lstrip(".")
+        mapping = {
+            "html": "html",
+            "css": "css",
+            "js": "javascript",
+            "jsx": "jsx",
+            "ts": "typescript",
+            "tsx": "tsx",
+            "json": "json",
+            "md": "markdown",
+            "yml": "yaml",
+            "yaml": "yaml",
+        }
+        return mapping.get(suffix, suffix or "text")
 
     def _event(self, job: JobState, agente: str, msg: str, progresso: int) -> None:
         job.status = "running"
