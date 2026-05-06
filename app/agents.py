@@ -158,11 +158,26 @@ def build_prompt_refiner_prompt(
     history: list[dict[str, Any]] | None = None,
     compact_context: dict[str, Any] | None = None,
 ) -> str:
+    is_slide_request = mode == "documento" and any(
+        marker in message.lower()
+        for marker in ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao"]
+    )
     recent = history[-4:] if history else []
     history_text = "\n".join(
         f"- {item.get('role', 'usuario')}: {str(item.get('content') or '')[:400]}"
         for item in recent
         if item.get("content")
+    )
+    slide_rules = (
+        "\nRegras extras para slides PPTX:\n"
+        "- Transforme o pedido em uma narrativa de consultoria, nao em um resumo escolar.\n"
+        "- Defina uma promessa clara para a capa: controle, risco, economia, crescimento ou decisao.\n"
+        "- Exija titulos de ate 6 palavras e bullets de ate 12 palavras.\n"
+        "- Proiba frases genericas como `visual executivo`, `visao geral` sem contexto, `deck personalizado` e repeticao do titulo.\n"
+        "- Peça agenda com itens de 2 a 4 palavras, metricas com valor explicito e fechamento com acao de 30/60/90 dias.\n"
+        "- O resultado deve sair pronto para PPTX, com texto curto, contrastes claros e ritmo de apresentacao premium.\n"
+        if is_slide_request
+        else ""
     )
     return (
         "Voce e Kemy Spec, a fazedora de prompts da Kemy AI.\n"
@@ -176,6 +191,7 @@ def build_prompt_refiner_prompt(
         "## Criterios de qualidade\n"
         "## Proximo passo do orquestrador\n"
         "Nao escreva codigo. Nao execute nada. Nao converse com o usuario. Apenas refine o pedido.\n\n"
+        f"{slide_rules}\n"
         f"Modo alvo: {mode}\n"
         f"Contexto compacto:\n{context_to_prompt(compact_context)}\n\n"
         f"Historico recente:\n{history_text or '- sem historico'}\n\n"
@@ -184,6 +200,17 @@ def build_prompt_refiner_prompt(
 
 
 def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str, Any] | None = None) -> str:
+    is_slide_request = mode == "documento" and any(
+        marker in message.lower()
+        for marker in ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao"]
+    )
+    slide_quality = (
+        "- Se for PPTX, gerar narrativa premium com capa forte, agenda curta, insights, metricas e fechamento acionavel.\n"
+        "- Evitar texto generico, frases longas, repeticao de titulo e linguagem escolar.\n"
+        "- Priorizar frases curtas, hierarquia clara e conteudo que caiba em cards de apresentacao.\n"
+        if is_slide_request
+        else ""
+    )
     return (
         "## Objetivo\n"
         f"- Resolver o pedido em modo `{mode}` sem perder o foco no resultado final.\n\n"
@@ -196,6 +223,7 @@ def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str,
         f"- Contexto aprendido: {context_to_prompt(compact_context)}\n\n"
         "## Criterios de qualidade\n"
         "- Saida final consistente, especifica e testavel.\n\n"
+        f"{slide_quality}"
         "## Proximo passo do orquestrador\n"
         "- Planejar a execucao, escolher o motor e produzir a entrega final.\n"
     )

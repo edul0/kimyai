@@ -573,80 +573,78 @@ class DocumentService:
     def _fallback_slide_deck_text(self, user_request: str, title: str) -> str:
         topic = self._clean_inline_markdown(self._extract_topic(user_request) or title)
         lowered = user_request.lower()
-        wants_iso = any(token in lowered for token in ["iso", "norma", "normas", "certificacao", "certificação"])
-        wants_steps = any(token in lowered for token in ["roadmap", "passos", "plano", "implementacao", "implementação"])
-        wants_images = any(token in lowered for token in ["imagem", "visual", "ilustrado", "premium", "gamma", "canva"])
+        wants_iso = any(token in lowered for token in ["iso", "norma", "normas", "certificacao", "certifica"])
+        wants_steps = any(token in lowered for token in ["roadmap", "passos", "plano", "implementacao"])
         standards = [
-            "ISO 55001 - sistema de gestao de ativos e governanca do ciclo de vida",
-            "ISO/IEC 19770 - gestao de ativos de TI, inventario, licencas e conformidade",
-            "ISO/IEC 27001 - seguranca da informacao aplicada a ativos criticos",
-            "ISO/IEC 20000-1 - gestao de servicos de TI conectada a catalogo e suporte",
+            "ISO 55001 - governanca do ciclo de vida",
+            "ISO/IEC 19770 - inventario, licencas e conformidade",
+            "ISO/IEC 27001 - seguranca aplicada a ativos criticos",
+            "ISO/IEC 20000-1 - servicos conectados ao catalogo",
         ]
         standards_slide = "\n".join(f"- {item}" for item in standards)
         general_references = "\n".join(
             [
-                "- Boas praticas de gestao de ativos orientadas a ciclo de vida",
-                "- Controles de seguranca e conformidade para ativos criticos",
-                "- Governanca de servicos e processos para TI operacional",
-                "- Metricas executivas para custo, risco, disponibilidade e uso",
+                "- Ciclo de vida - entrada, uso, renovacao e descarte",
+                "- Controles criticos - dono, risco e evidencias",
+                "- Governanca operacional - regras, excecoes e auditoria",
+                "- Metricas executivas - custo, risco e disponibilidade",
             ]
         )
         references_slide = standards_slide if wants_iso else general_references
-        visual_note = "visual executivo com imagens e diagramas" if wants_images else "visual executivo com hierarquia clara"
-        roadmap_title = "Roadmap de implementacao" if wants_steps else "Modelo operacional"
+        roadmap_title = "Execucao em 90 dias" if wants_steps else "Modelo de controle"
         return f"""# {topic}
-## {visual_note.capitalize()} para decisao e apresentacao
+## Controle, risco e valor em uma base unica
 
 ---
 
-## O problema que precisa ser resolvido
-- Inventarios incompletos reduzem visibilidade sobre hardware, software e contratos
-- Custos crescem quando licencas, garantias e ativos ociosos nao sao reconciliados
-- Riscos de seguranca aumentam quando ativos criticos nao tem dono, status e ciclo de vida claros
+## Risco invisivel
+- **Inventario falho** - ativos sem dono nem status
+- **Custo disperso** - licencas e contratos sem reconciliacao
+- **Seguranca exposta** - criticidade fora do radar
 
 ---
 
-## Objetivos do programa
-- Visibilidade total - consolidar inventario, responsaveis, criticidade e localizacao
-- Controle financeiro - reduzir desperdicio, duplicidade e renovacoes sem uso
-- Governanca - criar regras para aquisicao, uso, manutencao e descarte
-- Seguranca - conectar ativos a vulnerabilidades, acessos e continuidade
+## Prioridades executivas
+- **Visibilidade** - inventario unico e confiavel
+- **Controle** - custo, contrato e uso conectados
+- **Governanca** - dono claro para cada ativo
+- **Seguranca** - risco priorizado por impacto
 
 ---
 
-## Normas e referencias aplicaveis
+## Referencias que sustentam
 {references_slide}
 
 ---
 
-## Arquitetura de gestao
-- Base unica - CMDB, inventario, contratos e telemetria integrados
-- Dono do ativo - responsabilidade clara por criticidade, custo e risco
-- Eventos de ciclo de vida - entrada, movimentacao, manutencao, renovacao e descarte
-- Indicadores - custo total, cobertura, conformidade, risco e disponibilidade
+## Arquitetura de controle
+- **Base unica** - inventario, contratos e telemetria
+- **Dono do ativo** - responsabilidade por custo e risco
+- **Ciclo de vida** - entrada, uso, renovacao e descarte
+- **Indicadores** - cobertura, conformidade e disponibilidade
 
 ---
 
 ## {roadmap_title}
-- Diagnosticar - mapear fontes, lacunas, ativos criticos e contratos relevantes
-- Integrar - unificar inventario, descoberta automatica e dados financeiros
-- Governar - definir papeis, politicas, aprovacao e trilhas de auditoria
-- Otimizar - revisar licencas, riscos, ativos ociosos e oportunidades de economia
+- **Diagnosticar** - fontes, lacunas e ativos criticos
+- **Integrar** - inventario, descoberta e contratos
+- **Governar** - papeis, politicas e evidencias
+- **Otimizar** - licencas, risco e ativos ociosos
 
 ---
 
-## Indicadores para acompanhar
-- Cobertura de inventario - percentual de ativos conhecidos e classificados
-- Custo evitado - economia por reuso, renegociacao e remocao de desperdicio
-- Risco reduzido - ativos criticos com patch, dono e controle de acesso
-- Conformidade - aderencia a politicas internas, normas e evidencias de auditoria
+## Indicadores que importam
+- **Cobertura** - ativos classificados e com dono
+- **Economia** - desperdicio encontrado e removido
+- **Risco** - ativos criticos com plano ativo
+- **Conformidade** - evidencias prontas para auditoria
 
 ---
 
-## Fechamento
-- Comece pelos ativos criticos e fontes mais confiaveis
-- Transforme inventario em decisao financeira, operacional e de seguranca
-- Mantenha revisoes recorrentes para que a base nao volte a ficar obsoleta
+## Decisao recomendada
+- **30 dias** - consolidar fontes confiaveis
+- **60 dias** - priorizar custo e risco alto
+- **90 dias** - institucionalizar governanca recorrente
 """
 
     def _polish_slide_deck(self, slides: list[str], title: str, slide_visuals: dict[int, str]) -> list[str]:
