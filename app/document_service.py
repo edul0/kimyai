@@ -929,18 +929,19 @@ class DocumentService:
       --accent-2: #27a6b8;
       --shadow: 0 28px 60px rgba(14, 31, 53, 0.12);
       --radius: 28px;
-      --slide-w: 1280px;
-      --slide-h: 720px;
+      --slide-w: 1920px;
+      --slide-h: 1080px;
     }}
     {theme_css}
     @page {{
-      size: 13.333in 7.5in;
+      size: 1920px 1080px;
       margin: 0;
     }}
     * {{
       box-sizing: border-box;
     }}
     html, body {{
+      width: 1920px;
       margin: 0;
       padding: 0;
       background: #0b1320;
@@ -948,30 +949,32 @@ class DocumentService:
       font-family: Inter, Aptos, "Segoe UI", Arial, sans-serif;
     }}
     body {{
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
+      display: block;
       padding: 24px;
     }}
     .deck {{
-      width: min(100%, var(--slide-w));
+      width: var(--slide-w);
       display: grid;
       gap: 26px;
     }}
     body.pdf-export {{
-      width: 1280px;
-      min-height: auto;
+      width: 1920px !important;
+      height: 1080px !important;
       display: block;
-      padding: 0;
+      padding: 0 !important;
+      margin: 0 !important;
+      overflow: hidden !important;
       background: #fff;
     }}
     body.pdf-export .deck {{
-      width: 1280px;
+      width: 1920px !important;
       gap: 0;
     }}
     .slide-container {{
       width: var(--slide-w);
-      max-width: 100%;
+      height: var(--slide-h);
+      position: relative;
+      overflow: hidden;
       break-inside: avoid;
       page-break-after: always;
     }}
@@ -979,8 +982,8 @@ class DocumentService:
       page-break-after: auto;
     }}
     body.pdf-export .slide {{
-      width: 1280px;
-      height: 720px;
+      width: 1920px !important;
+      height: 1080px !important;
       aspect-ratio: auto;
       border-radius: 0;
       box-shadow: none;
@@ -997,8 +1000,6 @@ class DocumentService:
     .slide {{
       position: relative;
       width: var(--slide-w);
-      max-width: 100%;
-      min-height: var(--slide-h);
       height: var(--slide-h);
       overflow: hidden;
       border-radius: 30px;
@@ -1011,11 +1012,11 @@ class DocumentService:
       isolation: isolate;
     }}
     .slide-content {{
-      padding: 48px 56px 48px;
+      padding: 72px 84px 72px;
       display: flex;
       flex-direction: column;
       min-width: 0;
-      gap: 16px;
+      gap: 24px;
       z-index: 2;
     }}
     .slide-meta {{
@@ -1030,16 +1031,16 @@ class DocumentService:
     .slide-kicker {{
       text-transform: uppercase;
       letter-spacing: .12em;
-      font-size: 11px;
+      font-size: 18px;
       color: var(--accent);
       font-weight: 800;
     }}
     .slide-page {{
-      font-size: 13px;
+      font-size: 20px;
     }}
     .slide-title {{
       margin: 0;
-      font-size: 50px;
+      font-size: 76px;
       line-height: 1.02;
       letter-spacing: 0;
       color: #0c2848;
@@ -1048,8 +1049,8 @@ class DocumentService:
     }}
     .slide-subtitle {{
       margin: 0;
-      font-size: 20px;
-      line-height: 1.45;
+      font-size: 32px;
+      line-height: 1.35;
       color: #41556f;
       max-width: 27ch;
       text-wrap: balance;
@@ -1154,18 +1155,18 @@ class DocumentService:
     }}
     .bullet-list li {{
       display: grid;
-      grid-template-columns: 14px minmax(0, 1fr);
-      gap: 14px;
+      grid-template-columns: 20px minmax(0, 1fr);
+      gap: 20px;
       align-items: start;
-      font-size: 21px;
+      font-size: 32px;
       line-height: 1.36;
       color: #132942;
     }}
     .bullet-list li::before {{
       content: "";
-      width: 14px;
-      height: 14px;
-      margin-top: 11px;
+      width: 20px;
+      height: 20px;
+      margin-top: 14px;
       border-radius: 999px;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       box-shadow: 0 0 0 8px rgba(31, 94, 168, 0.08);
@@ -1173,7 +1174,7 @@ class DocumentService:
     .agenda-grid, .metrics-grid, .highlights-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
+      gap: 24px;
     }}
     .agenda-list {{
       display: grid;
@@ -1182,11 +1183,11 @@ class DocumentService:
     }}
     .agenda-row {{
       display: grid;
-      grid-template-columns: 40px minmax(0, 1fr);
-      gap: 14px;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 18px;
       align-items: start;
-      padding: 14px 16px;
-      border-radius: 18px;
+      padding: 20px 22px;
+      border-radius: 24px;
       background: rgba(255,255,255,0.72);
       border: 1px solid rgba(16, 35, 61, 0.08);
       box-shadow: 0 10px 26px rgba(12, 40, 72, 0.08);
@@ -1194,28 +1195,28 @@ class DocumentService:
     .agenda-index {{
       display: grid;
       place-items: center;
-      width: 40px;
-      height: 40px;
+      width: 58px;
+      height: 58px;
       border-radius: 999px;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       color: #fff;
-      font-size: 13px;
+      font-size: 18px;
       font-weight: 900;
       letter-spacing: .08em;
     }}
     .agenda-copy {{
       display: grid;
-      gap: 6px;
+      gap: 8px;
     }}
     .agenda-copy strong {{
-      font-size: 13px;
+      font-size: 18px;
       text-transform: uppercase;
       letter-spacing: .12em;
       color: var(--accent);
     }}
     .agenda-copy span {{
       display: block;
-      font-size: 23px;
+      font-size: 34px;
       line-height: 1.18;
       color: #10233d;
       font-weight: 700;
@@ -1365,8 +1366,8 @@ class DocumentService:
         linear-gradient(135deg, #0e1f33 0%, #163658 52%, #215b83 100%);
     }}
     .lead .slide-content {{
-      padding-top: 58px;
-      padding-bottom: 58px;
+      padding-top: 84px;
+      padding-bottom: 84px;
       justify-content: center;
     }}
     .lead .slide-kicker,
@@ -1379,48 +1380,48 @@ class DocumentService:
     }}
     .lead .slide-title {{
       color: #fff;
-      font-size: 58px;
+      font-size: 88px;
       max-width: 8.8ch;
     }}
     .lead .slide-subtitle {{
-      font-size: 22px;
+      font-size: 34px;
       max-width: 22ch;
     }}
     .lead .lead-chip {{
       display: inline-flex;
       align-items: center;
-      gap: 10px;
-      padding: 12px 16px;
+      gap: 12px;
+      padding: 16px 20px;
       border-radius: 999px;
       background: rgba(255,255,255,0.08);
       color: rgba(255,255,255,0.92);
-      font-size: 15px;
+      font-size: 20px;
       width: fit-content;
       backdrop-filter: blur(12px);
     }}
     .lead-points {{
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 14px;
       margin-top: 4px;
     }}
     .lead-point {{
       display: inline-flex;
       align-items: center;
-      padding: 10px 14px;
+      padding: 14px 18px;
       border-radius: 999px;
       background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.12);
       color: rgba(255,255,255,0.92);
-      font-size: 14px;
+      font-size: 20px;
       font-weight: 700;
       line-height: 1.2;
-      max-width: 280px;
+      max-width: 420px;
       text-wrap: balance;
     }}
     .lead .bullet-list li {{
       color: rgba(255,255,255,0.95);
-      font-size: 18px;
+      font-size: 24px;
       line-height: 1.3;
     }}
     .lead .bullet-list li::before {{
@@ -1456,23 +1457,23 @@ class DocumentService:
     }}
     .content.no-visual .slide-content,
     .closing.no-visual .slide-content {{
-      max-width: 940px;
+      max-width: 1440px;
     }}
     .slide.no-visual .slide-visual {{
       display: none;
     }}
     .slide.copy-heavy .bullet-list li {{
-      font-size: 18px;
+      font-size: 28px;
     }}
     .slide.copy-heavy .slide-title {{
-      font-size: 42px;
+      font-size: 68px;
     }}
     .slide.long-title .slide-title {{
-      font-size: 42px;
+      font-size: 66px;
       max-width: 18ch;
     }}
     .lead.long-title .slide-title {{
-      font-size: 54px;
+      font-size: 80px;
       max-width: 13ch;
     }}
     .deck-nav {{
@@ -1511,27 +1512,14 @@ class DocumentService:
       }}
       .slide-container,
       .slide {{
-        width: 100%;
-        min-height: auto;
-        height: auto;
+        width: 1920px;
+        height: 1080px;
         border-radius: 18px;
-      }}
-      .slide-content {{
-        padding: 26px;
-      }}
-      .slide-title {{
-        font-size: 34px;
-      }}
-      .slide-subtitle,
-      .bullet-list li,
-      .timeline-step,
-      .agenda-card span {{
-        font-size: 18px;
       }}
     }}
     @media print {{
       @page {{
-        size: 13.333in 7.5in;
+        size: 1920px 1080px;
         margin: 0;
       }}
       * {{
@@ -1540,25 +1528,28 @@ class DocumentService:
       }}
       html,
       body {{
+        width: 1920px !important;
+        height: 1080px !important;
         background: #fff;
         padding: 0;
         margin: 0;
+        overflow: hidden;
       }}
       .deck {{
-        width: 100%;
+        width: 1920px !important;
         gap: 0;
       }}
       .slide-container {{
-        width: 1280px !important;
-        height: 720px !important;
+        width: 1920px !important;
+        height: 1080px !important;
         overflow: hidden;
         page-break-after: always;
         break-after: page;
         break-inside: avoid;
       }}
       .slide {{
-        width: 1280px !important;
-        height: 720px !important;
+        width: 1920px !important;
+        height: 1080px !important;
         margin: 0;
         border-radius: 0;
         box-shadow: none;
@@ -1836,13 +1827,13 @@ class DocumentService:
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-                page = browser.new_page(viewport={"width": 1280, "height": 720}, device_scale_factor=1.5)
+                page = browser.new_page(viewport={"width": 1920, "height": 1080}, device_scale_factor=1)
                 page.set_content(html_text, wait_until="networkidle")
                 page.emulate_media(media="print")
                 page.pdf(
                     path=str(pdf_path),
-                    width="1280px",
-                    height="720px",
+                    width="1920px",
+                    height="1080px",
                     print_background=True,
                     margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
                 )
