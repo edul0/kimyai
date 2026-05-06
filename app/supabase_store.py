@@ -50,6 +50,8 @@ class SupabaseStore:
             "result": job.get("resultado"),
             "error": job.get("erro"),
             "events": job.get("eventos", []),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
         }
         try:
             await self._upsert("jobs", payload, "id")
@@ -83,6 +85,23 @@ class SupabaseStore:
             return
         try:
             await self._insert("messages", {"session_id": session_id, "role": role, "content": content, "metadata": metadata or {}})
+        except Exception:
+            return
+
+    async def insert_generated_file(self, job_id: str, file_item: dict[str, Any]) -> None:
+        if not self.enabled:
+            return
+        content = file_item.get("content") or ""
+        payload = {
+            "job_id": job_id,
+            "path": file_item.get("relative_path") or file_item.get("name") or "",
+            "language": file_item.get("language"),
+            "content": content[:500000],
+        }
+        if not payload["path"]:
+            return
+        try:
+            await self._insert("generated_files", payload)
         except Exception:
             return
 

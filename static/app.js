@@ -525,6 +525,8 @@ function appendResult(result, fallbackText) {
   if (!imageSource) {
     const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
     if (downloadableFiles.length) {
+      const previewUrl = extractPreviewUrl(result);
+      const archiveUrl = result.project_archive_url || downloadableFiles.find((file) => String(file.name || "").toLowerCase().endsWith(".zip"))?.download_url || "";
       const node = document.createElement("div");
       node.className = "message assistant";
       node.innerHTML = `
@@ -533,6 +535,12 @@ function appendResult(result, fallbackText) {
             <strong>${escapeHtml(result.document_title || result.summary || "Arquivos gerados")}</strong>
             <span class="result-meta">${escapeHtml((result.provider || "kemy") + " - " + (result.model || ""))}</span>
           </div>
+          ${(previewUrl || archiveUrl) ? `
+            <div class="project-actions">
+              ${previewUrl ? `<a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer" class="primary-link">Abrir preview do projeto</a>` : ""}
+              ${archiveUrl ? `<a href="${escapeHtml(archiveUrl)}" target="_blank" rel="noreferrer" class="primary-link">Baixar projeto ZIP</a>` : ""}
+            </div>
+          ` : ""}
           <div class="file-actions">
             ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn">Download ${escapeHtml(file.name)}</a>`).join("")}
           </div>
@@ -590,8 +598,9 @@ function filePriority(file) {
   ) return 0;
   if (mime === "application/pdf" || name.endsWith(".pdf")) return 1;
   if (mime.includes("word") || name.endsWith(".docx")) return 2;
-  if (mime === "text/markdown" || name.endsWith(".md")) return 3;
+  if (mime === "application/zip" || name.endsWith(".zip")) return 3;
   if (mime === "text/html" || name.endsWith(".html")) return 4;
+  if (mime === "text/markdown" || name.endsWith(".md")) return 5;
   return 10;
 }
 

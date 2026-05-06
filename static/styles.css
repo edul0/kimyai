@@ -941,12 +941,31 @@ svg {
   text-transform: uppercase;
 }
 
+.project-actions,
 .file-actions,
 .result-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.primary-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--ink-strong);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 850;
+  text-decoration: none;
+  box-shadow: 0 12px 28px rgba(6, 17, 13, 0.16);
+}
+
+.primary-link:hover {
+  transform: translateY(-1px);
 }
 
 .result-card img {

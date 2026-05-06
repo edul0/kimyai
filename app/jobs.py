@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from .attachment_service import prepare_attachments
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
+from .intent_planner import build_execution_plan
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
 from .schemas import JobState
@@ -80,37 +83,47 @@ class JobManager:
             if effective_mode != job.modo:
                 job.modo = effective_mode
                 self.save(job)
-            self._event(job, "Kemy", "Lendo a conversa e o contexto.", 15)
+            await self._event_async(job, "Kemy", "Lendo a conversa e o contexto.", 15)
             await asyncio.sleep(0)
             history = session_data.get("historico", [])
             memory = session_data.get("memoria", [])
             compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
+            execution_plan = build_execution_plan(job.pedido, job.modo, compact_context)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
 
-            self._event(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
-            refined_prompt = await self._refine_prompt(job, history, compact_context)
+            await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
+            refined_prompt = await self._refine_prompt(job, history, compact_context, execution_plan.as_prompt())
 
-            self._event(job, "Kemy", "Prompt refinado. Enviando para o orquestrador.", 30)
-            prompt = build_coding_prompt(job.pedido, job.modo, history, memory, compact_context, refined_prompt=refined_prompt)
+            await self._event_async(job, "Kemy", f"Plano definido: {execution_plan.stack}.", 30)
+            prompt = build_coding_prompt(
+                job.pedido,
+                job.modo,
+                history,
+                memory,
+                compact_context,
+                refined_prompt=refined_prompt,
+                execution_plan=execution_plan.as_prompt(),
+            )
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
 
             if job.modo == "imagem":
-                self._event(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
+                await self._event_async(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
                 result = await self.pollinations.generate(job.pedido)
                 result["tools_used"] = ["pollinations"]
+                result["execution_plan"] = execution_plan.as_dict()
                 await self._finish_job(job, result)
                 return
 
             if job.modo == "documento":
-                self._event(job, "Kemy", "Orquestrador ativo. Passando o trabalho para o sistema de documentos.", 45)
+                await self._event_async(job, "Kemy", "Orquestrador ativo. Passando o trabalho para o sistema de documentos.", 45)
                 draft = await self.router.generate(
                     prompt,
                     job.modo,
                     attachments=attachment_context["items"],
                     visual_items=attachment_context["visual_items"],
                 )
-                self._event(job, "Kemy", "Montando arquivos finais do documento.", 72)
+                await self._event_async(job, "Kemy", "Montando arquivos finais do documento.", 72)
                 result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft)
                 result["tools_used"] = list(
                     dict.fromkeys((draft.get("tools_used") or []) + (result.get("tools_used") or []) + ["python-docx", "reportlab"])
@@ -119,16 +132,18 @@ class JobManager:
                     "prompt_crafter": refined_prompt,
                     "orchestrator_mode": job.modo,
                     "system": "document-service",
+                    "execution_plan": execution_plan.as_dict(),
                 }
+                result["execution_plan"] = execution_plan.as_dict()
                 await self._finish_job(job, result)
                 return
 
-            self._event(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
+            await self._event_async(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
             tool_context = await self.tools.enrich(job.pedido, job.modo)
             if tool_context.get("context"):
                 prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
-            self._event(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
+            await self._event_async(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
             result = await self.router.generate(
                 prompt,
                 job.modo,
@@ -140,7 +155,9 @@ class JobManager:
                 "prompt_crafter": refined_prompt,
                 "orchestrator_mode": job.modo,
                 "system": "router-runtime",
+                "execution_plan": execution_plan.as_dict(),
             }
+            result["execution_plan"] = execution_plan.as_dict()
             result["tools_used"] = tool_context.get("used", [])
             if attachment_context["items"]:
                 result["attachments_used"] = [
@@ -148,7 +165,7 @@ class JobManager:
                     for item in attachment_context["items"]
                 ]
 
-            self._event(job, "Kemy", "Revisando resposta antes de entregar.", 75)
+            await self._event_async(job, "Kemy", "Revisando resposta antes de entregar.", 75)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
 
             await self._finish_job(job, result)
@@ -160,13 +177,19 @@ class JobManager:
             self.save(job)
             await self.supabase.insert_job(job.model_dump())
 
-    async def _refine_prompt(self, job: JobState, history: list[dict[str, Any]], compact_context: dict[str, Any]) -> str:
-        fallback = build_local_prompt_brief(job.pedido, job.modo, compact_context)
+    async def _refine_prompt(
+        self,
+        job: JobState,
+        history: list[dict[str, Any]],
+        compact_context: dict[str, Any],
+        execution_plan: str,
+    ) -> str:
+        fallback = build_local_prompt_brief(job.pedido, job.modo, compact_context, execution_plan=execution_plan)
         if self.settings.llm_mode != "providers":
             return fallback
         try:
             refined = await self.router.generate(
-                build_prompt_refiner_prompt(job.pedido, job.modo, history, compact_context),
+                build_prompt_refiner_prompt(job.pedido, job.modo, history, compact_context, execution_plan=execution_plan),
                 mode="planejamento",
             )
             brief = (refined.get("raw") or "").strip()
@@ -212,13 +235,60 @@ class JobManager:
                     "language": language,
                 }
             )
+        manifest = {
+            "artifact_title": parsed.title,
+            "job_id": job.job_id,
+            "session_id": job.session_id,
+            "preview_url": preview_url,
+            "files": [
+                {
+                    "name": item["name"],
+                    "relative_path": item["relative_path"],
+                    "language": item["language"],
+                    "download_url": item["download_url"],
+                }
+                for item in files
+            ],
+        }
+        manifest_path = folder / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        files.append(
+            {
+                "name": "manifest.json",
+                "relative_path": "manifest.json",
+                "path": str(manifest_path).replace("\\", "/"),
+                "mime_type": "application/json",
+                "download_url": f"/api/artefatos/{job.job_id}/manifest.json",
+                "content": manifest_path.read_text(encoding="utf-8")[:120000],
+                "language": "json",
+            }
+        )
+        archive_path = folder / "projeto-kemy.zip"
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for item in files:
+                path = Path(str(item["path"]))
+                if path.exists():
+                    archive.write(path, arcname=str(item["relative_path"]).replace("\\", "/"))
+        files.append(
+            {
+                "name": "projeto-kemy.zip",
+                "relative_path": "projeto-kemy.zip",
+                "path": str(archive_path).replace("\\", "/"),
+                "mime_type": "application/zip",
+                "download_url": f"/api/artefatos/{job.job_id}/projeto-kemy.zip",
+                "content": "",
+                "language": "zip",
+            }
+        )
         result = dict(result)
         result["raw"] = strip_artifact_wrapper(result.get("raw") or "")
-        result["summary"] = result.get("summary") or f"Artifact `{parsed.title}` gerado com {len(files)} arquivo(s)."
+        result["summary"] = result.get("summary") or f"Projeto `{parsed.title}` gerado com preview, arquivos e ZIP para download."
         result["artifact_title"] = parsed.title
         result["files"] = files
         if preview_url:
             result["preview_url"] = preview_url
+            result["site_url"] = preview_url
+        result["project_archive_url"] = f"/api/artefatos/{job.job_id}/projeto-kemy.zip"
         used = list(result.get("tools_used") or [])
         if "kemy-artifact" not in used:
             used.append("kemy-artifact")
@@ -248,6 +318,10 @@ class JobManager:
         job.updated_at = utcnow()
         job.eventos.append({"ts": job.updated_at, "agente": agente, "msg": msg, "progresso": progresso})
         self.save(job)
+
+    async def _event_async(self, job: JobState, agente: str, msg: str, progresso: int) -> None:
+        self._event(job, agente, msg, progresso)
+        await self.supabase.insert_job(job.model_dump())
 
     def _append_history(self, session_id: str, pedido: str, result: dict[str, Any]) -> dict[str, Any]:
         key = f"session:{session_id}"
@@ -463,3 +537,5 @@ class JobManager:
         assistant_metadata = dict(result)
         assistant_metadata["context_snapshot"] = assistant_message.get("context_snapshot", {})
         await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), assistant_metadata)
+        for file_item in result.get("files") or []:
+            await self.supabase.insert_generated_file(job.job_id, file_item)

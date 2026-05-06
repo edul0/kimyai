@@ -10,6 +10,8 @@ Plataforma de agentes para coding, arquitetura, auditoria e deploy, com backend 
 - O sistema aceita Redis como cache/persistencia curta e Supabase como persistencia remota de sessoes, mensagens e jobs.
 - Quando houver dois projetos Supabase no ecossistema, use as variaveis `KIMI_SUPABASE_*` para o Kimi AI e deixe o Kanban isolado no projeto dele.
 - O modo `documento` identifica pedidos de `.docx`, Word, relatorio, proposta ou PDF e gera os dois arquivos com links de download.
+- O planejador `app/intent_planner.py` interpreta o pedido, escolhe stack/linguagem e define o contrato de entrega antes de chamar o modelo.
+- Projetos de site/app saem como artifact com preview, arquivos visiveis e ZIP para download.
 
 ## Agentes nativos
 
@@ -29,8 +31,9 @@ Os slugs internos foram mantidos para compatibilidade, mas os nomes exibidos ago
 
 1. O usuario autentica e cria ou reaproveita uma sessao.
 2. `Kimi Core` classifica a intencao do pedido.
-3. Os especialistas entram conforme o tipo de tarefa: especificacao, arquitetura, frontend, backend, seguranca e QA.
-4. O resultado final e salvo em memoria local ou Redis, e opcionalmente sincronizado com o Supabase do Kimi AI.
+3. O planejador decide se a melhor entrega e site, codigo, backend, documento, slide ou imagem, escolhendo a linguagem adequada.
+4. Os especialistas entram conforme o tipo de tarefa: especificacao, arquitetura, frontend, backend, seguranca e QA.
+5. O progresso do job e sincronizado no Supabase durante a execucao e o resultado final salva mensagens, arquivos e metadados por usuario.
 
 ## Estrutura principal
 
@@ -115,8 +118,11 @@ Para subir o schema do Kimi AI:
 
 1. Rode `supabase/migrations/001_kemy_schema.sql`
 2. Rode `supabase/migrations/002_sessions_owner_email.sql`
-3. Exponha o schema `kemy` na Data API do Supabase
-4. Configure as variaveis `KIMI_SUPABASE_*` no Render
+3. Rode `supabase/migrations/003_realtime_generated_outputs.sql`
+4. Exponha o schema `kemy` na Data API do Supabase
+5. Configure as variaveis `KIMI_SUPABASE_*` no Render
+
+O realtime fica preparado para `kemy.sessions`, `kemy.messages`, `kemy.jobs` e `kemy.generated_files`. A aplicacao continua usando service role apenas no backend; o frontend nao recebe chaves sensiveis.
 
 ## Deploy no Render
 
