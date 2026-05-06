@@ -180,6 +180,13 @@ def build_prompt_refiner_prompt(
         "- Nunca force um preset universal. Inferir a linguagem visual pelo assunto: comida deve parecer gastronomia; animais devem parecer natureza/campo; moda deve parecer editorial; saude deve parecer cuidado limpo; educacao deve parecer aprendizagem clara; tecnologia deve parecer sistema preciso.\n"
         "- Preserve autonomia do usuario: se ele pedir uma vibe, publico, canal, produto ou marca, essa intencao manda mais que qualquer regra generica.\n"
         "- O resultado deve sair pronto para PPTX, com texto curto, contrastes claros e ritmo de apresentacao premium.\n"
+        "- Regra principal: nao crie apenas slides com texto; crie uma apresentacao visual, com identidade propria, adaptada ao tema, com layouts variados e boa hierarquia.\n"
+        "- Fluxo mental obrigatorio: tema -> objetivo -> publico -> estilo visual -> estrutura -> layout -> conteudo -> PPTX.\n"
+        "- Antes de gerar, analise tema central, objetivo, publico-alvo e tom mais adequado: academico, corporativo, emocional, tecnologico, educativo, comercial, minimalista, criativo ou institucional.\n"
+        "- Gere um briefing visual para o orquestrador com estilo, paleta, fonte, imagens/elementos, tom e layouts recomendados.\n"
+        "- Para cada slide, defina internamente titulo, mensagem principal, conteudo resumido, sugestao visual e layout recomendado.\n"
+        "- Use capa visual forte, cards, icones, imagens, numeros grandes, destaques e comparacoes quando fizer sentido; nunca deixar areas grandes vazias sem intencao visual.\n"
+        "- Corrija gramatica, acentuacao e concordancia; evite agenda generica, textos vazios, excesso de bullets e titulos vagos como `Ponto de Analise`.\n"
         if is_slide_request
         else ""
     )
@@ -214,6 +221,11 @@ def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str,
         "- Rejeitar visual brega por design: sem bolhas, orbitas, clipart, cartoes inflados, frases de template ou decoracao gratuita.\n"
         "- Priorizar frases curtas, hierarquia clara e conteudo que caiba em composicoes editoriais sobrias.\n"
         "- Nao assumir preset fixo: adaptar narrativa e aparencia ao dominio do pedido, como comida/gastronomia, animal/natureza, moda/editorial, saude/cuidado, educacao/didatico, tecnologia/sistema ou negocio/consultoria.\n"
+        "- Regra principal PPTX: tema -> objetivo -> publico -> estilo visual -> estrutura -> layout -> conteudo -> PPTX.\n"
+        "- Criar briefing visual: estilo, paleta, fonte, imagens/elementos, tom e layout por slide.\n"
+        "- Cada slide deve ter titulo forte, mensagem principal, conteudo resumido, sugestao visual e layout recomendado.\n"
+        "- A apresentacao deve parecer feita por designer profissional: moderna, bonita, limpa, coerente e adequada ao tema.\n"
+        "- Evitar agenda generica, textos vazios, bullets demais, layout repetido, areas vazias sem intencao, textos cortados e elementos vazando.\n"
         if is_slide_request
         else ""
     )
