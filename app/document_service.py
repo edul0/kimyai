@@ -133,15 +133,6 @@ class DocumentService:
         pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
 
         files: list[dict[str, Any]] = []
-        if html_path.exists():
-            files.append(
-                {
-                    "name": html_name,
-                    "path": str(html_path).replace("\\", "/"),
-                    "mime_type": "text/html",
-                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
-                }
-            )
         if pdf_path.exists():
             files.append(
                 {
@@ -149,6 +140,15 @@ class DocumentService:
                     "path": str(pdf_path).replace("\\", "/"),
                     "mime_type": "application/pdf",
                     "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
+                }
+            )
+        if html_path.exists():
+            files.append(
+                {
+                    "name": html_name,
+                    "path": str(html_path).replace("\\", "/"),
+                    "mime_type": "text/html",
+                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
                 }
             )
         files.append(
@@ -160,7 +160,7 @@ class DocumentService:
             }
         )
 
-        summary = "Apresentacao profissional gerada em HTML e PDF."
+        summary = "Apresentacao profissional gerada com HTML e PDF sincronizados."
         if slide_visuals:
             summary = "Apresentacao profissional gerada em HTML e PDF com composicao visual e imagens IA."
         else:
@@ -859,6 +859,8 @@ class DocumentService:
             if layout == "lead" and not body and bullets:
                 body = [bullets[0]]
                 bullets = bullets[1:]
+            if layout == "lead":
+                bullets = bullets[:2]
             slides.append(
                 Slide(
                     title=title,
@@ -1009,7 +1011,6 @@ class DocumentService:
       isolation: isolate;
     }}
     .slide-content {{
-      padding: 48px 56px 48px;
       padding: 48px 56px 48px;
       display: flex;
       flex-direction: column;
@@ -1173,6 +1174,52 @@ class DocumentService:
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
+    }}
+    .agenda-list {{
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }}
+    .agenda-row {{
+      display: grid;
+      grid-template-columns: 40px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(16, 35, 61, 0.08);
+      box-shadow: 0 10px 26px rgba(12, 40, 72, 0.08);
+    }}
+    .agenda-index {{
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: .08em;
+    }}
+    .agenda-copy {{
+      display: grid;
+      gap: 6px;
+    }}
+    .agenda-copy strong {{
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: var(--accent);
+    }}
+    .agenda-copy span {{
+      display: block;
+      font-size: 23px;
+      line-height: 1.18;
+      color: #10233d;
+      font-weight: 700;
+      text-wrap: balance;
     }}
     .agenda-card, .metric-card, .highlight-card {{
       background: var(--panel);
@@ -1339,13 +1386,6 @@ class DocumentService:
       font-size: 22px;
       max-width: 22ch;
     }}
-    .lead .bullet-list li {{
-      color: rgba(255,255,255,0.78);
-    }}
-    .lead .bullet-list li::before {{
-      background: linear-gradient(135deg, #5eead4, #38bdf8);
-      box-shadow: 0 0 0 8px rgba(94, 234, 212, 0.12);
-    }}
     .lead .lead-chip {{
       display: inline-flex;
       align-items: center;
@@ -1357,6 +1397,26 @@ class DocumentService:
       font-size: 15px;
       width: fit-content;
       backdrop-filter: blur(12px);
+    }}
+    .lead-points {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 4px;
+    }}
+    .lead-point {{
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+      max-width: 280px;
+      text-wrap: balance;
     }}
     .lead .bullet-list li {{
       color: rgba(255,255,255,0.95);
@@ -1586,18 +1646,27 @@ class DocumentService:
         )
 
     def _render_slide_content(self, slide: Slide) -> str:
+        if slide.layout == "lead":
+            items = (slide.bullets or [])[:2]
+            if not items:
+                return ""
+            chips = "".join(f'<span class="lead-point" contenteditable="true">{self._escape_html(item)}</span>' for item in items)
+            return f'<div class="lead-points">{chips}</div>'
         if slide.layout == "agenda":
             items = slide.bullets or slide.body or []
-            cards = []
-            for item in items[:4]:
+            rows = []
+            for idx, item in enumerate(items[:5], start=1):
                 label, detail = self._split_agenda_item(item)
-                cards.append(
-                    '<article class="agenda-card">'
+                rows.append(
+                    '<article class="agenda-row">'
+                    f'<span class="agenda-index">{idx:02d}</span>'
+                    '<div class="agenda-copy">'
                     f'<strong contenteditable="true">{self._escape_html(label)}</strong>'
                     f'<span contenteditable="true">{self._escape_html(detail)}</span>'
+                    '</div>'
                     '</article>'
                 )
-            return f'<div class="agenda-grid">{"".join(cards)}</div>'
+            return f'<div class="agenda-list">{"".join(rows)}</div>'
         if slide.layout == "metrics":
             cards = []
             for bullet in (slide.bullets or [])[:4]:
@@ -1667,20 +1736,20 @@ class DocumentService:
     def _deck_theme_css(self, user_request: str, deck_title: str) -> str:
         lowered = f"{user_request}\n{deck_title}".lower()
         themes = {
-            "minimal": """
+            "clear-green": """
     :root {
-      --bg: #edf2f7;
+      --bg: #eef7f1;
       --panel: rgba(255,255,255,0.96);
       --panel-soft: rgba(255,255,255,0.82);
       --line: rgba(15, 23, 42, 0.08);
       --ink: #0f172a;
       --muted: #5b6472;
-      --accent: #1d4ed8;
-      --accent-2: #22c55e;
+      --accent: #12715b;
+      --accent-2: #38b27a;
       --shadow: 0 24px 52px rgba(15, 23, 42, 0.10);
     }
             """,
-            "dark": """
+            "neon-blue": """
     :root {
       --bg: #050816;
       --panel: rgba(10,18,34,0.74);
@@ -1707,7 +1776,7 @@ class DocumentService:
       background: rgba(8,16,31,0.66);
     }
             """,
-            "executive": """
+            "executive-dark": """
     :root {
       --bg: #0f1d2e;
       --panel: rgba(255,255,255,0.88);
@@ -1720,27 +1789,12 @@ class DocumentService:
       --shadow: 0 28px 60px rgba(14, 31, 53, 0.12);
     }
             """,
-            "warm": """
-    :root {
-      --bg: #2d160e;
-      --panel: rgba(255,250,244,0.90);
-      --panel-soft: rgba(255,247,237,0.76);
-      --line: rgba(120, 53, 15, 0.12);
-      --ink: #40210f;
-      --muted: #8a5b3d;
-      --accent: #c2410c;
-      --accent-2: #f59e0b;
-      --shadow: 0 30px 60px rgba(82, 36, 10, 0.16);
-    }
-            """,
         }
-        if any(token in lowered for token in ["dark", "escuro", "noturno", "futurista", "neon"]):
-            return themes["dark"]
-        if any(token in lowered for token in ["minimal", "minimalista", "clean", "limpo"]):
-            return themes["minimal"]
-        if any(token in lowered for token in ["quente", "laranja", "criativo", "editorial", "premium"]):
-            return themes["warm"]
-        return themes["executive"]
+        if any(token in lowered for token in ["neon", "futurista", "blue", "azul", "cyber"]):
+            return themes["neon-blue"]
+        if any(token in lowered for token in ["green", "verde", "claro", "clean", "minimal", "minimalista"]):
+            return themes["clear-green"]
+        return themes["executive-dark"]
 
     def _inline_slide_assets(self, html: str, base_dir: Path) -> str:
         def replace_src(match: re.Match[str]) -> str:

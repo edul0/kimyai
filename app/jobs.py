@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from .agents import build_coding_prompt
+from .agents import build_coding_prompt, build_local_prompt_brief, build_prompt_refiner_prompt
+from .artifact_parser import parse_kemy_artifact, strip_artifact_wrapper
 from .attachment_service import prepare_attachments
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
@@ -85,8 +87,11 @@ class JobManager:
             compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
 
-            self._event(job, "Kemy", "Preparando resposta adequada ao pedido.", 30)
-            prompt = build_coding_prompt(job.pedido, job.modo, history, memory, compact_context)
+            self._event(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
+            refined_prompt = await self._refine_prompt(job, history, compact_context)
+
+            self._event(job, "Kemy", "Prompt refinado. Enviando para o orquestrador.", 30)
+            prompt = build_coding_prompt(job.pedido, job.modo, history, memory, compact_context, refined_prompt=refined_prompt)
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
 
@@ -98,7 +103,7 @@ class JobManager:
                 return
 
             if job.modo == "documento":
-                self._event(job, "Kemy", "Pedido de documento detectado. Vou estruturar a entrega em DOCX e PDF.", 45)
+                self._event(job, "Kemy", "Orquestrador ativo. Passando o trabalho para o sistema de documentos.", 45)
                 draft = await self.router.generate(
                     prompt,
                     job.modo,
@@ -110,6 +115,11 @@ class JobManager:
                 result["tools_used"] = list(
                     dict.fromkeys((draft.get("tools_used") or []) + (result.get("tools_used") or []) + ["python-docx", "reportlab"])
                 )
+                result["pipeline"] = {
+                    "prompt_crafter": refined_prompt,
+                    "orchestrator_mode": job.modo,
+                    "system": "document-service",
+                }
                 await self._finish_job(job, result)
                 return
 
@@ -118,13 +128,19 @@ class JobManager:
             if tool_context.get("context"):
                 prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
-            self._event(job, "Kemy", "Selecionando melhor motor gratuito.", 55)
+            self._event(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
             result = await self.router.generate(
                 prompt,
                 job.modo,
                 attachments=attachment_context["items"],
                 visual_items=attachment_context["visual_items"],
             )
+            result = self._hydrate_artifacts(job, result)
+            result["pipeline"] = {
+                "prompt_crafter": refined_prompt,
+                "orchestrator_mode": job.modo,
+                "system": "router-runtime",
+            }
             result["tools_used"] = tool_context.get("used", [])
             if attachment_context["items"]:
                 result["attachments_used"] = [
@@ -143,6 +159,62 @@ class JobManager:
             job.updated_at = utcnow()
             self.save(job)
             await self.supabase.insert_job(job.model_dump())
+
+    async def _refine_prompt(self, job: JobState, history: list[dict[str, Any]], compact_context: dict[str, Any]) -> str:
+        fallback = build_local_prompt_brief(job.pedido, job.modo, compact_context)
+        if self.settings.llm_mode != "providers":
+            return fallback
+        try:
+            refined = await self.router.generate(
+                build_prompt_refiner_prompt(job.pedido, job.modo, history, compact_context),
+                mode="planejamento",
+            )
+            brief = (refined.get("raw") or "").strip()
+            return brief or fallback
+        except Exception:
+            return fallback
+
+    def _hydrate_artifacts(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
+        parsed = parse_kemy_artifact(result.get("raw") or "")
+        if not parsed:
+            return result
+        folder = Path("generated_documents") / job.session_id / job.job_id / "artifacts"
+        folder.mkdir(parents=True, exist_ok=True)
+        files: list[dict[str, Any]] = []
+        preview_url = ""
+        for artifact in parsed.files:
+            safe_name = Path(artifact.path).name or "index.html"
+            target = folder / safe_name
+            target.write_text(artifact.content, encoding="utf-8")
+            mime_type = "text/plain"
+            if safe_name.endswith(".html"):
+                mime_type = "text/html"
+                if not preview_url:
+                    preview_url = f"/api/artefatos/{job.job_id}/{safe_name}"
+            elif safe_name.endswith(".js"):
+                mime_type = "application/javascript"
+            elif safe_name.endswith(".css"):
+                mime_type = "text/css"
+            files.append(
+                {
+                    "name": safe_name,
+                    "path": str(target).replace("\\", "/"),
+                    "mime_type": mime_type,
+                    "download_url": f"/api/artefatos/{job.job_id}/{safe_name}",
+                }
+            )
+        result = dict(result)
+        result["raw"] = strip_artifact_wrapper(result.get("raw") or "")
+        result["summary"] = result.get("summary") or f"Artifact `{parsed.title}` gerado com {len(files)} arquivo(s)."
+        result["artifact_title"] = parsed.title
+        result["files"] = files
+        if preview_url:
+            result["preview_url"] = preview_url
+        used = list(result.get("tools_used") or [])
+        if "kemy-artifact" not in used:
+            used.append("kemy-artifact")
+        result["tools_used"] = used
+        return result
 
     def _event(self, job: JobState, agente: str, msg: str, progresso: int) -> None:
         job.status = "running"
@@ -252,6 +324,22 @@ class JobManager:
         ]
         if any(marker in lowered for marker in image_markers):
             return "imagem"
+        site_markers = [
+            "site",
+            "landing page",
+            "landing",
+            "dashboard",
+            "interface",
+            "frontend",
+            "pagina",
+            "página",
+            "app web",
+            "web app",
+            "html",
+            "tailwind",
+        ]
+        if any(marker in lowered for marker in site_markers):
+            return "site"
         slide_markers = [
             "slide",
             "slides",

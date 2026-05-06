@@ -149,45 +149,50 @@ class LLMRouter:
             }
         if mode == "site":
             html = (
-                "<!doctype html>\n"
+                "<!DOCTYPE html>\n"
                 "<html lang=\"pt-BR\">\n"
                 "<head>\n"
                 "  <meta charset=\"utf-8\" />\n"
                 "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+                "  <script src=\"https://cdn.tailwindcss.com\"></script>\n"
                 "  <title>Kemy Preview</title>\n"
-                "  <style>\n"
-                "    body { margin: 0; font-family: Georgia, serif; background: #f7f4ee; color: #151515; }\n"
-                "    main { min-height: 100vh; display: grid; place-items: center; padding: 48px; }\n"
-                "    section { max-width: 920px; background: white; border-radius: 28px; padding: 48px; box-shadow: 0 24px 80px rgba(0,0,0,.08); }\n"
-                "    h1 { font-size: 64px; line-height: 1; margin: 0 0 18px; }\n"
-                "    p { font: 18px/1.6 ui-sans-serif, system-ui, sans-serif; color: #4a4a4a; }\n"
-                "    button { margin-top: 18px; border: 0; border-radius: 999px; padding: 14px 22px; background: #151515; color: #fff; font-weight: 700; }\n"
-                "  </style>\n"
                 "</head>\n"
-                "<body>\n"
-                "  <main>\n"
-                "    <section>\n"
-                "      <h1>Site funcional em preview</h1>\n"
-                "      <p>Este mock local mostra como a Kemy pode devolver um HTML completo para live preview e depois refinar para estilo Manus ou Firebase Studio.</p>\n"
-                "      <button>Continuar refinando</button>\n"
+                "<body class=\"min-h-screen bg-slate-950 text-white\">\n"
+                "  <main class=\"mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-14\">\n"
+                "    <section class=\"grid w-full gap-8 rounded-[28px] border border-white/10 bg-white/5 p-8 shadow-2xl shadow-slate-950/40 backdrop-blur md:grid-cols-[1.1fr_.9fr] md:p-12\">\n"
+                "      <div class=\"space-y-6\">\n"
+                "        <span class=\"inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-1 text-sm font-semibold text-cyan-200\">Kemy Artifacts</span>\n"
+                "        <h1 class=\"max-w-2xl text-5xl font-black tracking-tight text-white\">Preview inicial para site/app com artifact estruturado</h1>\n"
+                "        <p class=\"max-w-xl text-lg leading-8 text-slate-300\">A Kemy agora pode responder em XML de artifact, separar arquivos e publicar uma preview real sem mostrar o invólucro técnico para o usuário final.</p>\n"
+                "      </div>\n"
+                "      <div class=\"rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-lg shadow-cyan-950/30\">\n"
+                "        <div class=\"space-y-4\">\n"
+                "          <div class=\"rounded-2xl bg-slate-800/80 p-4 text-sm text-slate-200\">index.html renderizado a partir do artifact</div>\n"
+                "          <div class=\"grid gap-3 sm:grid-cols-2\">\n"
+                "            <div class=\"rounded-2xl bg-emerald-400/10 p-4 text-emerald-200\">Layout responsivo</div>\n"
+                "            <div class=\"rounded-2xl bg-sky-400/10 p-4 text-sky-200\">Tailwind via CDN</div>\n"
+                "          </div>\n"
+                "        </div>\n"
+                "      </div>\n"
                 "    </section>\n"
                 "  </main>\n"
                 "</body>\n"
                 "</html>"
             )
             raw = (
-                "Segue um `index.html` inicial para preview imediato.\n\n"
-                "```html\n"
+                "<kemy_artifact title=\"Kemy Preview\">\n\n"
+                "<file path=\"index.html\">\n"
                 f"{html}\n"
-                "```"
+                "</file>\n\n"
+                "</kemy_artifact>"
             )
             return {
                 "provider": choice.name,
                 "model": choice.model,
                 "reason": choice.reason,
                 "raw": raw,
-                "summary": "Preview HTML inicial criado.",
-                "files": [{"path": "index.html", "language": "html", "content": html}],
+                "summary": "Artifact inicial para preview criado.",
+                "files": [],
                 "diff": raw,
                 "tests": ["Abra o preview ao lado para validar o layout base."],
             }
@@ -425,8 +430,12 @@ class LLMRouter:
             return base
         return (
             f"{base} "
-            "Se o pedido for de site, landing page ou interface visual, devolva obrigatoriamente um bloco ```html``` completo e funcional, "
-            "de preferencia com CSS e JS inline no mesmo arquivo para permitir live preview imediato."
+            "DIRETRIZ DE ARQUITETURA DE SOFTWARE (MODO KEMY ARTIFACTS). "
+            "Se o pedido for de site, app, landing page, dashboard ou interface visual, responda APENAS com um bloco `<kemy_artifact title=\"...\">`. "
+            "Dentro dele, cada arquivo deve ficar dentro de `<file path=\"...\">...</file>`. "
+            "Nunca escreva texto fora dessas tags. Nunca use comentarios de codigo incompleto. "
+            "Use Tailwind CSS via CDN quando for HTML puro. A estetica deve ser minimalista, com paletas limpas, sombras suaves e bordas arredondadas. "
+            "O layout deve ser responsivo e pronto para preview imediato."
         )
 
     def _track_provider_failure(self, provider: str, exc: Exception) -> None:

@@ -84,6 +84,7 @@ def build_coding_prompt(
     history: list[dict[str, Any]] | None = None,
     memory: list[str] | None = None,
     compact_context: dict[str, Any] | None = None,
+    refined_prompt: str | None = None,
 ) -> str:
     recent = history[-6:] if history else []
     history_lines = []
@@ -144,7 +145,57 @@ def build_coding_prompt(
         f"Conversa casual: {'sim' if casual else 'nao'}\n"
         f"Memoria duravel desta sessao:\n{memory_text or '- sem memoria duravel ainda'}\n\n"
         f"Contexto compactado da sessao:\n{context_to_prompt(compact_context)}\n\n"
+        f"Brief da fazedora de prompts:\n{refined_prompt or '- nenhum brief adicional'}\n\n"
         f"Historico recente:\n{history_text or '- sem historico'}\n\n"
         f"[CONTEXTO DO PROJETO]\n{_project_context(message)}\n\n"
         f"Pedido do usuario:\n{message}\n"
+    )
+
+
+def build_prompt_refiner_prompt(
+    message: str,
+    mode: str,
+    history: list[dict[str, Any]] | None = None,
+    compact_context: dict[str, Any] | None = None,
+) -> str:
+    recent = history[-4:] if history else []
+    history_text = "\n".join(
+        f"- {item.get('role', 'usuario')}: {str(item.get('content') or '')[:400]}"
+        for item in recent
+        if item.get("content")
+    )
+    return (
+        "Voce e Kemy Spec, a fazedora de prompts da Kemy AI.\n"
+        "Sua unica funcao e transformar o pedido do usuario em um brief de execucao impecavel para o orquestrador.\n"
+        "Responda em Markdown curto, objetivo e altamente acionavel.\n"
+        "Estrutura obrigatoria:\n"
+        "## Objetivo\n"
+        "## Entregavel esperado\n"
+        "## Requisitos tecnicos\n"
+        "## Restricoes e preferencias\n"
+        "## Criterios de qualidade\n"
+        "## Proximo passo do orquestrador\n"
+        "Nao escreva codigo. Nao execute nada. Nao converse com o usuario. Apenas refine o pedido.\n\n"
+        f"Modo alvo: {mode}\n"
+        f"Contexto compacto:\n{context_to_prompt(compact_context)}\n\n"
+        f"Historico recente:\n{history_text or '- sem historico'}\n\n"
+        f"Pedido bruto:\n{message}\n"
+    )
+
+
+def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str, Any] | None = None) -> str:
+    return (
+        "## Objetivo\n"
+        f"- Resolver o pedido em modo `{mode}` sem perder o foco no resultado final.\n\n"
+        "## Entregavel esperado\n"
+        f"- Entrega concreta baseada em: {message[:240]}\n\n"
+        "## Requisitos tecnicos\n"
+        "- Respeitar a stack atual do projeto.\n"
+        "- Priorizar fluxo cloud-free e artefatos utilizaveis.\n\n"
+        "## Restricoes e preferencias\n"
+        f"- Contexto aprendido: {context_to_prompt(compact_context)}\n\n"
+        "## Criterios de qualidade\n"
+        "- Saida final consistente, especifica e testavel.\n\n"
+        "## Proximo passo do orquestrador\n"
+        "- Planejar a execucao, escolher o motor e produzir a entrega final.\n"
     )
