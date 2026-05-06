@@ -175,6 +175,8 @@ def build_prompt_refiner_prompt(
         "- Exija titulos de ate 6 palavras e bullets de ate 12 palavras.\n"
         "- Proiba frases genericas como `visual executivo`, `visao geral` sem contexto, `deck personalizado` e repeticao do titulo.\n"
         "- Peça agenda com itens de 2 a 4 palavras, metricas com valor explicito e fechamento com acao de 30/60/90 dias.\n"
+        "- Evite qualquer estetica brega: nada de bolhas, orbitas, clipart mental, frases de template, cards enormes sem densidade ou decoracao sem funcao.\n"
+        "- Escreva para um deck editorial sobrio: pouco texto, hierarquia forte, espaco negativo, contraste e termos de decisao.\n"
         "- O resultado deve sair pronto para PPTX, com texto curto, contrastes claros e ritmo de apresentacao premium.\n"
         if is_slide_request
         else ""
@@ -207,7 +209,8 @@ def build_local_prompt_brief(message: str, mode: str, compact_context: dict[str,
     slide_quality = (
         "- Se for PPTX, gerar narrativa premium com capa forte, agenda curta, insights, metricas e fechamento acionavel.\n"
         "- Evitar texto generico, frases longas, repeticao de titulo e linguagem escolar.\n"
-        "- Priorizar frases curtas, hierarquia clara e conteudo que caiba em cards de apresentacao.\n"
+        "- Rejeitar visual brega por design: sem bolhas, orbitas, clipart, cartoes inflados, frases de template ou decoracao gratuita.\n"
+        "- Priorizar frases curtas, hierarquia clara e conteudo que caiba em composicoes editoriais sobrias.\n"
         if is_slide_request
         else ""
     )

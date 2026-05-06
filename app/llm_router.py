@@ -425,6 +425,8 @@ class LLMRouter:
                 "Comparacao: se usar tabela, limite a 3 colunas e 4 linhas. Celulas curtas. "
                 "Fechamento: termine com uma decisao clara e uma acao de 30/60/90 dias. "
                 "Regra anti-feiura: nao repita o titulo no corpo, nao use frases genericas, nao use bullets com mais de 12 palavras, nao use paragrafo longo, nao fale sobre Gamma/Canva no conteudo. "
+                "Regra anti-brega: nada de conteudo que peca bolhas, orbitas, clipart, icones aleatorios, mockups falsos, diagramas decorativos sem funcao ou cards inflados. "
+                "Direcao visual esperada: editorial sobrio, minimalista, verde sofisticado, bastante respiro, linhas finas, contrastes limpos e densidade executiva. "
                 "O texto deve parecer consultoria premium: sintese, contraste, decisao, custo, risco, valor, prioridade e proximo passo. "
                 "Entregue conteudo pensado para o renderizador PPTX aplicar capa, cards, metricas, timeline, tabela e fechamento sem estourar layout. "
                 "Nao devolva JSON cru."
