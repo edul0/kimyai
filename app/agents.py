@@ -124,6 +124,7 @@ def build_coding_prompt(
         "relatório",
     ]
     casual = len(message.split()) <= 5 and not any(word in message.lower() for word in technical_words)
+    plan_text = execution_plan or "## Plano de execucao Kemy\n- Plano automatico nao informado."
     return (
         "Voce e a Kemy AI, uma assistente conversacional e agencia multi-agente cloud-free focada em coding.\n"
         "Comporte-se como chat com memoria: entenda a intencao do usuario antes de agir. "
@@ -146,7 +147,7 @@ def build_coding_prompt(
         f"Conversa casual: {'sim' if casual else 'nao'}\n"
         f"Memoria duravel desta sessao:\n{memory_text or '- sem memoria duravel ainda'}\n\n"
         f"Contexto compactado da sessao:\n{context_to_prompt(compact_context)}\n\n"
-        f"{execution_plan or '## Plano de execucao Kemy\n- Plano automatico nao informado.'}\n\n"
+        f"{plan_text}\n\n"
         f"Brief da fazedora de prompts:\n{refined_prompt or '- nenhum brief adicional'}\n\n"
         f"Historico recente:\n{history_text or '- sem historico'}\n\n"
         f"[CONTEXTO DO PROJETO]\n{_project_context(message)}\n\n"
