@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 
 
 ARTIFACT_PATTERN = re.compile(
-    r"<kemy_artifact(?:\s+title=\"(?P<title>[^\"]+)\")?\s*>(?P<body>.*?)</kemy_artifact>",
+    r"<kemy_artifact\b(?:[^>]*\btitle\s*=\s*(?P<quote>[\"'])(?P<title>.*?)(?P=quote))?[^>]*>(?P<body>.*?)</kemy_artifact\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 FILE_PATTERN = re.compile(
-    r"<file\s+path=\"(?P<path>[^\"]+)\"\s*>(?P<content>.*?)</file>",
+    r"<file\b[^>]*\bpath\s*=\s*(?P<quote>[\"'])(?P<path>.*?)(?P=quote)[^>]*>(?P<content>.*?)</file\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 EXECUTE_CLOUD_PATTERN = re.compile(
@@ -53,6 +54,7 @@ class RoutedAction:
 def parse_kemy_artifact(raw: str) -> ParsedArtifact | None:
     if not raw:
         return None
+    raw = html.unescape(raw)
     match = ARTIFACT_PATTERN.search(raw)
     if not match:
         return None
