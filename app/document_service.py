@@ -81,7 +81,7 @@ class DocumentService:
     def generate(self, session_id: str, job_id: str, user_request: str, draft: dict[str, Any]) -> dict[str, Any]:
         source_text = self._source_text(user_request, draft)
         title = self._title_from_text(user_request, source_text)
-        if self._is_slide_request(user_request, source_text):
+        if self._is_slide_request(user_request):
             return self._generate_slides(session_id, job_id, user_request, title, source_text, draft)
         blocks = self._parse_blocks(source_text)
         folder = self.output_root / session_id / job_id
@@ -188,7 +188,11 @@ class DocumentService:
         return self._fallback_document_text(user_request)
 
     def _is_slide_request(self, user_request: str, text: str = "") -> bool:
-        lowered = f"{user_request}\n{text}".lower()
+        lowered = user_request.lower()
+        if any(marker in lowered for marker in ["docx", "word", "abnt", "documento", "relatorio", "relatório", "pdf"]) and not any(
+            marker in lowered for marker in ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"]
+        ):
+            return False
         markers = [
             "slide",
             "slides",
@@ -3132,7 +3136,7 @@ class DocumentService:
         cleaned = cleaned.replace("\u25a0", " ")
         cleaned = cleaned.replace("\u00a0", " ")
         cleaned = re.sub(r"[\u200b-\u200f\u202a-\u202e]", "", cleaned)
-        cleaned = re.sub(r"^```(?:markdown|md|text)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"^```(?:markdown|md|text|python|py|html|javascript|js|typescript|ts)?\s*", "", cleaned, flags=re.I)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         cleaned = re.sub(
             r"(?is)^#+\s*pedido:.*?(?=^#+\s+|^[A-ZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇa-záàâãéèêíìîóòôõúùûç].*$|$)",
@@ -3199,7 +3203,43 @@ class DocumentService:
         ]
         if any(marker in lowered for marker in banned_markers):
             return False
+        if self._looks_like_code_dump(text):
+            return False
         return True
+
+    def _looks_like_code_dump(self, text: str) -> bool:
+        lowered = text.lower()
+        code_markers = [
+            "from docx import",
+            "import docx",
+            "def ",
+            "class ",
+            "paragraph.",
+            "run.font",
+            "wd_align_paragraph",
+            "oxmlelement",
+            "qn(",
+            "cm(",
+            "pt(",
+            "python-docx",
+            "document()",
+            "add_heading(",
+            "add_paragraph(",
+            "```python",
+            "```py",
+        ]
+        marker_hits = sum(1 for marker in code_markers if marker in lowered)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        code_like_lines = sum(
+            1
+            for line in lines
+            if re.match(r"^(def|class|from|import|for|if|elif|else|return|with)\b", line)
+            or re.search(r"[A-Za-z_][A-Za-z0-9_]*\s*=", line)
+            or line.endswith(":")
+        )
+        if marker_hits >= 2:
+            return True
+        return bool(lines) and code_like_lines / max(len(lines), 1) > 0.28
 
     def _fallback_document_text(self, user_request: str) -> str:
         topic = self._extract_topic(user_request)
@@ -3230,7 +3270,17 @@ class DocumentService:
         text = " ".join(user_request.split()).strip()
         text = re.sub(r"^(me\s+)?(gere|gerar|gera|crie|criar|fa[cç]a|fazer|monte|montar|produza|produzir)\s+", "", text, flags=re.I)
         text = re.sub(r"^(um|uma|o|a)\s+", "", text, flags=re.I)
-        text = re.sub(r"\b(pdf|docx|arquivo|documento|word|markdown|slide|slides|deck|pptx?|apresenta[cç][aã]o)\b", "", text, flags=re.I)
+        text = re.sub(r"\b(pdf|docx|docxs|docs?|arquivo|documento|word|markdown|slide|slides|deck|pptx?|apresenta[cç][aã]o)\b", "", text, flags=re.I)
+        sobre_match = re.search(r"\bsobre\s+(.+)$", text, re.I)
+        if sobre_match and sobre_match.group(1).strip(" .:-"):
+            topic = re.split(
+                r"\b(citando|incluindo|inclua|usando|use|no estilo|em estilo|formato|de forma|nivel|nível)\b",
+                sobre_match.group(1),
+                maxsplit=1,
+                flags=re.I,
+            )[0].strip(" .:-")
+            if topic:
+                return self._polish_topic_title(topic)
         intent_match = re.search(
             r"\bpara\s+(?:anunciar|divulgar|vender|promover|explicar|ensinar|apresentar)\s+(?:um|uma|o|a)?\s*(.+)$",
             text,
