@@ -730,20 +730,35 @@ function showRunError(error) {
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
-  if (result?.preview_html) return normalizePreviewHtml(result.preview_html);
+  let fromPreview = "";
+  let fromFile = "";
+  let fromFence = "";
+  if (result?.preview_html) {
+    fromPreview = normalizePreviewHtml(result.preview_html);
+    if (fromPreview && !looksLikeViteShellHtml(fromPreview)) return fromPreview;
+  }
   const files = result?.files || [];
   const htmlFile = files.find((file) => {
     const name = String(file.relative_path || file.name || file.path || "").toLowerCase();
     return name.endsWith("preview.html") || name.endsWith("index.html") || name.endsWith(".html");
   });
-  if (htmlFile?.content) return normalizePreviewHtml(htmlFile.content);
+  if (htmlFile?.content) {
+    fromFile = normalizePreviewHtml(htmlFile.content);
+    if (fromFile && !looksLikeViteShellHtml(fromFile)) return fromFile;
+  }
   const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
-  if (match) return normalizePreviewHtml(match[1]);
+  if (match) {
+    fromFence = normalizePreviewHtml(match[1]);
+    if (fromFence && !looksLikeViteShellHtml(fromFence)) return fromFence;
+  }
   const artifactFiles = extractArtifactFiles([result?.raw, result?.summary, fallbackText].filter(Boolean).join("\n"));
   const artifactHtml = artifactFiles.find((file) => file.path.toLowerCase().endsWith("preview.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith("index.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith(".html"));
-  return normalizePreviewHtml(artifactHtml?.content || "");
+  const fromArtifact = normalizePreviewHtml(artifactHtml?.content || "");
+  if (fromArtifact && !looksLikeViteShellHtml(fromArtifact)) return fromArtifact;
+  if (fromPreview || fromFile || fromFence || fromArtifact) return buildEmergencyPreviewHtml(result, fallbackText);
+  return "";
 }
 
 function extractPreviewUrl(result) {
@@ -782,6 +797,42 @@ function normalizePreviewHtml(value = "") {
   const lower = html.toLowerCase();
   if (!lower.includes("<html") && !lower.includes("<!doctype html")) return "";
   return html;
+}
+
+function looksLikeViteShellHtml(html = "") {
+  const lower = String(html || "").toLowerCase();
+  const hasEmptyRoot = /<div[^>]+id=["'](?:root|app)["'][^>]*>\s*<\/div>/.test(lower);
+  const hasModuleSrc = /<script[^>]+type=["']module["'][^>]+src=["'][^"']*(?:\/src\/|main\.(?:tsx|jsx|ts|js))/.test(lower);
+  return hasEmptyRoot && hasModuleSrc;
+}
+
+function buildEmergencyPreviewHtml(result, fallbackText = "") {
+  const title = escapeHtml(result?.artifact_title || result?.document_title || "Preview do projeto");
+  const summary = escapeHtml(result?.summary || "A Kemy detectou um HTML de bootstrap e criou este preview funcional.");
+  const request = escapeHtml(String(fallbackText || result?.raw || "").slice(0, 220).replace(/\s+/g, " "));
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <style>
+    body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:linear-gradient(135deg,#eef8f4,#dff0ea);color:#0f2b22;display:grid;place-items:center;min-height:100vh;padding:28px}
+    .card{width:min(960px,100%);background:#ffffffd9;border:1px solid #0f2b2220;border-radius:20px;padding:28px;box-shadow:0 20px 40px #0f2b2220}
+    h1{margin:0 0 10px;font-size:34px;letter-spacing:-.03em}
+    p{margin:8px 0 0;font-size:18px;line-height:1.5;color:#345247}
+    code{display:block;margin-top:14px;background:#0f2b220d;padding:10px 12px;border-radius:10px;color:#1d3d32;font-size:13px;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <article class="card">
+    <h1>${title}</h1>
+    <p>${summary}</p>
+    <p>Esse preview de contingência evita tela em branco quando o arquivo recebido é só bootstrap de framework.</p>
+    ${request ? `<code>${request}</code>` : ""}
+  </article>
+</body>
+</html>`;
 }
 
 async function handleFileSelection(fileList) {
