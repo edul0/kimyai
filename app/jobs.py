@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import html
 import json
 import re
+import time
 import uuid
 import zipfile
 from datetime import datetime
@@ -38,6 +41,7 @@ class JobManager:
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
         self.documents = DocumentService(settings)
+        self.response_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
         now = utcnow()
@@ -59,6 +63,36 @@ class JobManager:
         )
         self.save(job)
         return job
+
+    def register_user_turn(self, session_id: str, pedido: str, owner: str | None = None) -> dict[str, Any]:
+        key = f"session:{session_id}"
+        now = utcnow()
+        data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": now})
+        if owner and not data.get("owner"):
+            data["owner"] = owner
+        compact_context = build_context_snapshot(data.get("contexto_compacto") or {}, pedido)
+        request_parts = split_request_parts(pedido)
+        history = data.setdefault("historico", [])
+        if not (
+            history
+            and history[-1].get("role") == "user"
+            and str(history[-1].get("content", "")).strip() == pedido
+        ):
+            history.append(
+                {
+                    "ts": now,
+                    "role": "user",
+                    "content": pedido,
+                    "request_parts": request_parts,
+                    "context_snapshot": compact_context,
+                }
+            )
+        data["contexto_compacto"] = compact_context
+        if not data.get("title") or data.get("title") == "Nova conversa":
+            data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
+        data["updated_at"] = now
+        self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
+        return data
 
     def save(self, job: JobState) -> None:
         self.storage.set_json(f"job:{job.job_id}", job.model_dump(), ttl=self.settings.job_ttl_seconds)
@@ -111,25 +145,34 @@ class JobManager:
             )
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
+            execution_plan_data = execution_plan.as_dict()
+            cache_key = self._response_cache_key(job, execution_plan_data, compact_context, attachment_context["items"])
+            cached_response = self._get_cached_response(cache_key) if self.settings.response_cache_enabled else None
 
             if job.modo == "imagem":
                 await self._event_async(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
                 result = await self.pollinations.generate(job.pedido)
                 result["tools_used"] = ["pollinations"]
-                result["execution_plan"] = execution_plan.as_dict()
+                result["execution_plan"] = execution_plan_data
                 await self._finish_job(job, result)
                 return
 
             if job.modo == "documento":
                 await self._event_async(job, "Kemy", "Orquestrador ativo. Passando o trabalho para o sistema de documentos.", 45)
-                draft = await self.router.generate(
-                    prompt,
-                    job.modo,
-                    attachments=attachment_context["items"],
-                    visual_items=attachment_context["visual_items"],
-                )
+                if cached_response:
+                    await self._event_async(job, "Kemy", "Rascunho reutilizado do contexto para acelerar a entrega.", 56)
+                    draft = cached_response
+                    draft["cache"] = {"hit": True}
+                else:
+                    draft = await self.router.generate(
+                        prompt,
+                        job.modo,
+                        attachments=attachment_context["items"],
+                        visual_items=attachment_context["visual_items"],
+                    )
+                    self._set_cached_response(cache_key, draft)
                 await self._event_async(job, "Kemy", "Montando arquivos finais do documento.", 72)
-                result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft)
+                result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft, plan=execution_plan_data)
                 result["tools_used"] = list(
                     dict.fromkeys((draft.get("tools_used") or []) + (result.get("tools_used") or []) + ["python-docx", "reportlab"])
                 )
@@ -137,36 +180,46 @@ class JobManager:
                     "prompt_crafter": refined_prompt,
                     "orchestrator_mode": job.modo,
                     "system": "document-service",
-                    "execution_plan": execution_plan.as_dict(),
+                    "execution_plan": execution_plan_data,
                 }
-                result["execution_plan"] = execution_plan.as_dict()
+                result["execution_plan"] = execution_plan_data
                 await self._finish_job(job, result)
                 return
 
-            await self._event_async(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
-            tool_context = await self.tools.enrich(job.pedido, job.modo)
-            if tool_context.get("context"):
-                prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
+            tool_context: dict[str, Any] = {"used": []}
+            if cached_response:
+                await self._event_async(job, "Kemy", "Resposta reutilizada do contexto para acelerar a tarefa.", 58)
+                result = cached_response
+                result["cache"] = {"hit": True}
+            else:
+                await self._event_async(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
+                tool_context = await self.tools.enrich(job.pedido, job.modo)
+                if tool_context.get("context"):
+                    prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
-            await self._event_async(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
-            result = await self.router.generate(
-                prompt,
-                job.modo,
-                attachments=attachment_context["items"],
-                visual_items=attachment_context["visual_items"],
-            )
-            result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
-            if job.modo == "site":
-                result = self._ensure_site_artifact(job, result)
+                await self._event_async(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
+                result = await self.router.generate(
+                    prompt,
+                    job.modo,
+                    attachments=attachment_context["items"],
+                    visual_items=attachment_context["visual_items"],
+                )
+                result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
+                if job.modo == "site":
+                    result = self._ensure_site_artifact(job, result)
+                self._set_cached_response(cache_key, result)
             result = self._hydrate_artifacts(job, result)
             result["pipeline"] = {
                 "prompt_crafter": refined_prompt,
                 "orchestrator_mode": job.modo,
                 "system": "router-runtime",
-                "execution_plan": execution_plan.as_dict(),
+                "execution_plan": execution_plan_data,
             }
-            result["execution_plan"] = execution_plan.as_dict()
-            result["tools_used"] = tool_context.get("used", [])
+            result["execution_plan"] = execution_plan_data
+            tools_used = list(dict.fromkeys((result.get("tools_used") or []) + (tool_context.get("used") or [])))
+            if cached_response:
+                tools_used.append("response-cache")
+            result["tools_used"] = tools_used
             if attachment_context["items"]:
                 result["attachments_used"] = [
                     {"name": item["name"], "mime_type": item["mime_type"], "visual": item["visual"]}
@@ -311,6 +364,66 @@ class JobManager:
             return True
         return False
 
+    def _response_cache_key(
+        self,
+        job: JobState,
+        execution_plan: dict[str, Any],
+        compact_context: dict[str, Any] | None,
+        attachments: list[dict[str, Any]],
+    ) -> str:
+        normalized_prompt = re.sub(r"\s+", " ", (job.pedido or "").strip().lower())
+        context_summary = str((compact_context or {}).get("summary") or "")[:500]
+        attachment_fingerprint = self._attachments_fingerprint(attachments)
+        payload = {
+            "mode": job.modo,
+            "prompt": normalized_prompt,
+            "intent": execution_plan.get("intent"),
+            "contract": execution_plan.get("response_contract"),
+            "context_summary": context_summary,
+            "attachments": attachment_fingerprint,
+        }
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        return f"resp:{job.modo}:{digest}"
+
+    def _attachments_fingerprint(self, attachments: list[dict[str, Any]]) -> list[str]:
+        fingerprints: list[str] = []
+        for item in attachments or []:
+            name = str(item.get("name") or "")
+            mime_type = str(item.get("mime_type") or "")
+            content = str(item.get("content") or "")
+            mini = content[:600]
+            digest = hashlib.sha256(mini.encode("utf-8", errors="ignore")).hexdigest()[:16]
+            fingerprints.append(f"{name}|{mime_type}|{digest}")
+        return fingerprints
+
+    def _get_cached_response(self, key: str) -> dict[str, Any] | None:
+        self._prune_response_cache()
+        cached = self.response_cache.get(key)
+        if not cached:
+            return None
+        expires_at, payload = cached
+        if expires_at <= time.time():
+            self.response_cache.pop(key, None)
+            return None
+        return copy.deepcopy(payload)
+
+    def _set_cached_response(self, key: str, payload: dict[str, Any]) -> None:
+        ttl = max(30, int(self.settings.response_cache_ttl_seconds or 3600))
+        self.response_cache[key] = (time.time() + ttl, copy.deepcopy(payload))
+        self._prune_response_cache()
+
+    def _prune_response_cache(self) -> None:
+        now = time.time()
+        for cache_key, (expires_at, _payload) in list(self.response_cache.items()):
+            if expires_at <= now:
+                self.response_cache.pop(cache_key, None)
+        max_items = 320
+        if len(self.response_cache) <= max_items:
+            return
+        sorted_items = sorted(self.response_cache.items(), key=lambda item: item[1][0])
+        for cache_key, _value in sorted_items[: max(0, len(sorted_items) - max_items)]:
+            self.response_cache.pop(cache_key, None)
+
     def _hydrate_artifacts(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
         parsed = parse_kemy_artifact(result.get("raw") or "")
         if not parsed:
@@ -319,16 +432,32 @@ class JobManager:
         folder.mkdir(parents=True, exist_ok=True)
         files: list[dict[str, Any]] = []
         preview_url = ""
+        preview_rank = 99
+        recovered_html = self._extract_html_candidate(str(result.get("raw") or ""))
         for artifact in parsed.files:
             original_path = artifact.path.replace("\\", "/").strip().lstrip("/")
             content = self._clean_artifact_content(original_path, artifact.content)
             safe_name = original_path.replace("/", "__") or "index.html"
+            if safe_name.lower().endswith(".html") and not self._looks_like_html_document(content):
+                if recovered_html and self._looks_like_html_document(recovered_html):
+                    content = recovered_html
+                else:
+                    content = self._minimal_preview_html(job.pedido, parsed.title)
             target = folder / safe_name
             target.write_text(content, encoding="utf-8")
             mime_type = "text/plain"
             if safe_name.endswith(".html"):
                 mime_type = "text/html"
-                if not preview_url or safe_name.lower().endswith("preview.html"):
+                candidate_rank = 2
+                lowered_name = safe_name.lower()
+                if lowered_name.endswith("preview.html"):
+                    candidate_rank = 0
+                elif lowered_name.endswith("slides.html") or lowered_name.endswith(".slides.html"):
+                    candidate_rank = 0
+                elif lowered_name.endswith("index.html"):
+                    candidate_rank = 1
+                if not preview_url or candidate_rank < preview_rank:
+                    preview_rank = candidate_rank
                     preview_url = f"/api/artefatos/{job.job_id}/{safe_name}"
             elif safe_name.endswith(".js"):
                 mime_type = "application/javascript"
@@ -497,6 +626,56 @@ Site recuperado automaticamente pela Kemy a partir de HTML gerado pelo modelo.
         if path.lower().endswith(".html") and fenced.lower().startswith("html"):
             fenced = fenced[4:].strip()
         return fenced
+
+    def _minimal_preview_html(self, pedido: str, title: str) -> str:
+        safe_title = html.escape(title or self._site_title_from_prompt(pedido))
+        safe_prompt = html.escape(" ".join((pedido or "").split()))
+        return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(135deg, #f5fbff 0%, #e8f2ff 100%);
+      color: #10243d;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }}
+    main {{
+      width: min(960px, 100%);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(16, 36, 61, 0.12);
+      box-shadow: 0 20px 44px rgba(16, 36, 61, 0.12);
+      padding: 34px;
+    }}
+    h1 {{
+      margin: 0 0 12px;
+      font-size: 36px;
+      letter-spacing: -0.03em;
+    }}
+    p {{
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.55;
+      color: #40546f;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{safe_title}</h1>
+    <p>Preview reconstruido automaticamente pela Kemy para manter visualizacao e download validos.</p>
+    <p style="margin-top:12px;">Pedido original: {safe_prompt}</p>
+  </main>
+</body>
+</html>"""
 
     def _fallback_site_artifact(self, pedido: str) -> str:
         title = self._site_title_from_prompt(pedido)
@@ -713,52 +892,65 @@ Site gerado automaticamente pela Kemy para: {pedido}
         self._event(job, agente, msg, progresso)
         await self.supabase.insert_job(job.model_dump())
 
-    def _append_history(self, session_id: str, pedido: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _append_history(
+        self,
+        session_id: str,
+        pedido: str,
+        result: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool, dict[str, Any], dict[str, Any]]:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
         answer = result.get("raw") or result.get("summary", "")
         now = utcnow()
         history = data.setdefault("historico", [])
         previous_context = data.get("contexto_compacto") or {}
-        user_context = build_context_snapshot(previous_context, pedido)
-        assistant_context = build_context_snapshot(user_context, pedido, result)
         request_parts = split_request_parts(pedido)
-        if not data.get("title") or data.get("title") == "Nova conversa":
-            data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
-        history.append(
-            {
+        added_user = False
+        last_item = history[-1] if history else {}
+        same_user_turn = last_item.get("role") == "user" and str(last_item.get("content", "")).strip() == pedido
+        if same_user_turn:
+            user_entry = dict(last_item)
+            user_context = user_entry.get("context_snapshot") or build_context_snapshot(previous_context, pedido)
+            user_entry["context_snapshot"] = user_context
+            history[-1] = user_entry
+        else:
+            user_context = build_context_snapshot(previous_context, pedido)
+            user_entry = {
                 "ts": now,
                 "role": "user",
                 "content": pedido,
                 "request_parts": request_parts,
                 "context_snapshot": user_context,
             }
-        )
-        history.append(
-            {
-                "ts": now,
-                "role": "assistant",
-                "content": answer[:8000],
-                "context_snapshot": assistant_context,
-                "provider": result.get("provider"),
-                "model": result.get("model"),
-                "tools_used": result.get("tools_used", []),
+            history.append(user_entry)
+            added_user = True
+        assistant_context = build_context_snapshot(user_context, pedido, result)
+        if not data.get("title") or data.get("title") == "Nova conversa":
+            data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
+        assistant_entry = {
+            "ts": now,
+            "role": "assistant",
+            "content": answer[:8000],
+            "context_snapshot": assistant_context,
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "tools_used": result.get("tools_used", []),
+            "image_url": result.get("image_url"),
+            "image_data_url": result.get("image_data_url"),
+            "files": result.get("files", []),
+            "preview_url": result.get("preview_url"),
+            "result": {
+                "summary": result.get("summary"),
                 "image_url": result.get("image_url"),
                 "image_data_url": result.get("image_data_url"),
+                "provider": result.get("provider"),
+                "model": result.get("model"),
                 "files": result.get("files", []),
+                "document_title": result.get("document_title"),
                 "preview_url": result.get("preview_url"),
-                "result": {
-                    "summary": result.get("summary"),
-                    "image_url": result.get("image_url"),
-                    "image_data_url": result.get("image_data_url"),
-                    "provider": result.get("provider"),
-                    "model": result.get("model"),
-                    "files": result.get("files", []),
-                    "document_title": result.get("document_title"),
-                    "preview_url": result.get("preview_url"),
-                },
-            }
-        )
+            },
+        }
+        history.append(assistant_entry)
         memory = data.setdefault("memoria", [])
         fact = self._memory_fact(pedido)
         if fact and fact not in memory:
@@ -767,7 +959,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         data["contexto_compacto"] = assistant_context
         data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
-        return data
+        return data, added_user, user_entry, assistant_entry
 
     def _memory_fact(self, pedido: str) -> str | None:
         text = " ".join(pedido.split())
@@ -799,7 +991,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         job.updated_at = utcnow()
         self.save(job)
         await self.supabase.insert_job(job.model_dump())
-        session_data = self._append_history(job.session_id, job.pedido, result)
+        session_data, added_user, user_message, assistant_message = self._append_history(job.session_id, job.pedido, result)
         await self.supabase.insert_session(
             job.session_id,
             owner_email=session_data.get("owner"),
@@ -807,18 +999,16 @@ Site gerado automaticamente pela Kemy para: {pedido}
             created_at=session_data.get("created_at"),
             updated_at=session_data.get("updated_at"),
         )
-        history = session_data.get("historico", [])
-        user_message = history[-2] if len(history) >= 2 else {}
-        assistant_message = history[-1] if history else {}
-        await self.supabase.insert_message(
-            job.session_id,
-            "user",
-            job.pedido,
-            {
-                "request_parts": user_message.get("request_parts", []),
-                "context_snapshot": user_message.get("context_snapshot", {}),
-            },
-        )
+        if added_user:
+            await self.supabase.insert_message(
+                job.session_id,
+                "user",
+                job.pedido,
+                {
+                    "request_parts": user_message.get("request_parts", []),
+                    "context_snapshot": user_message.get("context_snapshot", {}),
+                },
+            )
         assistant_metadata = dict(result)
         assistant_metadata["context_snapshot"] = assistant_message.get("context_snapshot", {})
         await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), assistant_metadata)

@@ -493,6 +493,7 @@ class LLMRouter:
             return (
                 f"{base} "
                 "Se o pedido for de documento, entregue conteudo em Markdown estruturado com titulos, subtitulos, listas e texto pronto para montagem em DOCX e PDF. "
+                "Se o pedido mencionar docx, word, abnt, relatorio ou pdf e NAO mencionar slide/deck/ppt, nunca retorne codigo Python, classes, funcoes ou snippets tecnicos. "
                 "Se o usuario pedir slides, apresentacao, deck ou powerpoint, opere como designer profissional de apresentacoes PPTX. "
                 "Antes de escrever os slides, pense internamente nesta ordem: tema central, objetivo, publico-alvo, tom, estilo visual, estrutura, layout, conteudo e PPTX. "
                 "Nao crie apenas slides com texto; crie uma apresentacao visual, com identidade propria, adaptada ao tema, com layouts variados, hierarquia clara e aparencia de designer. "

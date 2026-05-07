@@ -9,10 +9,12 @@ Plataforma de agentes para coding, arquitetura, auditoria e deploy, com backend 
 - O deploy principal foi pensado para GitHub + Render.
 - O sistema aceita Redis como cache/persistencia curta e Supabase como persistencia remota de sessoes, mensagens e jobs.
 - A memoria local do Render e tratada apenas como cache. Sessoes, mensagens, jobs e artefatos recuperaveis devem ficar no Supabase.
+- Cada novo comando salva o turno do usuario em tempo real por conta antes mesmo do job terminar, evitando perda de contexto em quedas/deploy.
 - Quando houver dois projetos Supabase no ecossistema, use as variaveis `KIMI_SUPABASE_*` para o Kimi AI e deixe o Kanban isolado no projeto dele.
 - O modo `documento` identifica pedidos de `.docx`, Word, relatorio, proposta ou PDF e gera os dois arquivos com links de download.
-- O planejador `app/intent_planner.py` interpreta o pedido, escolhe stack/linguagem e define o contrato de entrega antes de chamar o modelo.
+- O planejador `app/intent_planner.py` interpreta o pedido, escolhe stack/linguagem, separa `site/coding/docx/slides/imagem/planejamento` e define contrato de entrega antes de chamar o modelo.
 - Projetos de site/app saem como artifact com preview, arquivos visiveis e ZIP para download.
+- Slides agora saem com pipeline dedicado: `PPTX + HTML preview` e tentativa de `PDF` em layout 16:9.
 
 ## Agentes nativos
 
@@ -35,6 +37,7 @@ Os slugs internos foram mantidos para compatibilidade, mas os nomes exibidos ago
 3. O planejador decide se a melhor entrega e site, codigo, backend, documento, slide ou imagem, escolhendo a linguagem adequada.
 4. Os especialistas entram conforme o tipo de tarefa: especificacao, arquitetura, frontend, backend, seguranca e QA.
 5. O progresso do job e sincronizado no Supabase durante a execucao e o resultado final salva mensagens, arquivos, bytes recuperaveis e metadados por usuario.
+6. Respostas de `coding/site/documento/planejamento` podem usar cache contextual com TTL para acelerar repeticoes sem perder qualidade.
 
 ## Estrutura principal
 
@@ -78,6 +81,8 @@ Acesse:
 - `KEMY_ADAPTIVE_ROUTER_ENABLED`
 - `KEMY_SELF_REVIEW_ENABLED`
 - `KEMY_SELF_REVIEW_MAX_CHARS`
+- `KEMY_RESPONSE_CACHE_ENABLED`
+- `KEMY_RESPONSE_CACHE_TTL_SECONDS`
 - `ORIGENS_CORS`
 - `REDIS_URL`
 - `KEMY_AUTH_USER`

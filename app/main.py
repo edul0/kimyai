@@ -350,6 +350,11 @@ async def status():
             "site": jobs.router.route_debug("site"),
             "documento": jobs.router.route_debug("documento"),
         },
+        "response_cache": {
+            "enabled": settings.response_cache_enabled,
+            "ttl_seconds": settings.response_cache_ttl_seconds,
+            "items": len(jobs.response_cache),
+        },
         "openrouter_free": jobs.router.openrouter_free_state,
         "gemini": jobs.router.gemini_state,
     }
@@ -620,6 +625,26 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
     else:
         if data.get("owner") and data.get("owner") != owner:
             raise HTTPException(403, "Sessao de outro usuario.")
+    session_snapshot = jobs.register_user_turn(sid, cmd.mensagem, owner=owner)
+    last_user = (session_snapshot.get("historico") or [])[-1] if session_snapshot.get("historico") else {}
+    await jobs.supabase.insert_session(
+        sid,
+        owner_email=owner,
+        title=session_snapshot.get("title") or "Nova conversa",
+        created_at=session_snapshot.get("created_at"),
+        updated_at=session_snapshot.get("updated_at"),
+    )
+    await jobs.supabase.insert_message(
+        sid,
+        "user",
+        cmd.mensagem,
+        {
+            "request_parts": last_user.get("request_parts", []),
+            "context_snapshot": last_user.get("context_snapshot", {}),
+            "modo": cmd.modo,
+            "queued_at": utcnow(),
+        },
+    )
     job = jobs.create(
         sid,
         cmd.mensagem,

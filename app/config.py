@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     adaptive_router_enabled: bool = Field(default=True, alias="KEMY_ADAPTIVE_ROUTER_ENABLED")
     self_review_enabled: bool = Field(default=True, alias="KEMY_SELF_REVIEW_ENABLED")
     self_review_max_chars: int = Field(default=24000, alias="KEMY_SELF_REVIEW_MAX_CHARS")
+    response_cache_enabled: bool = Field(default=True, alias="KEMY_RESPONSE_CACHE_ENABLED")
+    response_cache_ttl_seconds: int = Field(default=3600, alias="KEMY_RESPONSE_CACHE_TTL_SECONDS")
     auth_user: str = Field(default="admin", alias="KEMY_AUTH_USER")
     auth_password: str = Field(default="kemy-ai", alias="KEMY_AUTH_PASSWORD")
     auth_secret: str = Field(default="change-this-secret", alias="KEMY_AUTH_SECRET")

@@ -417,6 +417,13 @@ function resolveRequestedMode(text) {
   return selectedMode;
 }
 
+function resolveDailyMode(text) {
+  const lowered = String(text || "").toLowerCase();
+  const dailyMarkers = ["resuma", "resumo", "traduza", "traduzir", "organize", "checklist", "roteiro", "agenda", "planejamento", "plano", "email", "mensagem", "texto", "explique", "ideias", "brainstorm"];
+  if (dailyMarkers.some((marker) => lowered.includes(marker)) && lowered.split(/\s+/).length > 2) return "planejamento";
+  return "";
+}
+
 async function runAgents(prompt, source = "chat") {
   const text = (prompt || "").trim();
   if (!text) return;
@@ -434,7 +441,8 @@ async function runAgents(prompt, source = "chat") {
   $("timeline").innerHTML = `<li><p>Processando arquitetura da resposta e acionando agentes...</p></li>`;
 
   let data;
-  const requestedMode = resolveRequestedMode(text);
+  const intentMode = resolveRequestedMode(text);
+  const requestedMode = intentMode === "coding" ? (resolveDailyMode(text) || "coding") : intentMode;
   try {
     data = await api("/api/comando", {
       method: "POST",

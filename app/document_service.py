@@ -78,11 +78,20 @@ class DocumentService:
         self.settings = settings
         self.output_root = Path("generated_documents")
 
-    def generate(self, session_id: str, job_id: str, user_request: str, draft: dict[str, Any]) -> dict[str, Any]:
+    def generate(
+        self,
+        session_id: str,
+        job_id: str,
+        user_request: str,
+        draft: dict[str, Any],
+        plan: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         source_text = self._source_text(user_request, draft)
         title = self._title_from_text(user_request, source_text)
-        if self._is_slide_request(user_request):
-            return self._generate_slides(session_id, job_id, user_request, title, source_text, draft)
+        plan_kind = str((plan or {}).get("document_kind") or "").strip().lower()
+        is_slide = plan_kind == "slides" or (not plan_kind and self._is_slide_request(user_request))
+        if is_slide:
+            return self._generate_slides(session_id, job_id, user_request, title, source_text, draft, plan=plan)
         blocks = self._parse_blocks(source_text)
         folder = self.output_root / session_id / job_id
         folder.mkdir(parents=True, exist_ok=True)
@@ -131,13 +140,20 @@ class DocumentService:
         title: str,
         source_text: str,
         draft: dict[str, Any],
+        plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         folder = self.output_root / session_id / job_id
         folder.mkdir(parents=True, exist_ok=True)
 
         file_stem = self._filename_stem(user_request, title)
         pptx_name = self._safe_filename(file_stem, ".pptx")
+        html_name = self._safe_filename(file_stem, ".slides.html")
+        markdown_name = self._safe_filename(file_stem, ".slides.md")
+        pdf_name = self._safe_filename(file_stem, ".pdf")
         pptx_path = folder / pptx_name
+        html_path = folder / html_name
+        markdown_path = folder / markdown_name
+        pdf_path = folder / pdf_name
 
         normalized_source = self._normalize_slide_source(source_text)
         if self._needs_slide_fallback(normalized_source, user_request):
@@ -149,6 +165,21 @@ class DocumentService:
         slide_visuals = self._generate_slide_visuals(title, user_request, raw_slides, folder)
         slides = self._build_slide_models(raw_slides, title, slide_visuals)
         pptx_provider = self._build_presentation_pptx(pptx_path, title, slides, folder, user_request)
+        html_output = self._build_presentation_html(title, slides, user_request)
+        html_output = self._inline_slide_assets(html_output, folder)
+        html_path.write_text(html_output, encoding="utf-8")
+        markdown_path.write_text(self._build_marp_markdown(title, normalized_source, slide_visuals), encoding="utf-8")
+
+        pdf_provider = ""
+        should_render_pdf = True
+        if should_render_pdf:
+            try:
+                pdf_provider = self._build_presentation_pdf(markdown_path, html_path, pdf_path, slides)
+            except Exception:
+                try:
+                    pdf_provider = self._build_presentation_pdf_from_pptx(pptx_path, pdf_path, slides)
+                except Exception:
+                    pdf_provider = ""
 
         files: list[dict[str, Any]] = []
         if pptx_path.exists():
@@ -160,23 +191,70 @@ class DocumentService:
                     "download_url": f"/api/artefatos/{job_id}/{pptx_name}",
                 }
             )
+        if html_path.exists():
+            files.append(
+                {
+                    "name": html_name,
+                    "path": str(html_path).replace("\\", "/"),
+                    "mime_type": "text/html",
+                    "download_url": f"/api/artefatos/{job_id}/{html_name}",
+                    "language": "html",
+                }
+            )
+        if pdf_path.exists():
+            files.append(
+                {
+                    "name": pdf_name,
+                    "path": str(pdf_path).replace("\\", "/"),
+                    "mime_type": "application/pdf",
+                    "download_url": f"/api/artefatos/{job_id}/{pdf_name}",
+                }
+            )
+        if markdown_path.exists():
+            files.append(
+                {
+                    "name": markdown_name,
+                    "path": str(markdown_path).replace("\\", "/"),
+                    "mime_type": "text/markdown",
+                    "download_url": f"/api/artefatos/{job_id}/{markdown_name}",
+                    "language": "markdown",
+                }
+            )
 
         summary = "Apresentacao profissional gerada em PPTX."
         if slide_visuals:
             summary = "Apresentacao profissional gerada em PPTX com composicao visual e imagens IA."
-        raw = f"Apresentacao gerada com sucesso: `{pptx_name}`. Use o PPTX como arquivo principal de edicao, apresentacao e exportacao para PDF."
+        if html_path.exists():
+            summary += " Preview HTML incluido para abrir no painel lateral."
+        if pdf_path.exists():
+            summary += " PDF de apresentacao incluido."
+        raw = f"Apresentacao gerada com sucesso: `{pptx_name}`."
+        if html_path.exists():
+            raw += f" Arquivo de preview: `{html_name}`."
+        if pdf_path.exists():
+            raw += f" PDF: `{pdf_name}`."
         if slide_visuals:
             raw += f" Imagens IA aplicadas em {len(slide_visuals)} slide(s)."
         return {
             "provider": draft.get("provider", "kimi-slides"),
-            "model": f"{draft.get('model', 'kimi-slides')} + {pptx_provider}",
+            "model": " + ".join(
+                part
+                for part in [draft.get("model", "kimi-slides"), pptx_provider, pdf_provider]
+                if part
+            ),
             "summary": summary,
             "raw": raw,
             "document_title": title,
             "files": files,
-            "preview_url": "",
+            "preview_url": f"/api/artefatos/{job_id}/{html_name}" if html_path.exists() else "",
             "slide_deck": True,
-            "tools_used": ["python-pptx", *(["pollinations-image"] if slide_visuals else [])],
+            "tools_used": [
+                "python-pptx",
+                "slide-html-preview",
+                *(["pollinations-image"] if slide_visuals else []),
+                *(["presentation-pdf-render"] if pdf_path.exists() else []),
+            ],
+            "execution_contract": (plan or {}).get("response_contract"),
         }
 
     def _source_text(self, user_request: str, draft: dict[str, Any]) -> str:
@@ -1047,7 +1125,7 @@ class DocumentService:
         slides: list[str],
         folder: Path,
     ) -> dict[int, str]:
-        if not self.settings.pollinations_api_key or not slides or not self._wants_ai_slide_images(user_request):
+        if not slides or not self._wants_ai_slide_images(user_request):
             return {}
         selected_indexes = self._select_visual_slides(slides, user_request)
         if not selected_indexes:
@@ -1059,8 +1137,12 @@ class DocumentService:
             prompt = self._slide_image_prompt(title, user_request, slides[slide_index], slide_index, len(slides))
             output_path = assets_dir / f"slide-{slide_index + 1:02d}-visual.png"
             try:
-                self._download_pollinations_image(prompt, output_path)
-                visuals[slide_index] = f"assets/{output_path.name}"
+                if self._download_wikimedia_reference_image(title, slides[slide_index], output_path):
+                    visuals[slide_index] = f"assets/{output_path.name}"
+                    continue
+                if self.settings.pollinations_api_key:
+                    self._download_pollinations_image(prompt, output_path)
+                    visuals[slide_index] = f"assets/{output_path.name}"
             except Exception:
                 continue
         return visuals
@@ -1151,6 +1233,74 @@ class DocumentService:
         if any(token in lowered for token in ["luxo", "premium", "executivo"]):
             return f"Luxury executive editorial visual language, {direction.image_style if direction else 'premium composition'},"
         return f"{direction.image_style if direction else 'Professional presentation visual language'},"
+
+    def _download_wikimedia_reference_image(self, deck_title: str, raw_slide: str, output_path: Path) -> bool:
+        terms = self._wikimedia_query_terms(deck_title, raw_slide)
+        if not terms:
+            return False
+        api_url = "https://commons.wikimedia.org/w/api.php"
+        with httpx.Client(timeout=30) as client:
+            for term in terms:
+                params = {
+                    "action": "query",
+                    "format": "json",
+                    "generator": "search",
+                    "gsrsearch": term,
+                    "gsrnamespace": 6,
+                    "gsrlimit": 6,
+                    "prop": "imageinfo",
+                    "iiprop": "url",
+                    "iiurlwidth": 1920,
+                    "origin": "*",
+                }
+                response = client.get(api_url, params=params)
+                if response.status_code >= 400:
+                    continue
+                payload = response.json()
+                pages = (payload.get("query") or {}).get("pages") or {}
+                for page in pages.values():
+                    title = str(page.get("title") or "").lower()
+                    if any(token in title for token in ["logo", "icon", "flag", "coat of arms"]):
+                        continue
+                    info = (page.get("imageinfo") or [{}])[0]
+                    image_url = info.get("thumburl") or info.get("url")
+                    if not image_url or not re.search(r"\.(jpg|jpeg|png)(?:\?|$)", image_url, flags=re.I):
+                        continue
+                    image_response = client.get(image_url, timeout=45)
+                    if image_response.status_code >= 400:
+                        continue
+                    content = image_response.content
+                    if len(content) < 12_000:
+                        continue
+                    output_path.write_bytes(content)
+                    return True
+        return False
+
+    def _wikimedia_query_terms(self, deck_title: str, raw_slide: str) -> list[str]:
+        lines = [self._clean_inline_markdown(line) for line in raw_slide.splitlines() if line.strip()]
+        heading = ""
+        for line in lines:
+            if line.startswith("#"):
+                heading = re.sub(r"^#{1,4}\s*", "", line).strip()
+                break
+        if not heading and lines:
+            heading = lines[0]
+        heading = re.sub(r"[^A-Za-z0-9\s-]", " ", heading).strip()
+        title = re.sub(r"[^A-Za-z0-9\s-]", " ", deck_title).strip()
+        candidates = [
+            heading,
+            f"{heading} business presentation" if heading else "",
+            title,
+            f"{title} corporate" if title else "",
+        ]
+        terms: list[str] = []
+        for candidate in candidates:
+            normalized = " ".join(candidate.split())
+            if len(normalized) < 4:
+                continue
+            if normalized not in terms:
+                terms.append(normalized)
+        return terms[:4]
 
     def _download_pollinations_image(self, prompt: str, output_path: Path) -> None:
         headers = {"Authorization": f"Bearer {self.settings.pollinations_api_key}"}
