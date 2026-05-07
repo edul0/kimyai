@@ -2,6 +2,7 @@ const state = {
   sessionId: null,
   poll: null,
   lastOutput: "",
+  lastResultMode: "coding",
   authMode: "login",
   sessions: [],
   renderedJobs: new Set(),
@@ -228,11 +229,11 @@ function renderSessions() {
   }
   $("sessionList").innerHTML = state.sessions
     .map((session) => `
-      <div class="saved-session ${session.session_id === state.sessionId ? "active" : ""}" style="display: flex; justify-content: space-between; align-items: center;">
-        <div class="saved-session-main" data-session-id="${session.session_id}" style="overflow: hidden; flex: 1;">
+      <div class="saved-session ${session.session_id === state.sessionId ? "active" : ""}">
+        <div class="saved-session-main" data-session-id="${session.session_id}">
           <strong style="display: block; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">${escapeHtml(session.title || "Nova conversa")}</strong>
         </div>
-        <button class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir" style="background: none; border: none; color: var(--danger); cursor: pointer; padding: 4px; opacity: 0.7;">×</button>
+        <button type="button" class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir tarefa" title="Excluir tarefa"><span aria-hidden="true">&times;</span></button>
       </div>
     `)
     .join("");
@@ -253,6 +254,7 @@ function renderSessions() {
 async function newSession({ openChat = false } = {}) {
   const data = await api("/api/sessao/nova", { method: "POST", body: "{}" });
   persistSessionId(data.session_id);
+  state.lastResultMode = "coding";
   $("sessionTitle").textContent = "Nova conversa";
   $("chatLog").innerHTML = "";
   hidePreview();
@@ -267,6 +269,8 @@ async function openSession(sessionId, options = {}) {
   $("sessionTitle").textContent = data.title || "Nova conversa";
   $("chatLog").innerHTML = "";
   const history = data.historico || [];
+  const inferredHistoryMode = inferModeFromHistory(history);
+  state.lastResultMode = inferredHistoryMode || "coding";
   if (!history.length) {
     appendMessage("assistant", "Estou pronta. Pergunte qualquer coisa ou descreva uma tarefa.");
   } else {
@@ -339,6 +343,8 @@ function renderJob(job) {
 
   if (job.resultado && job.status === "done" && !state.renderedJobs.has(job.job_id)) {
     state.lastOutput = formatResult(job.resultado);
+    const inferredMode = job.modo || inferModeFromResult(job.resultado, state.lastOutput);
+    if (inferredMode) state.lastResultMode = inferredMode;
     appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
@@ -410,10 +416,14 @@ function resolveRequestedMode(text) {
   const slideMarkers = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"];
   const documentMarkers = [".docx", "docx", "docxs", ".pdf", "pdf", ".md", "markdown", "documento", "abnt", "relatorio", "relatório", "proposta", "contrato"];
   const siteMarkers = ["site", "landing page", "dashboard", "frontend", "pagina", "página", "app web", "web app", "html", "tailwind", "saas", "crud"];
+  const siteFollowupMarkers = ["mude", "altere", "ajuste", "refaca", "refaça", "melhore", "evolua", "troque", "adicione", "implemente", "deixe", "aplique"];
   if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
   if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
+  const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
+  const previewVisible = !$("previewPanel").classList.contains("hidden");
+  if (state.lastResultMode === "site" && hasSiteFollowupSignal && previewVisible) return "site";
   return selectedMode;
 }
 
@@ -421,6 +431,32 @@ function resolveDailyMode(text) {
   const lowered = String(text || "").toLowerCase();
   const dailyMarkers = ["resuma", "resumo", "traduza", "traduzir", "organize", "checklist", "roteiro", "agenda", "planejamento", "plano", "email", "mensagem", "texto", "explique", "ideias", "brainstorm"];
   if (dailyMarkers.some((marker) => lowered.includes(marker)) && lowered.split(/\s+/).length > 2) return "planejamento";
+  return "";
+}
+
+function inferModeFromResult(result, fallbackText = "") {
+  if (!result) return "";
+  if (extractImageSource(result)) return "imagem";
+  const files = result.files || [];
+  if (result.document_title || files.some((file) => String(file.name || file.path || "").toLowerCase().endsWith(".docx"))) {
+    return "documento";
+  }
+  if (
+    extractPreviewUrl(result) ||
+    extractPreviewHtml(result, fallbackText) ||
+    files.some((file) => String(file.name || file.path || "").toLowerCase().endsWith(".html"))
+  ) {
+    return "site";
+  }
+  return "";
+}
+
+function inferModeFromHistory(history) {
+  const assistantItems = [...(history || [])].reverse().filter((item) => item.role === "assistant");
+  for (const item of assistantItems) {
+    const inferred = inferModeFromResult(item.result || item, item.content || "");
+    if (inferred) return inferred;
+  }
   return "";
 }
 

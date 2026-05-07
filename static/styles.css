@@ -687,6 +687,8 @@ svg {
 
 .saved-session-main {
   min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
   cursor: pointer;
 }
 
@@ -699,23 +701,40 @@ svg {
 }
 
 .saved-session-delete {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 1px solid transparent;
+  border: 1px solid rgba(217, 77, 63, 0.32);
   border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
+  background: rgba(217, 77, 63, 0.08);
+  color: var(--danger);
   cursor: pointer;
-  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  opacity: 1;
+  transition: transform 140ms ease, background-color 160ms ease, color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.saved-session-delete span {
+  pointer-events: none;
+  transform: translateY(-1px);
 }
 
 .saved-session-delete:hover {
-  border-color: rgba(217, 77, 63, 0.25);
-  background: rgba(217, 77, 63, 0.1);
-  color: var(--danger);
+  transform: translateY(-1px);
+  border-color: rgba(217, 77, 63, 0.55);
+  background: rgba(217, 77, 63, 0.2);
+  color: #7c1d16;
+  box-shadow: 0 10px 22px rgba(217, 77, 63, 0.18);
+}
+
+.saved-session-delete:focus-visible {
+  outline: none;
+  border-color: rgba(217, 77, 63, 0.65);
+  box-shadow: 0 0 0 3px rgba(217, 77, 63, 0.2);
 }
 
 .conversation {

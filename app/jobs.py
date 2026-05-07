@@ -143,10 +143,27 @@ class JobManager:
                 refined_prompt=refined_prompt,
                 execution_plan=execution_plan.as_prompt(),
             )
+            site_context = ""
+            if job.modo == "site":
+                site_context = self._build_site_edit_context(job, session_data)
+                if site_context:
+                    prompt = (
+                        f"{prompt}\n\n"
+                        "[SITE ATUAL - EDICAO INCREMENTAL]\n"
+                        f"{site_context}\n\n"
+                        "Regra obrigatoria: evolua o mesmo projeto ja existente no contexto acima.\n"
+                        "Aplique somente as mudancas pedidas nesta mensagem e preserve o que ja funciona.\n"
+                    )
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
             execution_plan_data = execution_plan.as_dict()
-            cache_key = self._response_cache_key(job, execution_plan_data, compact_context, attachment_context["items"])
+            cache_key = self._response_cache_key(
+                job,
+                execution_plan_data,
+                compact_context,
+                attachment_context["items"],
+                site_context=site_context,
+            )
             cached_response = self._get_cached_response(cache_key) if self.settings.response_cache_enabled else None
 
             if job.modo == "imagem":
@@ -364,16 +381,172 @@ class JobManager:
             return True
         return False
 
+    def _build_site_edit_context(self, job: JobState, session_data: dict[str, Any]) -> str:
+        snapshot = self._latest_site_snapshot(session_data)
+        if not snapshot:
+            return ""
+        files = snapshot.get("files") or []
+        if not files:
+            return ""
+        budget = 36000
+        blocks: list[str] = []
+        for file_item in files[:10]:
+            path = str(file_item.get("path") or "").replace("\\", "/").strip()
+            content = str(file_item.get("content") or "")
+            if not path or not content:
+                continue
+            cleaned = self._clean_artifact_content(path, content).strip()
+            if not cleaned:
+                continue
+            per_file_limit = 12000 if path.lower().endswith(".html") else 7000
+            clipped = cleaned[: min(per_file_limit, budget)]
+            if not clipped.strip():
+                continue
+            language = self._artifact_language(path)
+            blocks.append(
+                f"<file path=\"{path}\">\n"
+                f"```{language}\n"
+                f"{clipped}\n"
+                "```\n"
+                "</file>"
+            )
+            budget -= len(clipped)
+            if budget <= 2200:
+                break
+        if not blocks:
+            return ""
+        title = str(snapshot.get("title") or self._site_title_from_prompt(job.pedido)).strip()
+        summary = str(snapshot.get("summary") or "").strip()
+        summary_block = f"Resumo atual: {summary}\n" if summary else ""
+        files_block = "\n\n".join(blocks)
+        return (
+            f"Projeto atual: {title}\n"
+            f"{summary_block}"
+            "Contexto: existe um site ja criado nesta sessao.\n"
+            "Ao responder, evolua esse mesmo projeto sem reiniciar do zero.\n"
+            "Se o usuario pedir mudanca visual (ex.: tom, design, tema), aplique no mesmo preview.\n"
+            "Se pedir funcionalidade nova, implemente mantendo o que ja existe.\n"
+            "Entregue o artifact completo atualizado com preview.html funcional.\n\n"
+            f"{files_block}"
+        )
+
+    def _latest_site_snapshot(self, session_data: dict[str, Any]) -> dict[str, Any] | None:
+        history = (session_data or {}).get("historico") or []
+        for item in reversed(history[-24:]):
+            if item.get("role") != "assistant":
+                continue
+            candidate = item.get("site_snapshot")
+            if isinstance(candidate, dict) and candidate.get("files"):
+                return candidate
+            files = self._extract_site_files_from_history_item(item)
+            if files:
+                result_payload = item.get("result") or {}
+                title = (
+                    str(result_payload.get("artifact_title") or "")
+                    or str(result_payload.get("document_title") or "")
+                    or str(item.get("summary") or "")
+                    or "Projeto Kemy"
+                )
+                return {"title": title[:90], "summary": str(item.get("content") or "")[:220], "files": files}
+        return None
+
+    def _extract_site_files_from_history_item(self, item: dict[str, Any]) -> list[dict[str, str]]:
+        candidates: list[list[dict[str, Any]]] = []
+        result = item.get("result") or {}
+        snapshot = item.get("site_snapshot") or {}
+        if isinstance(snapshot, dict):
+            snap_files = snapshot.get("files")
+            if isinstance(snap_files, list):
+                candidates.append(snap_files)
+        item_files = item.get("files")
+        if isinstance(item_files, list):
+            candidates.append(item_files)
+        result_files = result.get("files")
+        if isinstance(result_files, list):
+            candidates.append(result_files)
+        merged: dict[str, str] = {}
+        for file_list in candidates:
+            for file_item in file_list:
+                if not isinstance(file_item, dict):
+                    continue
+                path = str(file_item.get("name") or file_item.get("path") or "").replace("\\", "/").strip().lstrip("/")
+                if not path:
+                    continue
+                lowered = path.lower()
+                if not lowered.endswith((".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".json", ".md")):
+                    continue
+                content = str(file_item.get("content") or "")
+                if not content.strip():
+                    continue
+                if path not in merged:
+                    merged[path] = content
+        if not merged:
+            return []
+        if not any(path.lower().endswith(".html") for path in merged):
+            return []
+        priority = [
+            "preview.html",
+            "index.html",
+            "src/main.tsx",
+            "src/app.tsx",
+            "src/styles.css",
+            "src/index.css",
+            "style.css",
+            "script.js",
+            "package.json",
+            "readme.md",
+        ]
+
+        def _rank(path: str) -> tuple[int, str]:
+            lowered = path.lower()
+            for idx, key in enumerate(priority):
+                if lowered == key:
+                    return idx, lowered
+            return len(priority) + 1, lowered
+
+        ordered = sorted(merged.items(), key=lambda item: _rank(item[0]))
+        budget = 38000
+        normalized_files: list[dict[str, str]] = []
+        for path, content in ordered[:10]:
+            cleaned = self._clean_artifact_content(path, content).strip()
+            if not cleaned:
+                continue
+            per_file_limit = 12000 if path.lower().endswith(".html") else 7000
+            clipped = cleaned[: min(per_file_limit, budget)]
+            if not clipped.strip():
+                continue
+            normalized_files.append({"path": path, "content": clipped})
+            budget -= len(clipped)
+            if budget <= 2000:
+                break
+        return normalized_files
+
+    def _site_snapshot_from_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        files_raw = result.get("files")
+        if not isinstance(files_raw, list):
+            return None
+        history_like = {"files": files_raw, "result": {"files": files_raw}}
+        files = self._extract_site_files_from_history_item(history_like)
+        if not files:
+            return None
+        title = str(result.get("artifact_title") or result.get("document_title") or result.get("summary") or "Projeto Kemy")
+        summary = str(result.get("summary") or "")[:220]
+        return {"title": title[:90], "summary": summary, "files": files}
+
     def _response_cache_key(
         self,
         job: JobState,
         execution_plan: dict[str, Any],
         compact_context: dict[str, Any] | None,
         attachments: list[dict[str, Any]],
+        site_context: str = "",
     ) -> str:
         normalized_prompt = re.sub(r"\s+", " ", (job.pedido or "").strip().lower())
         context_summary = str((compact_context or {}).get("summary") or "")[:500]
         attachment_fingerprint = self._attachments_fingerprint(attachments)
+        site_context_hash = ""
+        if site_context:
+            site_context_hash = hashlib.sha256(site_context.encode("utf-8", errors="ignore")).hexdigest()[:20]
         payload = {
             "mode": job.modo,
             "prompt": normalized_prompt,
@@ -381,6 +554,7 @@ class JobManager:
             "contract": execution_plan.get("response_contract"),
             "context_summary": context_summary,
             "attachments": attachment_fingerprint,
+            "site_context_hash": site_context_hash,
         }
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         return f"resp:{job.modo}:{digest}"
@@ -942,6 +1116,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         assistant_context = build_context_snapshot(user_context, pedido, result)
         if not data.get("title") or data.get("title") == "Nova conversa":
             data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
+        site_snapshot = self._site_snapshot_from_result(result)
         assistant_entry = {
             "ts": now,
             "role": "assistant",
@@ -965,6 +1140,9 @@ Site gerado automaticamente pela Kemy para: {pedido}
                 "preview_url": result.get("preview_url"),
             },
         }
+        if site_snapshot:
+            assistant_entry["site_snapshot"] = site_snapshot
+            assistant_entry["result"]["site_snapshot"] = site_snapshot
         history.append(assistant_entry)
         memory = data.setdefault("memoria", [])
         fact = self._memory_fact(pedido)
