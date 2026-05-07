@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import uuid
 import zipfile
@@ -150,6 +151,8 @@ class JobManager:
                 attachments=attachment_context["items"],
                 visual_items=attachment_context["visual_items"],
             )
+            if job.modo == "site":
+                result = self._ensure_site_artifact(job, result)
             result = self._hydrate_artifacts(job, result)
             result["pipeline"] = {
                 "prompt_crafter": refined_prompt,
@@ -294,6 +297,206 @@ class JobManager:
             used.append("kemy-artifact")
         result["tools_used"] = used
         return result
+
+    def _ensure_site_artifact(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
+        raw = result.get("raw") or result.get("summary") or ""
+        if parse_kemy_artifact(raw) or result.get("files"):
+            return result
+        result = dict(result)
+        result["raw"] = self._fallback_site_artifact(job.pedido)
+        result["summary"] = "Site gerado com live preview, arquivos e ZIP para download."
+        tools = list(result.get("tools_used") or [])
+        if "kemy-site-fallback" not in tools:
+            tools.append("kemy-site-fallback")
+        result["tools_used"] = tools
+        return result
+
+    def _fallback_site_artifact(self, pedido: str) -> str:
+        title = self._site_title_from_prompt(pedido)
+        safe_title = html.escape(title)
+        prompt_text = html.escape(" ".join(pedido.split()))
+        html_doc = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    :root {{
+      --ink: #10231d;
+      --muted: #5f756e;
+      --brand: #0f8f70;
+      --brand-dark: #0d5f50;
+      --cream: #f6f1e8;
+      --card: rgba(255, 255, 255, 0.82);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(15, 143, 112, .18), transparent 34%),
+        linear-gradient(135deg, #fbf8f0 0%, #eef7f2 45%, #d9efe7 100%);
+      min-height: 100vh;
+    }}
+    header {{
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }}
+    .logo {{ font-weight: 900; letter-spacing: -.04em; font-size: 28px; }}
+    nav {{ display: flex; gap: 18px; color: var(--muted); font-weight: 700; }}
+    .hero {{
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto;
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 28px;
+      align-items: stretch;
+    }}
+    .panel {{
+      border: 1px solid rgba(16, 35, 29, .12);
+      border-radius: 34px;
+      background: var(--card);
+      box-shadow: 0 28px 80px rgba(16, 35, 29, .14);
+      backdrop-filter: blur(18px);
+    }}
+    .copy {{ padding: clamp(32px, 6vw, 72px); }}
+    .eyebrow {{
+      display: inline-flex;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(15, 143, 112, .1);
+      color: var(--brand-dark);
+      font-size: 13px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }}
+    h1 {{
+      margin: 22px 0;
+      font-size: clamp(42px, 7vw, 82px);
+      line-height: .94;
+      letter-spacing: -.07em;
+    }}
+    .lead {{
+      max-width: 650px;
+      color: var(--muted);
+      font-size: clamp(18px, 2vw, 24px);
+      line-height: 1.45;
+    }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }}
+    .btn {{
+      border: 0;
+      border-radius: 999px;
+      padding: 16px 22px;
+      font-weight: 900;
+      text-decoration: none;
+      cursor: pointer;
+    }}
+    .btn.primary {{ background: var(--ink); color: white; }}
+    .btn.secondary {{ background: white; color: var(--ink); border: 1px solid rgba(16,35,29,.12); }}
+    .booking {{ padding: 28px; display: grid; gap: 18px; }}
+    .booking h2 {{ margin: 0; font-size: 28px; letter-spacing: -.04em; }}
+    .grid {{ display: grid; gap: 12px; }}
+    label {{ display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weight: 800; }}
+    input, select {{
+      width: 100%;
+      border: 1px solid rgba(16,35,29,.14);
+      border-radius: 18px;
+      padding: 15px 16px;
+      font: inherit;
+      background: rgba(255,255,255,.72);
+    }}
+    .services {{
+      width: min(1180px, calc(100% - 32px));
+      margin: 28px auto 70px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }}
+    .service {{ padding: 24px; }}
+    .service strong {{ display: block; font-size: 22px; margin-bottom: 8px; }}
+    .service span {{ color: var(--muted); line-height: 1.45; }}
+    @media (max-width: 860px) {{
+      header, nav {{ align-items: flex-start; }}
+      nav {{ display: none; }}
+      .hero, .services {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">{safe_title}</div>
+    <nav><span>Serviços</span><span>Agenda</span><span>Contato</span></nav>
+  </header>
+  <main>
+    <section class="hero">
+      <div class="panel copy">
+        <span class="eyebrow">Agenda online</span>
+        <h1>{safe_title}</h1>
+        <p class="lead">Uma experiência elegante para clientes escolherem o serviço, reservarem horário e chegarem no barbeiro com tudo combinado.</p>
+        <div class="actions">
+          <a class="btn primary" href="#agendar">Agendar corte</a>
+          <a class="btn secondary" href="#servicos">Ver serviços</a>
+        </div>
+      </div>
+      <form id="agendar" class="panel booking">
+        <h2>Reserve seu horário</h2>
+        <div class="grid">
+          <label>Nome<input placeholder="Seu nome" /></label>
+          <label>Serviço<select><option>Corte masculino</option><option>Barba completa</option><option>Corte + barba</option></select></label>
+          <label>Data<input type="date" /></label>
+          <label>Horário<input type="time" /></label>
+        </div>
+        <button class="btn primary" type="button" onclick="alert('Agendamento simulado com sucesso!')">Confirmar agenda</button>
+      </form>
+    </section>
+    <section id="servicos" class="services">
+      <article class="panel service"><strong>Corte alinhado</strong><span>Acabamento preciso, consultoria de estilo e finalização premium.</span></article>
+      <article class="panel service"><strong>Barba completa</strong><span>Toalha quente, desenho limpo e cuidado para pele sensível.</span></article>
+      <article class="panel service"><strong>Agenda prática</strong><span>Fluxo simples para escolher data, horário e serviço sem atrito.</span></article>
+    </section>
+  </main>
+  <script>console.log("Preview Kemy:", "{prompt_text}");</script>
+</body>
+</html>"""
+        readme = f"""# {title}
+
+Site gerado automaticamente pela Kemy para: {pedido}
+
+## Como usar
+
+- Abra `preview.html` para visualizar imediatamente.
+- Use o ZIP para baixar todos os arquivos gerados.
+- O formulario usa agendamento simulado e pode ser conectado depois ao Supabase.
+"""
+        return (
+            f"<kemy_artifact title=\"{html.escape(title, quote=True)}\">\n"
+            "<file path=\"preview.html\">\n"
+            f"{html_doc}\n"
+            "</file>\n"
+            "<file path=\"README.md\">\n"
+            f"{readme}\n"
+            "</file>\n"
+            "</kemy_artifact>"
+        )
+
+    def _site_title_from_prompt(self, pedido: str) -> str:
+        text = " ".join(pedido.split()).strip(" .")
+        lowered = text.lower()
+        if "barbe" in lowered or "corte" in lowered or "cabelo" in lowered:
+            return "Barbearia Agenda"
+        if "imobili" in lowered:
+            return "Imobiliaria Prime"
+        if "restaurante" in lowered or "comida" in lowered:
+            return "Mesa Reservada"
+        return (text[:48].strip() or "Site Kemy").title()
 
     def _artifact_language(self, path: str) -> str:
         suffix = Path(path).suffix.lower().lstrip(".")
