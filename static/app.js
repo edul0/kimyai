@@ -524,6 +524,40 @@ function appendMessage(role, text) {
 }
 
 function appendResult(result, fallbackText) {
+  const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
+  const inlinePreview = extractPreviewHtml(result, fallbackText);
+  const previewUrl = extractPreviewUrl(result);
+  const archiveUrl = result.project_archive_url || downloadableFiles.find((file) => String(file.name || "").toLowerCase().endsWith(".zip"))?.download_url || "";
+  if (downloadableFiles.length || previewUrl || archiveUrl || inlinePreview) {
+    const node = document.createElement("div");
+    node.className = "message assistant";
+    node.innerHTML = `
+      <div class="result-card">
+        <div class="result-card-head">
+          <strong>${escapeHtml(result.document_title || result.artifact_title || result.summary || "Projeto gerado")}</strong>
+          <span class="result-meta">${escapeHtml((result.provider || "kemy") + " - " + (result.model || "preview"))}</span>
+        </div>
+        <div class="project-actions">
+          ${previewUrl ? `<a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer" class="primary-link">Abrir preview do projeto</a>` : ""}
+          ${inlinePreview ? `<button type="button" class="primary-link" data-open-inline-preview>Abrir live preview</button>` : ""}
+          ${archiveUrl ? `<a href="${escapeHtml(archiveUrl)}" target="_blank" rel="noreferrer" class="primary-link">Baixar projeto ZIP</a>` : ""}
+        </div>
+        ${downloadableFiles.length ? `
+          <div class="file-actions">
+            ${downloadableFiles.map((file) => `<a href="${escapeHtml(file.download_url)}" target="_blank" rel="noreferrer" class="secondary-btn">Download ${escapeHtml(file.name)}</a>`).join("")}
+          </div>
+        ` : ""}
+        ${inlinePreview ? `<p class="result-note">Live preview pronto no painel lateral.</p>` : ""}
+        ${renderCodeFileTable(downloadableFiles)}
+      </div>
+    `;
+    $("chatLog").appendChild(node);
+    node.querySelector("[data-open-inline-preview]")?.addEventListener("click", () => showPreview(inlinePreview));
+    if (inlinePreview) showPreview(inlinePreview);
+    else if (previewUrl) showPreviewUrl(previewUrl);
+    node.scrollIntoView({ block: "end", behavior: "smooth" });
+    return;
+  }
   const imageSource = extractImageSource(result) || extractImageSource({ raw: fallbackText, summary: fallbackText });
   if (!imageSource) {
     const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
@@ -682,20 +716,20 @@ function showRunError(error) {
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
-  if (result?.preview_html) return result.preview_html;
+  if (result?.preview_html) return normalizePreviewHtml(result.preview_html);
   const files = result?.files || [];
   const htmlFile = files.find((file) => {
     const name = String(file.relative_path || file.name || file.path || "").toLowerCase();
     return name.endsWith("preview.html") || name.endsWith("index.html") || name.endsWith(".html");
   });
-  if (htmlFile?.content) return htmlFile.content;
+  if (htmlFile?.content) return normalizePreviewHtml(htmlFile.content);
   const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
-  if (match) return match[1].trim();
+  if (match) return normalizePreviewHtml(match[1]);
   const artifactFiles = extractArtifactFiles([result?.raw, result?.summary, fallbackText].filter(Boolean).join("\n"));
   const artifactHtml = artifactFiles.find((file) => file.path.toLowerCase().endsWith("preview.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith("index.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith(".html"));
-  return artifactHtml?.content || "";
+  return normalizePreviewHtml(artifactHtml?.content || "");
 }
 
 function extractPreviewUrl(result) {
@@ -721,6 +755,19 @@ function decodeHtmlEntities(value = "") {
   const textarea = document.createElement("textarea");
   textarea.innerHTML = value;
   return textarea.value;
+}
+
+function normalizePreviewHtml(value = "") {
+  let html = decodeHtmlEntities(String(value || "").trim());
+  if (html.startsWith("```")) {
+    html = html.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "").trim();
+  }
+  if (html.toLowerCase().startsWith("html")) {
+    html = html.slice(4).trim();
+  }
+  const lower = html.toLowerCase();
+  if (!lower.includes("<html") && !lower.includes("<!doctype html")) return "";
+  return html;
 }
 
 async function handleFileSelection(fileList) {

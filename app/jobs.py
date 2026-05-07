@@ -210,9 +210,10 @@ class JobManager:
         preview_url = ""
         for artifact in parsed.files:
             original_path = artifact.path.replace("\\", "/").strip().lstrip("/")
+            content = self._clean_artifact_content(original_path, artifact.content)
             safe_name = original_path.replace("/", "__") or "index.html"
             target = folder / safe_name
-            target.write_text(artifact.content, encoding="utf-8")
+            target.write_text(content, encoding="utf-8")
             mime_type = "text/plain"
             if safe_name.endswith(".html"):
                 mime_type = "text/html"
@@ -234,7 +235,7 @@ class JobManager:
                     "path": str(target).replace("\\", "/"),
                     "mime_type": mime_type,
                     "download_url": f"/api/artefatos/{job.job_id}/{safe_name}",
-                    "content": artifact.content[:120000],
+                    "content": content[:120000],
                     "language": language,
                 }
             )
@@ -300,7 +301,8 @@ class JobManager:
 
     def _ensure_site_artifact(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
         raw = result.get("raw") or result.get("summary") or ""
-        if parse_kemy_artifact(raw) or result.get("files"):
+        parsed = parse_kemy_artifact(raw)
+        if (parsed and self._artifact_has_usable_html(parsed.files)) or result.get("files"):
             return result
         result = dict(result)
         result["raw"] = self._fallback_site_artifact(job.pedido)
@@ -310,6 +312,30 @@ class JobManager:
             tools.append("kemy-site-fallback")
         result["tools_used"] = tools
         return result
+
+    def _artifact_has_usable_html(self, files: list[Any]) -> bool:
+        for file_item in files:
+            path = str(getattr(file_item, "path", "")).lower()
+            if not path.endswith(".html"):
+                continue
+            content = self._clean_artifact_content(path, str(getattr(file_item, "content", "")))
+            if "<html" in content.lower() or "<!doctype html" in content.lower():
+                return True
+        return False
+
+    def _clean_artifact_content(self, path: str, content: str) -> str:
+        text = html.unescape((content or "").strip())
+        fenced = text
+        if fenced.startswith("```"):
+            lines = fenced.splitlines()
+            if lines and lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            fenced = "\n".join(lines).strip()
+        if path.lower().endswith(".html") and fenced.lower().startswith("html"):
+            fenced = fenced[4:].strip()
+        return fenced
 
     def _fallback_site_artifact(self, pedido: str) -> str:
         title = self._site_title_from_prompt(pedido)
