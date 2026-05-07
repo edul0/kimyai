@@ -47,6 +47,10 @@ class IntentRoutingTests(unittest.TestCase):
         }
         self.assertEqual(classify_request_mode("melhore isso e deixe mais bonito", "coding", session_data), "site")
 
+    def test_site_followup_uses_stored_last_mode(self):
+        session_data = {"last_mode": "site", "historico": []}
+        self.assertEqual(classify_request_mode("deixe mais premium", "coding", session_data), "site")
+
     def test_document_followup_keeps_document_mode(self):
         session_data = {
             "historico": [

@@ -1086,6 +1086,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         session_id: str,
         pedido: str,
         result: dict[str, Any],
+        mode: str | None = None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any], dict[str, Any]]:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
@@ -1140,6 +1141,9 @@ Site gerado automaticamente pela Kemy para: {pedido}
                 "preview_url": result.get("preview_url"),
             },
         }
+        if mode:
+            assistant_entry["mode"] = mode
+            assistant_entry["result"]["mode"] = mode
         if site_snapshot:
             assistant_entry["site_snapshot"] = site_snapshot
             assistant_entry["result"]["site_snapshot"] = site_snapshot
@@ -1150,6 +1154,8 @@ Site gerado automaticamente pela Kemy para: {pedido}
             memory.append(fact)
             data["memoria"] = memory[-20:]
         data["contexto_compacto"] = assistant_context
+        if mode:
+            data["last_mode"] = mode
         data["updated_at"] = now
         self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
         return data, added_user, user_entry, assistant_entry
@@ -1184,7 +1190,12 @@ Site gerado automaticamente pela Kemy para: {pedido}
         job.updated_at = utcnow()
         self.save(job)
         await self.supabase.insert_job(job.model_dump())
-        session_data, added_user, user_message, assistant_message = self._append_history(job.session_id, job.pedido, result)
+        session_data, added_user, user_message, assistant_message = self._append_history(
+            job.session_id,
+            job.pedido,
+            result,
+            mode=job.modo,
+        )
         await self.supabase.insert_session(
             job.session_id,
             owner_email=session_data.get("owner"),

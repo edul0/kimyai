@@ -292,7 +292,13 @@ def _is_followup(text: str, session_data: dict[str, Any] | None) -> bool:
 
 
 def _previous_mode(session_data: dict[str, Any] | None) -> str | None:
+    stored_mode = str((session_data or {}).get("last_mode") or "").strip().lower()
+    if stored_mode in {"site", "documento", "imagem", "coding", "planejamento"}:
+        return stored_mode
     for item in reversed((session_data or {}).get("historico", [])[-12:]):
+        mode_hint = str(item.get("mode") or (item.get("result") or {}).get("mode") or "").strip().lower()
+        if mode_hint in {"site", "documento", "imagem", "coding", "planejamento"}:
+            return mode_hint
         result = item.get("result") or {}
         files = item.get("files") or result.get("files") or []
         if result.get("slide_deck") or any(str(file.get("name", "")).endswith((".pptx", ".slides.html")) for file in files):

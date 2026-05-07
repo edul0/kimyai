@@ -330,9 +330,13 @@ async function openSession(sessionId, options = {}) {
       if (item.resumo) appendMessage("assistant", item.resumo);
     });
   }
-  const lastAssistant = [...history].reverse().find((item) => item.role === "assistant" && item.content);
-  const previewHtml = lastAssistant ? extractPreviewHtml(lastAssistant.result || lastAssistant, lastAssistant.content) : "";
-  const previewUrl = lastAssistant ? extractPreviewUrl(lastAssistant.result || lastAssistant) : "";
+  const lastAssistantWithPreview = [...history].reverse().find((item) => {
+    if (item.role !== "assistant") return false;
+    const target = item.result || item;
+    return Boolean(extractPreviewHtml(target, item.content || "") || extractPreviewUrl(target));
+  });
+  const previewHtml = lastAssistantWithPreview ? extractPreviewHtml(lastAssistantWithPreview.result || lastAssistantWithPreview, lastAssistantWithPreview.content || "") : "";
+  const previewUrl = lastAssistantWithPreview ? extractPreviewUrl(lastAssistantWithPreview.result || lastAssistantWithPreview) : "";
   if (previewHtml) showPreview(previewHtml);
   else if (previewUrl) showPreviewUrl(previewUrl);
   else hidePreview();
@@ -445,8 +449,7 @@ function resolveRequestedMode(text) {
   if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
   const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
-  const previewVisible = !$("previewPanel").classList.contains("hidden");
-  if (state.lastResultMode === "site" && hasSiteFollowupSignal && previewVisible) return "site";
+  if (state.lastResultMode === "site" && hasSiteFollowupSignal) return "site";
   return selectedMode;
 }
 
