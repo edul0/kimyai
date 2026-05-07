@@ -599,10 +599,11 @@ svg {
   display: grid;
   grid-template-columns: 316px minmax(0, 1fr);
   background: transparent;
+  transition: grid-template-columns 220ms ease;
 }
 
 .chat-view.has-preview {
-  grid-template-columns: 316px minmax(0, 1fr) minmax(360px, 38vw);
+  grid-template-columns: 316px minmax(0, 1fr) minmax(420px, 40vw);
 }
 
 .task-sidebar {
@@ -1189,26 +1190,146 @@ svg {
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
-  background: rgba(var(--surface-rgb), 0.6);
+  background:
+    radial-gradient(120% 130% at 100% 0%, rgba(21, 150, 111, 0.12), transparent 52%),
+    rgba(var(--surface-rgb), 0.66);
   backdrop-filter: blur(18px) saturate(1.12);
   -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.08), transparent 18%),
+    radial-gradient(85% 90% at 0% 0%, rgba(21, 150, 111, 0.18), transparent 68%);
 }
 
 .preview-head {
-  height: 64px;
-  padding: 0 16px;
+  min-height: 64px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
   color: var(--ink-strong);
+  background: linear-gradient(120deg, rgba(8, 28, 21, 0.06), rgba(21, 150, 111, 0.08));
+}
+
+.preview-head strong {
+  letter-spacing: -0.01em;
+  font-size: 26px;
+}
+
+.preview-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 #previewFrame {
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
   border: 0;
   background: #ffffff;
+}
+
+.preview-edit-bar {
+  border-top: 1px solid var(--line);
+  background: rgba(var(--surface-rgb), 0.84);
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.preview-edit-bar label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+}
+
+.preview-edit-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+#previewPrompt {
+  width: 100%;
+  min-height: 56px;
+  max-height: 150px;
+  resize: vertical;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(var(--surface-rgb), 0.92);
+  color: var(--ink-strong);
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+#previewApplyBtn {
+  min-height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--mint));
+  color: #03140f;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 12px 30px rgba(21, 150, 111, 0.24);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+#previewApplyBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 34px rgba(21, 150, 111, 0.34);
+}
+
+#previewApplyBtn:active {
+  transform: translateY(0);
+}
+
+body.preview-fullscreen {
+  overflow: hidden;
+}
+
+body.preview-fullscreen #chatView {
+  grid-template-columns: 1fr;
+}
+
+body.preview-fullscreen .task-sidebar,
+body.preview-fullscreen .conversation {
+  display: none;
+}
+
+body.preview-fullscreen .chat-composer {
+  display: none;
+}
+
+body.preview-fullscreen .preview-panel {
+  position: fixed;
+  inset: var(--nav-height) 0 0 0;
+  z-index: 55;
+  border-left: 0;
+  background:
+    radial-gradient(120% 120% at 100% 0%, rgba(21, 150, 111, 0.16), transparent 55%),
+    linear-gradient(180deg, rgba(var(--surface-rgb), 0.9), rgba(var(--surface-rgb), 0.82));
+}
+
+body.preview-fullscreen .preview-head {
+  min-height: 72px;
+  padding: 12px 18px;
+}
+
+body.preview-fullscreen #previewFrame {
+  min-height: calc(100vh - var(--nav-height) - 180px);
 }
 
 dialog {
@@ -1322,6 +1443,10 @@ dialog::backdrop {
 
   .preview-panel {
     display: none;
+  }
+
+  body.preview-fullscreen .preview-panel {
+    display: flex;
   }
 
   .sidebar-top {

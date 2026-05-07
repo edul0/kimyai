@@ -9,6 +9,7 @@ from xml.etree import ElementTree as ET
 from typing import Any
 
 from docx import Document
+from PIL import Image, ImageStat
 from pypdf import PdfReader
 from pptx import Presentation
 
@@ -32,6 +33,95 @@ def _decode_data_url(content: str) -> tuple[str | None, bytes | None]:
     except Exception:
         return mime_type, None
     return mime_type, payload
+
+
+def _rgb_to_hex(color: tuple[int, int, int]) -> str:
+    r, g, b = color
+    return f"#{int(r):02X}{int(g):02X}{int(b):02X}"
+
+
+def _brightness_label(value: float) -> str:
+    if value < 75:
+        return "muito escura"
+    if value < 115:
+        return "escura"
+    if value < 165:
+        return "equilibrada"
+    if value < 210:
+        return "clara"
+    return "muito clara"
+
+
+def _saturation_label(value: float) -> str:
+    if value < 40:
+        return "baixa"
+    if value < 95:
+        return "media"
+    if value < 150:
+        return "alta"
+    return "muito alta"
+
+
+def _extract_image_brief(data: bytes) -> tuple[str, dict[str, Any]]:
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        return "", {}
+
+    width, height = image.size
+    if width > height:
+        orientation = "paisagem"
+    elif height > width:
+        orientation = "retrato"
+    else:
+        orientation = "quadrada"
+
+    sample = image.resize((min(220, width), min(220, height)))
+    gray = sample.convert("L")
+    hsv = sample.convert("HSV")
+    gray_stat = ImageStat.Stat(gray)
+    hsv_stat = ImageStat.Stat(hsv)
+    brightness = float(gray_stat.mean[0]) if gray_stat.mean else 0.0
+    contrast = float(gray_stat.stddev[0]) if gray_stat.stddev else 0.0
+    saturation = float(hsv_stat.mean[1]) if hsv_stat.mean else 0.0
+
+    quantized = sample.quantize(colors=5).convert("RGB")
+    colors = quantized.getcolors(maxcolors=quantized.width * quantized.height) or []
+    dominant = sorted(colors, key=lambda item: item[0], reverse=True)[:5]
+    palette = [_rgb_to_hex(rgb) for _count, rgb in dominant]
+
+    style_tags: list[str] = []
+    if brightness < 100:
+        style_tags.append("fundo escuro")
+    if contrast >= 48:
+        style_tags.append("contraste alto")
+    if saturation >= 105:
+        style_tags.append("cores vibrantes")
+    elif saturation < 45:
+        style_tags.append("paleta neutra")
+    if orientation == "paisagem":
+        style_tags.append("composicao horizontal")
+
+    style_line = ", ".join(style_tags) if style_tags else "composicao limpa"
+    summary = (
+        f"Imagem {width}x{height} ({orientation}). "
+        f"Paleta dominante: {', '.join(palette[:4]) or 'n/d'}. "
+        f"Brilho medio: {brightness:.1f} ({_brightness_label(brightness)}). "
+        f"Saturacao media: {saturation:.1f} ({_saturation_label(saturation)}). "
+        f"Contraste estimado: {contrast:.1f}. "
+        f"Sinais visuais: {style_line}."
+    )
+    metadata = {
+        "width": width,
+        "height": height,
+        "orientation": orientation,
+        "palette": palette,
+        "brightness": round(brightness, 2),
+        "saturation": round(saturation, 2),
+        "contrast": round(contrast, 2),
+        "style_tags": style_tags,
+    }
+    return _compact_text(summary, 1600), metadata
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -226,6 +316,7 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
         kind = str(item.get("kind") or "text").strip().lower()
         content = str(item.get("content") or "")
         pptx_meta: dict[str, Any] = {}
+        image_meta: dict[str, Any] = {}
 
         resolved_mime, binary = _decode_data_url(content)
         mime_type = resolved_mime or declared_mime
@@ -248,7 +339,10 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
             extracted_text = _compact_text(content, 18000)
             notes.append("text")
         elif mime_type.startswith("image/") and binary:
+            extracted_text, image_meta = _extract_image_brief(binary)
             notes.append("image")
+            if extracted_text:
+                notes.append("image-brief")
             visual_items.append(
                 {
                     "name": name,
@@ -289,7 +383,7 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
             "bytes": binary,
             "text": extracted_text,
             "notes": notes,
-            "metadata": pptx_meta,
+            "metadata": {**pptx_meta, **image_meta},
             "visual": any(visual.get("name", "").startswith(name) for visual in visual_items),
         }
         prepared.append(prepared_item)
@@ -299,6 +393,12 @@ def prepare_attachments(attachments: list[dict[str, Any]] | None) -> dict[str, A
                 f"## {name} ({mime_type})\n"
                 "PPTX anexado. Trate este arquivo como referencia de criacao: reaproveite narrativa, organizacao dos slides, tema, layouts, proporcao e estilo quando o usuario pedir continuidade, ajuste ou nova apresentacao baseada nele.\n"
                 f"Resumo estrutural da apresentacao:\n{_compact_text(extracted_text, 7000)}"
+            )
+        elif mime_type.startswith("image/") and extracted_text:
+            prompt_sections.append(
+                f"## {name} ({mime_type})\n"
+                "Imagem anexada. Use esta referencia visual para orientar estilo, composicao, paleta, hierarquia e atmosfera da resposta.\n"
+                f"Resumo visual local do anexo:\n{_compact_text(extracted_text, 3000)}"
             )
         elif extracted_text:
             prompt_sections.append(

@@ -159,9 +159,19 @@
         <aside id="previewPanel" class="preview-panel hidden">
           <div class="preview-head">
             <strong>Live preview</strong>
-            <button id="closePreviewBtn" class="secondary-btn" type="button">Fechar</button>
+            <div class="preview-head-actions">
+              <button id="previewFullscreenBtn" class="secondary-btn" type="button" title="Tela cheia do preview">Tela cheia</button>
+              <button id="closePreviewBtn" class="secondary-btn" type="button">Fechar</button>
+            </div>
           </div>
           <iframe id="previewFrame" title="Preview do site gerado"></iframe>
+          <form id="previewEditForm" class="preview-edit-bar">
+            <label for="previewPrompt">Edite este projeto em tempo real</label>
+            <div class="preview-edit-row">
+              <textarea id="previewPrompt" spellcheck="true" placeholder="Ex.: deixe premium, escureça o fundo, troque tipografia, adicione seção de avaliações..."></textarea>
+              <button id="previewApplyBtn" type="submit">Aplicar no preview</button>
+            </div>
+          </form>
         </aside>
       </section>
 

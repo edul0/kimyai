@@ -3,6 +3,7 @@ const state = {
   poll: null,
   lastOutput: "",
   lastResultMode: "coding",
+  previewFullscreen: false,
   authMode: "login",
   sessions: [],
   renderedJobs: new Set(),
@@ -96,6 +97,7 @@ function showPreview(html) {
   $("previewFrame").srcdoc = html;
   $("previewPanel").classList.remove("hidden");
   $("chatView").classList.add("has-preview");
+  updatePreviewFullscreenUI();
 }
 
 function showPreviewUrl(url) {
@@ -104,12 +106,33 @@ function showPreviewUrl(url) {
   $("previewFrame").src = url;
   $("previewPanel").classList.remove("hidden");
   $("chatView").classList.add("has-preview");
+  updatePreviewFullscreenUI();
 }
 
 function hidePreview() {
+  setPreviewFullscreen(false);
   $("previewFrame").srcdoc = "";
+  $("previewFrame").removeAttribute("src");
   $("previewPanel").classList.add("hidden");
   $("chatView").classList.remove("has-preview");
+  $("previewPrompt").value = "";
+  updatePreviewFullscreenUI();
+}
+
+function updatePreviewFullscreenUI() {
+  const active = document.body.classList.contains("preview-fullscreen");
+  state.previewFullscreen = active;
+  $("previewFullscreenBtn").textContent = active ? "Sair tela cheia" : "Tela cheia";
+}
+
+function setPreviewFullscreen(active) {
+  if (active && $("previewPanel").classList.contains("hidden")) return;
+  document.body.classList.toggle("preview-fullscreen", Boolean(active));
+  updatePreviewFullscreenUI();
+}
+
+function togglePreviewFullscreen() {
+  setPreviewFullscreen(!state.previewFullscreen);
 }
 
 function setAuthMode(mode) {
@@ -460,25 +483,30 @@ function inferModeFromHistory(history) {
   return "";
 }
 
-async function runAgents(prompt, source = "chat") {
+async function runAgents(prompt, source = "chat", options = {}) {
   const text = (prompt || "").trim();
   if (!text) return;
+  const displayText = (options.displayText || text).trim();
+  const forcedMode = options.forcedMode || "";
+  const keepAttachments = Boolean(options.keepAttachments);
   await ensureSession({ forceNewSession: source === "home" });
   showChat();
   $("runBtn").disabled = true;
   $("homeRunBtn").disabled = true;
-  appendMessage("user", text);
+  appendMessage("user", displayText);
   const attachments = [...state.attachments];
-  $("prompt").value = "";
-  $("homePrompt").value = "";
-  clearAttachments();
+  if (!options.keepPromptInput) {
+    $("prompt").value = "";
+    $("homePrompt").value = "";
+  }
+  if (!keepAttachments) clearAttachments();
   $("sessionTitle").textContent = titleFromPrompt(text);
   $("jobBadge").textContent = "Processando...";
   $("timeline").innerHTML = `<li><p>Processando arquitetura da resposta e acionando agentes...</p></li>`;
 
   let data;
   const intentMode = resolveRequestedMode(text);
-  const requestedMode = intentMode === "coding" ? (resolveDailyMode(text) || "coding") : intentMode;
+  const requestedMode = forcedMode || (intentMode === "coding" ? (resolveDailyMode(text) || "coding") : intentMode);
   try {
     data = await api("/api/comando", {
       method: "POST",
@@ -497,6 +525,28 @@ async function runAgents(prompt, source = "chat") {
   clearInterval(state.poll);
   if (!done) state.poll = setInterval(() => pollJob(data.job_id).catch(console.error), 900);
   if (source === "home") await loadSessions();
+}
+
+async function applyPreviewEdit() {
+  const raw = ($("previewPrompt").value || "").trim();
+  if (!raw) return;
+  if ($("previewPanel").classList.contains("hidden")) {
+    appendMessage("assistant", "Abra um live preview antes de pedir ajustes contextuais.");
+    return;
+  }
+  const systemized = `No projeto aberto no live preview, aplique esta alteracao mantendo o que ja funciona: ${raw}`;
+  $("previewApplyBtn").disabled = true;
+  try {
+    await runAgents(systemized, "chat", {
+      forcedMode: "site",
+      displayText: raw,
+      keepPromptInput: true,
+      keepAttachments: false,
+    });
+    $("previewPrompt").value = "";
+  } finally {
+    $("previewApplyBtn").disabled = false;
+  }
 }
 
 // ==========================================
@@ -890,18 +940,19 @@ function readAttachment(file) {
       const mimeType = file.type || inferMimeType(file.name);
       const isImage = mimeType.startsWith("image/");
       const isPdf = mimeType === "application/pdf";
+      const isPptx = mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
       const isDocx = mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         || mimeType === "application/msword";
       const isTextLike = mimeType.startsWith("text/")
         || /(\.md|\.txt|\.py|\.js|\.ts|\.tsx|\.jsx|\.json|\.html|\.css|\.csv|\.log|\.yml|\.yaml)$/i.test(file.name);
-      const content = (isImage || isPdf || isDocx)
+      const content = (isImage || isPdf || isDocx || isPptx)
         ? raw
         : raw.slice(0, 120000);
       resolve({
         name: file.name,
         mime_type: mimeType,
         content,
-        kind: isImage ? "image" : (isPdf || isDocx ? "document" : (isTextLike ? "text" : "binary")),
+        kind: isImage ? "image" : (isPdf || isDocx || isPptx ? "document" : (isTextLike ? "text" : "binary")),
       });
     };
     reader.onerror = () => resolve(null);
@@ -995,6 +1046,11 @@ on("plusBtn", "click", () => $("chatFileInput")?.click());
 on("homeAttachBtn", "click", () => $("homeFileInput")?.click());
 on("voiceBtn", "click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS precisa ser conectada ao WebSocket primeiro."));
 on("closePreviewBtn", "click", hidePreview);
+on("previewFullscreenBtn", "click", togglePreviewFullscreen);
+on("previewEditForm", "submit", (event) => {
+  event.preventDefault();
+  applyPreviewEdit().catch(showRunError);
+});
 on("homeFileInput", "change", (event) => handleFileSelection(event.target.files));
 on("chatFileInput", "change", (event) => handleFileSelection(event.target.files));
 
@@ -1016,8 +1072,22 @@ on("prompt", "keydown", (event) => {
   }
 });
 
+on("previewPrompt", "keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    applyPreviewEdit().catch(showRunError);
+  }
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.previewFullscreen) {
+    setPreviewFullscreen(false);
+  }
+});
+
 setTheme(localStorage.getItem("kemy.theme") || "light");
 setAuthMode("login");
+updatePreviewFullscreenUI();
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");

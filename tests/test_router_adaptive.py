@@ -40,6 +40,24 @@ class AdaptiveRouterTests(unittest.TestCase):
         self.assertGreaterEqual(groq["attempts"], 1)
         self.assertGreaterEqual(groq["avg_latency_ms"], 0)
 
+    def test_mock_site_uses_attachment_context(self):
+        settings = Settings(LLM_MODE="mock")
+        router = LLMRouter(settings)
+        prompt = (
+            "Modo: site\n"
+            "[ANEXOS PROCESSADOS]\n"
+            "## referencia.png (image/png)\n"
+            "Resumo visual local do anexo:\n"
+            "Imagem 1280x720 (paisagem). Paleta dominante: #0A0F18, #1A2C44. Brilho medio: 68.0 (escura)."
+            "\n\nPedido do usuario:\nbaseie nisso para uma landing de barbearia premium"
+        )
+        result = router._mock_response(prompt, "site", router.choose("site"), has_visual=True)
+        raw = result.get("raw", "")
+        self.assertIn("<kemy_artifact", raw)
+        self.assertIn("preview.html", raw)
+        self.assertIn("Referência visual", raw)
+        self.assertIn("image.pollinations.ai", raw)
+
 
 if __name__ == "__main__":
     unittest.main()

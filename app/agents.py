@@ -134,7 +134,8 @@ def build_coding_prompt(
         "4) Se for pedido de imagem, gere imagem; nao responder apenas com tutorial.\n"
         "5) Se for tarefa de dia a dia, entregue resposta pratica e objetiva, sem gerar codigo sem pedido.\n"
         "6) Nunca devolver JSON cru para o usuario final.\n"
-        "7) Respeitar totalmente a stack pedida pelo usuario.\n\n"
+        "7) Respeitar totalmente a stack pedida pelo usuario.\n"
+        "8) Se houver imagem anexada pedindo referencia de estilo, use essa referencia como direcao de arte obrigatoria.\n\n"
         "Contexto operacional:\n"
         "- Use memoria compactada para manter continuidade entre mensagens.\n"
         "- Se faltar informacao bloqueante, faca uma pergunta curta; se nao bloquear, assuma o caminho mais provavel e avance.\n"
@@ -246,6 +247,8 @@ def build_local_prompt_brief(
         "- Incluir `preview.html` self-contained para iframe da Kemy e tambem arquivos reais do projeto Vite quando aplicavel.\n"
         "- Incluir `README.md` com `npm install`, `npm run dev`, URL `http://localhost:5173` e como testar.\n"
         "- Qualidade visual minima: layout moderno, responsivo, cards, icones, hover, microinteracoes, hierarquia forte, paleta coerente e nada de tela branca crua.\n"
+        "- Se houver imagem de referencia anexada, capturar paleta, contraste, composicao e atmosfera dela para guiar o design final.\n"
+        "- Dar liberdade criativa de produto: hero forte, fundo contextual com imagem quando fizer sentido, overlays elegantes e secoes com identidade visual.\n"
         if mode == "site"
         else ""
     )

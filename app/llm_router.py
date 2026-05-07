@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import html
+import re
 import textwrap
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote_plus
 
 from .config import Settings
 
@@ -217,6 +220,7 @@ class LLMRouter:
         summary = textwrap.shorten(" ".join(prompt.split()), width=260, placeholder="...")
         casual = "Conversa casual: sim" in prompt
         attachment_excerpt = self._attachment_excerpt(prompt)
+        attachment_context = self._attachment_context(prompt)
         if casual:
             return {
                 "provider": choice.name,
@@ -229,53 +233,19 @@ class LLMRouter:
                 "tests": [],
             }
         if mode == "site":
-            html = (
-                "<!DOCTYPE html>\n"
-                "<html lang=\"pt-BR\">\n"
-                "<head>\n"
-                "  <meta charset=\"utf-8\" />\n"
-                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
-                "  <script src=\"https://cdn.tailwindcss.com\"></script>\n"
-                "  <title>Kemy Preview</title>\n"
-                "</head>\n"
-                "<body class=\"min-h-screen bg-slate-950 text-white\">\n"
-                "  <main class=\"mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-14\">\n"
-                "    <section class=\"grid w-full gap-8 rounded-[28px] border border-white/10 bg-white/5 p-8 shadow-2xl shadow-slate-950/40 backdrop-blur md:grid-cols-[1.1fr_.9fr] md:p-12\">\n"
-                "      <div class=\"space-y-6\">\n"
-                "        <span class=\"inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-1 text-sm font-semibold text-cyan-200\">Kemy Artifacts</span>\n"
-                "        <h1 class=\"max-w-2xl text-5xl font-black tracking-tight text-white\">Preview inicial para site/app com artifact estruturado</h1>\n"
-                "        <p class=\"max-w-xl text-lg leading-8 text-slate-300\">A Kemy agora pode responder em XML de artifact, separar arquivos e publicar uma preview real sem mostrar o invólucro técnico para o usuário final.</p>\n"
-                "      </div>\n"
-                "      <div class=\"rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-lg shadow-cyan-950/30\">\n"
-                "        <div class=\"space-y-4\">\n"
-                "          <div class=\"rounded-2xl bg-slate-800/80 p-4 text-sm text-slate-200\">index.html renderizado a partir do artifact</div>\n"
-                "          <div class=\"grid gap-3 sm:grid-cols-2\">\n"
-                "            <div class=\"rounded-2xl bg-emerald-400/10 p-4 text-emerald-200\">Layout responsivo</div>\n"
-                "            <div class=\"rounded-2xl bg-sky-400/10 p-4 text-sky-200\">Tailwind via CDN</div>\n"
-                "          </div>\n"
-                "        </div>\n"
-                "      </div>\n"
-                "    </section>\n"
-                "  </main>\n"
-                "</body>\n"
-                "</html>"
-            )
-            raw = (
-                "<kemy_artifact title=\"Kemy Preview\">\n\n"
-                "<file path=\"index.html\">\n"
-                f"{html}\n"
-                "</file>\n\n"
-                "</kemy_artifact>"
-            )
+            raw, site_summary = self._build_mock_site_artifact(prompt, attachment_context)
             return {
                 "provider": choice.name,
                 "model": choice.model,
                 "reason": choice.reason,
                 "raw": raw,
-                "summary": "Artifact inicial para preview criado.",
+                "summary": site_summary,
                 "files": [],
                 "diff": raw,
-                "tests": ["Abra o preview ao lado para validar o layout base."],
+                "tests": [
+                    "Abra o live preview para validar o visual.",
+                    "Peça ajustes no campo abaixo do preview para evoluir o mesmo projeto.",
+                ],
             }
         if mode == "documento":
             raw = (
@@ -300,7 +270,7 @@ class LLMRouter:
                 "diff": raw,
                 "tests": ["Gerar DOCX e PDF e validar links de download."],
             }
-        if has_visual and not attachment_excerpt:
+        if has_visual and not attachment_excerpt and not attachment_context:
             return {
                 "provider": choice.name,
                 "model": choice.model,
@@ -310,6 +280,21 @@ class LLMRouter:
                     "Quando isso estiver ligado, a Kemy passa a descrever fotos, lousas, prints e PDFs visuais."
                 ),
                 "summary": "Leitura visual depende de Gemini configurado.",
+                "files": [],
+                "diff": "",
+                "tests": [],
+            }
+        if attachment_context and has_visual:
+            return {
+                "provider": choice.name,
+                "model": choice.model,
+                "reason": choice.reason,
+                "raw": (
+                    "Analisei o anexo visual com leitura local de composicao (paleta, brilho e estilo). "
+                    "Resumo capturado:\n\n"
+                    f"{attachment_context}"
+                ),
+                "summary": "Referencia visual local analisada.",
                 "files": [],
                 "diff": "",
                 "tests": [],
@@ -348,8 +333,7 @@ class LLMRouter:
             "model": choice.model,
             "reason": choice.reason,
             "summary": (
-                "Anexo visual recebido, mas a leitura visual depende de Gemini configurado. "
-                + summary
+                "Anexo visual processado localmente com resumo de estilo. " + summary
                 if has_visual
                 else summary
             ),
@@ -526,6 +510,8 @@ class LLMRouter:
             "DIRETRIZ DE ARQUITETURA DE SOFTWARE (MODO KEMY ARTIFACTS). "
             "Voce e uma IA programadora full-stack senior e designer de produto. Transforme qualquer pedido de site, app, dashboard, landing page, SaaS, painel ou CRUD em um projeto completo, bonito, responsivo, organizado e pronto para rodar localmente sem servicos pagos. "
             "Antes de codar, pense internamente: objetivo do sistema, publico-alvo, telas necessarias, funcionalidades principais, estilo visual e dados simulados. "
+            "Se houver imagem de referencia anexada, trate como direcao de arte obrigatoria: leia composicao, paleta, contraste, atmosfera, tipografia percebida e hierarquia visual. "
+            "Nao ignore imagens anexadas quando o usuario pedir 'baseie nisso' ou 'nesse estilo'. "
             "Se o pedido for de site, app, landing page, dashboard ou interface visual, responda APENAS com um bloco `<kemy_artifact title=\"...\">`. "
             "Dentro dele, cada arquivo deve ficar dentro de `<file path=\"...\">...</file>`. "
             "Nunca escreva texto fora dessas tags. Nunca entregue codigo incompleto, comentarios como `adicione aqui`, imports quebrados ou arquivos faltando. "
@@ -534,6 +520,8 @@ class LLMRouter:
             "Sempre inclua `package.json`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/styles.css` ou equivalentes quando usar Vite. "
             "Sempre inclua tambem um `preview.html` self-contained quando possivel, com CSS/JS inline ou CDN gratuita, para o sistema da Kemy exibir preview imediato em iframe sem rodar npm no servidor. "
             "A interface deve ter qualidade visual real: layout limpo, cards espacados, tipografia forte, cores coerentes, botoes com hover, icones, microinteracoes, responsividade desktop/mobile, boa hierarquia e nada de tela branca crua. "
+            "Use liberdade criativa com responsabilidade: hero forte, planos de fundo com imagem contextual (quando fizer sentido), overlays elegantes, gradientes com profundidade, seções narrativas e componentes com personalidade. "
+            "Evite design sem alma: cartao branco basico, texto generico e layout de template vazio."
             "Adapte estetica ao tema: financeiro confiavel, RPG imersivo, educacao clara, saude calma, SaaS premium, portfolio autoral, agro verde/terra/tecnologia rural. "
             "Sempre que fizer sentido implemente navbar ou sidebar, dashboard inicial, cards de estatisticas, tabelas, filtros, busca, modal, formularios, validacao basica, CRUD local, graficos e pagina de detalhes. "
             "Revise mentalmente antes de responder: imports existem, componentes fecham, Tailwind esta correto, layout esta bonito, roda sem pagar nada e ha comandos claros. "
@@ -580,12 +568,313 @@ class LLMRouter:
         }
         return messages.get(status_code, "Aviso de sistema: o OpenRouter gratuito ficou indisponivel temporariamente.")
 
+    def _extract_user_request(self, prompt: str) -> str:
+        marker = "Pedido do usuario:"
+        if marker in prompt:
+            tail = prompt.split(marker, 1)[1]
+            cleaned = " ".join(tail.split())
+            return textwrap.shorten(cleaned, width=260, placeholder="...")
+        cleaned = " ".join(prompt.split())
+        return textwrap.shorten(cleaned, width=220, placeholder="...")
+
+    def _attachment_context(self, prompt: str, width: int = 1300) -> str:
+        match = textwrap.dedent(prompt).split("[ANEXOS PROCESSADOS]", 1)
+        if len(match) < 2:
+            return ""
+        section = match[1]
+        for stopper in ["[CONTEXTO DE FERRAMENTAS]", "[SITE ATUAL - EDICAO INCREMENTAL]", "[CONTEXTO DO PROJETO]", "Pedido do usuario:"]:
+            if stopper in section:
+                section = section.split(stopper, 1)[0]
+        normalized = " ".join(section.split()).strip()
+        if not normalized:
+            return ""
+        return textwrap.shorten(normalized, width=width, placeholder="...")
+
+    def _mock_site_title(self, request: str) -> str:
+        lowered = request.lower()
+        if any(word in lowered for word in ["barbear", "barber", "cabelo", "corte"]):
+            return "Barbearia Premium"
+        if "clinica" in lowered or "saude" in lowered:
+            return "Clinica Essencial"
+        if "restaurante" in lowered or "menu" in lowered:
+            return "Reserva Gourmet"
+        if "imobili" in lowered:
+            return "Imobiliaria Prime"
+        cleaned = re.sub(r"[^0-9A-Za-zÀ-ÿ ]+", " ", request).strip()
+        if not cleaned:
+            return "Site Kemy"
+        words = cleaned.split()
+        return " ".join(words[:5]).title()
+
+    def _mock_site_palette(self, request: str, attachment_context: str) -> dict[str, str]:
+        lowered = f"{request} {attachment_context}".lower()
+        dark = any(marker in lowered for marker in ["fundo escuro", "escura", "noturna", "luxo", "premium", "cinemat"])
+        barber = any(marker in lowered for marker in ["barbear", "barber", "cabelo", "corte"])
+        if barber:
+            return {
+                "bg": "#05080f" if dark else "#0b1120",
+                "bg2": "#0f172a",
+                "accent": "#d7b67a",
+                "accent_soft": "rgba(215, 182, 122, 0.18)",
+                "text": "#f8fafc",
+                "muted": "#c7d2fe",
+                "button_text": "#0b1020",
+            }
+        if dark:
+            return {
+                "bg": "#051a18",
+                "bg2": "#0b2139",
+                "accent": "#67e8f9",
+                "accent_soft": "rgba(103, 232, 249, 0.16)",
+                "text": "#eff6ff",
+                "muted": "#cbd5e1",
+                "button_text": "#042f2e",
+            }
+        return {
+            "bg": "#0f172a",
+            "bg2": "#1d4ed8",
+            "accent": "#22d3ee",
+            "accent_soft": "rgba(34, 211, 238, 0.18)",
+            "text": "#ecfeff",
+            "muted": "#dbeafe",
+            "button_text": "#082f49",
+        }
+
+    def _pollinations_image_url(self, request: str, attachment_context: str) -> str:
+        query = f"{request}. {attachment_context}. editorial website hero photo, cinematic lighting, ultra detailed"
+        safe = quote_plus(" ".join(query.split())[:220])
+        return f"https://image.pollinations.ai/prompt/{safe}?width=1920&height=1080&nologo=true&enhance=true&safe=true"
+
+    def _build_mock_site_artifact(self, prompt: str, attachment_context: str) -> tuple[str, str]:
+        request = self._extract_user_request(prompt)
+        title = self._mock_site_title(request)
+        palette = self._mock_site_palette(request, attachment_context)
+        image_url = self._pollinations_image_url(request, attachment_context)
+        badge = "AGENDA ONLINE" if "barbear" in request.lower() else "EXPERIENCIA DIGITAL"
+        hero_title = (
+            "Transforme seu estilo com excelência."
+            if "barbear" in request.lower()
+            else f"{title} com identidade premium"
+        )
+        subtitle = (
+            "Agende em segundos, com visual forte, prova social e experiencia de alto padrao."
+            if "barbear" in request.lower()
+            else "Uma interface de alto impacto com foco em conversao, confianca e fluidez."
+        )
+        reference = html.escape(attachment_context[:420]) if attachment_context else "Sem imagem de referencia anexada."
+        request_safe = html.escape(request)
+        title_safe = html.escape(title)
+        badge_safe = html.escape(badge)
+        hero_title_safe = html.escape(hero_title)
+        subtitle_safe = html.escape(subtitle)
+        html_doc = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title_safe}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg: {palette["bg"]};
+      --bg2: {palette["bg2"]};
+      --accent: {palette["accent"]};
+      --accent-soft: {palette["accent_soft"]};
+      --text: {palette["text"]};
+      --muted: {palette["muted"]};
+      --button-text: {palette["button_text"]};
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Manrope", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(90% 120% at 80% -20%, color-mix(in srgb, var(--accent), transparent 72%), transparent 54%),
+        linear-gradient(120deg, var(--bg), var(--bg2));
+    }}
+    .hero {{
+      min-height: 100vh;
+      position: relative;
+      isolation: isolate;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      overflow: hidden;
+    }}
+    .hero::before {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(120deg, rgba(4, 8, 20, 0.82), rgba(4, 8, 20, 0.58)),
+        url("{image_url}");
+      background-size: cover;
+      background-position: center;
+      z-index: -2;
+      transform: scale(1.02);
+    }}
+    .hero::after {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(72% 90% at 12% 20%, color-mix(in srgb, var(--accent), transparent 68%), transparent 60%),
+        linear-gradient(180deg, rgba(2, 6, 23, 0.08), rgba(2, 6, 23, 0.6));
+      z-index: -1;
+    }}
+    .shell {{
+      width: min(1120px, 100%);
+      border: 1px solid rgba(255,255,255,0.16);
+      background: linear-gradient(160deg, rgba(9, 12, 20, 0.72), rgba(9, 12, 20, 0.54));
+      backdrop-filter: blur(8px);
+      border-radius: 28px;
+      padding: clamp(22px, 3.4vw, 40px);
+      box-shadow: 0 22px 64px rgba(2, 6, 23, 0.52);
+    }}
+    .brand {{
+      display: inline-flex;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 12px;
+      letter-spacing: .24em;
+      text-transform: uppercase;
+      font-weight: 800;
+      padding: 8px 14px;
+    }}
+    h1 {{
+      margin: 18px 0 14px;
+      font-family: "Sora", sans-serif;
+      font-size: clamp(2rem, 6.2vw, 4.6rem);
+      line-height: .95;
+      letter-spacing: -0.03em;
+      max-width: 11ch;
+    }}
+    .subtitle {{
+      margin: 0;
+      max-width: 60ch;
+      color: var(--muted);
+      font-size: clamp(1rem, 2.2vw, 1.55rem);
+      line-height: 1.45;
+    }}
+    .cta {{
+      margin-top: 26px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }}
+    .btn {{
+      border: 0;
+      border-radius: 14px;
+      font-weight: 800;
+      padding: 14px 22px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform .15s ease, box-shadow .2s ease;
+    }}
+    .btn-primary {{
+      background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 20%));
+      color: var(--button-text);
+      box-shadow: 0 12px 32px color-mix(in srgb, var(--accent), transparent 70%);
+    }}
+    .btn-secondary {{
+      border: 1px solid rgba(255,255,255,0.26);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+    }}
+    .btn:hover {{ transform: translateY(-2px); }}
+    .proof {{
+      margin-top: 26px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }}
+    .metric {{
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      padding: 12px 14px;
+      font-size: 14px;
+      color: var(--muted);
+    }}
+    .metric strong {{
+      display: block;
+      color: var(--text);
+      font-size: 26px;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }}
+    .ref {{
+      margin-top: 20px;
+      border-radius: 14px;
+      border: 1px dashed rgba(255,255,255,0.28);
+      background: rgba(2,6,23,0.32);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }}
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <article class="shell">
+      <span class="brand">{badge_safe}</span>
+      <h1>{hero_title_safe}</h1>
+      <p class="subtitle">{subtitle_safe}</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#">Agendar agora</a>
+        <a class="btn btn-secondary" href="#">Ver serviços</a>
+      </div>
+      <section class="proof">
+        <div class="metric"><strong>5.0</strong>avaliação média dos clientes</div>
+        <div class="metric"><strong>58+</strong>agendamentos confirmados no mês</div>
+        <div class="metric"><strong>24h</strong>resposta rápida no WhatsApp</div>
+      </section>
+      <div class="ref"><strong>Pedido atual:</strong> {request_safe}<br><strong>Referência visual:</strong> {reference}</div>
+    </article>
+  </section>
+</body>
+</html>"""
+        readme = f"""# {title}
+
+Projeto de preview gerado no modo local da Kemy com direção visual reforçada.
+
+## Como evoluir
+- Abra `preview.html` no navegador.
+- Use o campo "Edite este projeto em tempo real" no live preview para pedir ajustes.
+- Exemplo: `deixe mais editorial, com tons dourados e seção de depoimentos`.
+
+## Referência de entrada
+- Pedido: {request}
+- Contexto visual detectado: {attachment_context or 'sem anexo visual'}
+"""
+        raw = (
+            f"<kemy_artifact title=\"{title_safe}\">\n"
+            "<file path=\"preview.html\">\n"
+            f"{html_doc}\n"
+            "</file>\n"
+            "<file path=\"README.md\">\n"
+            f"{readme}\n"
+            "</file>\n"
+            "</kemy_artifact>"
+        )
+        summary = "Preview criativo gerado com direcao visual baseada no pedido e no anexo."
+        return raw, summary
+
     def _attachment_excerpt(self, prompt: str) -> str:
         match = textwrap.dedent(prompt).split("[ANEXOS PROCESSADOS]", 1)
         if len(match) < 2:
             return ""
-        if "Texto extraido do anexo:" not in match[1]:
+        body = match[1]
+        if "Texto extraido do anexo:" not in body and "Texto extraído do anexo:" not in body:
             return ""
-        extracted = " ".join(match[1].split())
-        extracted = extracted.replace("Texto extraido do anexo:", "").strip()
+        extracted = " ".join(body.split())
+        extracted = extracted.replace("Texto extraido do anexo:", "").replace("Texto extraído do anexo:", "").strip()
         return textwrap.shorten(extracted, width=280, placeholder="...")
