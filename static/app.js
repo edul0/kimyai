@@ -358,6 +358,9 @@ function formatResult(result) {
   if ((result.files || []).some((file) => file.download_url)) {
     return result.summary || result.raw || "Arquivos gerados com sucesso.";
   }
+  if (extractArtifactFiles(result.raw || result.summary || "").length) {
+    return result.summary || "Projeto gerado. O live preview foi aberto ao lado.";
+  }
   if (result.raw) return result.raw;
   if (result.summary && result.files?.length) {
     return `${result.summary}\n\n${result.files.map((file) => `### ${file.path}\n\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n")}`;
@@ -524,6 +527,7 @@ function appendResult(result, fallbackText) {
   const imageSource = extractImageSource(result) || extractImageSource({ raw: fallbackText, summary: fallbackText });
   if (!imageSource) {
     const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
+    const inlinePreview = extractPreviewHtml(result, fallbackText);
     if (downloadableFiles.length) {
       const previewUrl = extractPreviewUrl(result);
       const archiveUrl = result.project_archive_url || downloadableFiles.find((file) => String(file.name || "").toLowerCase().endsWith(".zip"))?.download_url || "";
@@ -549,6 +553,27 @@ function appendResult(result, fallbackText) {
         </div>
       `;
       $("chatLog").appendChild(node);
+      node.scrollIntoView({ block: "end", behavior: "smooth" });
+      return;
+    }
+    if (inlinePreview) {
+      const node = document.createElement("div");
+      node.className = "message assistant";
+      node.innerHTML = `
+        <div class="result-card">
+          <div class="result-card-head">
+            <strong>${escapeHtml(result.artifact_title || result.summary || "Preview do site pronto")}</strong>
+            <span class="result-meta">kemy - live preview</span>
+          </div>
+          <div class="project-actions">
+            <button type="button" class="primary-link" data-open-inline-preview>Abrir live preview</button>
+          </div>
+          <p class="result-note">Extraí o site do artifact gerado e abri no painel de preview.</p>
+        </div>
+      `;
+      $("chatLog").appendChild(node);
+      node.querySelector("[data-open-inline-preview]")?.addEventListener("click", () => showPreview(inlinePreview));
+      showPreview(inlinePreview);
       node.scrollIntoView({ block: "end", behavior: "smooth" });
       return;
     }
@@ -659,10 +684,18 @@ function showRunError(error) {
 function extractPreviewHtml(result, fallbackText = "") {
   if (result?.preview_html) return result.preview_html;
   const files = result?.files || [];
-  const htmlFile = files.find((file) => String(file.path || "").toLowerCase().endsWith(".html"));
+  const htmlFile = files.find((file) => {
+    const name = String(file.relative_path || file.name || file.path || "").toLowerCase();
+    return name.endsWith("preview.html") || name.endsWith("index.html") || name.endsWith(".html");
+  });
   if (htmlFile?.content) return htmlFile.content;
   const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
-  return match ? match[1].trim() : "";
+  if (match) return match[1].trim();
+  const artifactFiles = extractArtifactFiles([result?.raw, result?.summary, fallbackText].filter(Boolean).join("\n"));
+  const artifactHtml = artifactFiles.find((file) => file.path.toLowerCase().endsWith("preview.html"))
+    || artifactFiles.find((file) => file.path.toLowerCase().endsWith("index.html"))
+    || artifactFiles.find((file) => file.path.toLowerCase().endsWith(".html"));
+  return artifactHtml?.content || "";
 }
 
 function extractPreviewUrl(result) {
@@ -670,6 +703,24 @@ function extractPreviewUrl(result) {
   const files = result?.files || [];
   const htmlFile = files.find((file) => (String(file.mime_type || "").toLowerCase() === "text/html" || String(file.name || "").toLowerCase().endsWith(".html")) && file.download_url);
   return htmlFile?.download_url || "";
+}
+
+function extractArtifactFiles(text = "") {
+  const source = decodeHtmlEntities(String(text || ""));
+  if (!source.includes("<kemy_artifact")) return [];
+  const files = [];
+  const pattern = /<file\b[^>]*\bpath\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/file\s*>/gi;
+  let match;
+  while ((match = pattern.exec(source))) {
+    files.push({ path: match[1].trim(), content: decodeHtmlEntities(match[2].trim()) });
+  }
+  return files;
+}
+
+function decodeHtmlEntities(value = "") {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = value;
+  return textarea.value;
 }
 
 async function handleFileSelection(fileList) {

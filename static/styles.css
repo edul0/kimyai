@@ -968,6 +968,13 @@ svg {
   transform: translateY(-1px);
 }
 
+.result-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .result-card img {
   display: block;
   width: 100%;
