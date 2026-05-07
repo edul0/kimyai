@@ -5,6 +5,73 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+IMAGE_MARKERS = [
+    "gere uma imagem",
+    "gera uma imagem",
+    "crie uma imagem",
+    "criar uma imagem",
+    "faca uma imagem",
+    "faça uma imagem",
+    "desenhe",
+    "ilustre",
+    "imagem de",
+    "foto de",
+    "arte de",
+    "logo de",
+    "banner de",
+]
+SLIDE_MARKERS = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"]
+DOCUMENT_MARKERS = [
+    "docx",
+    "docxs",
+    "word",
+    "pdf",
+    "abnt",
+    "documento",
+    "relatorio",
+    "relatório",
+    "proposta",
+    "contrato",
+    "apostila",
+    "manual",
+    "artigo",
+    "tcc",
+]
+SITE_MARKERS = [
+    "site",
+    "landing page",
+    "landing",
+    "dashboard",
+    "interface",
+    "frontend",
+    "pagina",
+    "página",
+    "app web",
+    "web app",
+    "html",
+    "tailwind",
+    "saas",
+    "crud",
+]
+CODE_MARKERS = [
+    "codigo",
+    "código",
+    "api",
+    "backend",
+    "endpoint",
+    "fastapi",
+    "bug",
+    "erro",
+    "corrija",
+    "implemente",
+    "refatore",
+    "supabase",
+    "postgres",
+    "render",
+    "github",
+]
+
+
 @dataclass(frozen=True)
 class ExecutionPlan:
     mode: str
@@ -52,16 +119,22 @@ class ExecutionPlan:
 
 def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any] | None = None) -> ExecutionPlan:
     text = _normalize(message)
-    context_text = _normalize(" ".join(_flatten_context(compact_context or {})))
-    combined = f"{text} {context_text}".strip()
+    effective_mode = classify_request_mode(message, mode, compact_context)
 
-    if (mode == "documento" or mode == "coding") and _has_any(
-        combined, ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao"]
-    ):
+    if effective_mode == "imagem":
+        return ExecutionPlan(
+            mode="imagem",
+            intent="imagem",
+            stack="Pollinations/image API gratuita",
+            language="prompt visual",
+            deliverable="imagem pronta para abrir e baixar",
+            quality_rules=["Preservar estilo, tema e restricoes visuais solicitadas pelo usuario."],
+        )
+    if is_slide_request(message):
         return _slide_plan(text)
-    if mode == "site" or _has_any(combined, ["site", "landing", "dashboard", "frontend", "web app", "saas", "crud", "pagina"]):
+    if effective_mode == "site":
         return _site_plan(text)
-    if mode == "documento":
+    if effective_mode == "documento":
         return ExecutionPlan(
             mode="documento",
             intent="documento executivo",
@@ -75,18 +148,9 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
                 "Usar secoes curtas, listas limpas e linguagem pronta para leitura.",
             ],
         )
-    if mode == "imagem":
+    if _has_any(text, CODE_MARKERS):
         return ExecutionPlan(
-            mode="imagem",
-            intent="imagem",
-            stack="Pollinations/image API gratuita",
-            language="prompt visual",
-            deliverable="imagem pronta para abrir e baixar",
-            quality_rules=["Preservar estilo, tema e restricoes visuais solicitadas pelo usuario."],
-        )
-    if _has_any(combined, ["api", "backend", "endpoint", "fastapi", "banco", "supabase", "postgres"]):
-        return ExecutionPlan(
-            mode=mode,
+            mode="coding",
             intent="backend ou banco de dados",
             stack="FastAPI + Supabase/Postgres quando aplicavel",
             language="python/sql",
@@ -100,7 +164,7 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
             ],
         )
     return ExecutionPlan(
-        mode=mode,
+        mode=effective_mode,
         intent="codigo ou melhoria tecnica",
         stack="stack atual do repositorio",
         language="linguagem do arquivo afetado",
@@ -112,6 +176,66 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
             "Entregar arquivos reais e testes possiveis, nao apenas explicacao.",
         ],
     )
+
+
+def classify_request_mode(message: str, current_mode: str = "coding", session_data: dict[str, Any] | None = None) -> str:
+    text = _normalize(message)
+    explicit = _explicit_mode_from_text(text)
+    if explicit:
+        return explicit
+    if current_mode in {"imagem", "site", "auditoria", "planejamento"}:
+        return current_mode
+    if current_mode == "documento":
+        return "documento"
+    if _is_followup(text, session_data):
+        previous = _previous_mode(session_data)
+        if previous:
+            return previous
+    return "coding"
+
+
+def is_slide_request(message: str) -> bool:
+    text = _normalize(message)
+    return _has_any(text, SLIDE_MARKERS)
+
+
+def is_document_request(message: str) -> bool:
+    text = _normalize(message)
+    return _has_any(text, DOCUMENT_MARKERS) and not is_slide_request(text)
+
+
+def _explicit_mode_from_text(text: str) -> str | None:
+    if _has_any(text, IMAGE_MARKERS):
+        return "imagem"
+    if _has_any(text, SLIDE_MARKERS):
+        return "documento"
+    if _has_any(text, DOCUMENT_MARKERS):
+        return "documento"
+    if _has_any(text, SITE_MARKERS):
+        return "site"
+    if _has_any(text, CODE_MARKERS):
+        return "coding"
+    return None
+
+
+def _is_followup(text: str, session_data: dict[str, Any] | None) -> bool:
+    if not session_data:
+        return False
+    followup_markers = ["ajuste", "melhore", "refaca", "refaça", "continue", "altere", "troque", "mude", "isso", "esse", "essa"]
+    return len(text.split()) <= 14 or any(marker in text for marker in followup_markers)
+
+
+def _previous_mode(session_data: dict[str, Any] | None) -> str | None:
+    for item in reversed((session_data or {}).get("historico", [])[-8:]):
+        result = item.get("result") or {}
+        files = item.get("files") or result.get("files") or []
+        if result.get("slide_deck"):
+            return "documento"
+        if result.get("preview_url") or result.get("site_url") or any(str(file.get("name", "")).endswith((".html", ".zip")) for file in files):
+            return "site"
+        if result.get("document_title") or any(str(file.get("name", "")).endswith((".docx", ".pdf", ".pptx")) for file in files):
+            return "documento"
+    return None
 
 
 def _site_plan(text: str) -> ExecutionPlan:

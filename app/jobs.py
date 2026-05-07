@@ -15,7 +15,7 @@ from .attachment_service import prepare_attachments
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
-from .intent_planner import build_execution_plan
+from .intent_planner import build_execution_plan, classify_request_mode
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
 from .schemas import JobState
@@ -90,6 +90,9 @@ class JobManager:
             memory = session_data.get("memoria", [])
             compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
             execution_plan = build_execution_plan(job.pedido, job.modo, compact_context)
+            if execution_plan.mode != job.modo:
+                job.modo = execution_plan.mode
+                self.save(job)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
 
             await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
@@ -627,112 +630,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         return text[:220]
 
     def _resolve_mode(self, message: str, current_mode: str, session_data: dict[str, Any] | None = None) -> str:
-        if current_mode == "imagem":
-            return "imagem"
-        if current_mode == "documento":
-            return "documento"
-        if current_mode != "coding":
-            return current_mode
-        lowered = message.lower()
-        image_markers = [
-            "gere uma imagem",
-            "gera uma imagem",
-            "crie uma imagem",
-            "criar uma imagem",
-            "faça uma imagem",
-            "faca uma imagem",
-            "desenhe",
-            "ilustre",
-            "renderize",
-            "imagem de",
-            "foto de",
-            "arte de",
-            "logo de",
-            "banner de",
-        ]
-        if any(marker in lowered for marker in image_markers):
-            return "imagem"
-        site_markers = [
-            "site",
-            "landing page",
-            "landing",
-            "dashboard",
-            "interface",
-            "frontend",
-            "pagina",
-            "página",
-            "app web",
-            "web app",
-            "html",
-            "tailwind",
-        ]
-        if any(marker in lowered for marker in site_markers):
-            return "site"
-        slide_markers = [
-            "slide",
-            "slides",
-            "apresentacao",
-            "apresentação",
-            "deck",
-            "ppt",
-            "pptx",
-            "powerpoint",
-            "carrossel",
-        ]
-        document_markers = [
-            "gerar pdf",
-            "gere pdf",
-            "criar pdf",
-            "crie pdf",
-            "montar pdf",
-            "gerar docx",
-            "gere docx",
-            "criar docx",
-            "crie docx",
-            "converter para pdf",
-            "converta para pdf",
-            "transformar em pdf",
-            "transforme em pdf",
-            "gerar arquivo",
-            "gere arquivo",
-            "criar documento",
-            "crie documento",
-            "montar documento",
-            "gerar relatorio",
-            "gerar relatório",
-            "gerar proposta",
-            "gerar contrato",
-            "gerar apostila",
-            "gerar manual",
-            *slide_markers,
-        ]
-        if any(marker in lowered for marker in document_markers):
-            return "documento"
-        if session_data:
-            history = session_data.get("historico", [])
-            recent_messages = history[-6:]
-            recent_text = "\n".join(str(item.get("content") or "") for item in recent_messages).lower()
-            recent_files = any((item.get("files") or item.get("result", {}).get("files") or []) for item in recent_messages if item.get("role") == "assistant")
-            recent_document_context = recent_files or any(marker in recent_text for marker in document_markers)
-            followup_markers = [
-                "ajuste",
-                "melhore",
-                "refaça",
-                "refaca",
-                "continue",
-                "altere",
-                "troque",
-                "mude",
-                "deixa",
-                "quero",
-                "agora",
-                "isso",
-                "esse",
-                "essa",
-            ]
-            if recent_document_context and (len(lowered.split()) <= 18 or any(marker in lowered for marker in followup_markers)):
-                return "documento"
-        return current_mode
+        return classify_request_mode(message, current_mode, session_data)
 
     async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:
         self._event(job, "Kemy", "Finalizando mensagem.", 92)
