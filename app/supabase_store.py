@@ -211,6 +211,20 @@ class SupabaseStore:
         except Exception:
             return None
 
+    async def list_jobs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        if not (self.enabled and session_id):
+            return []
+        query = (
+            "select=id,session_id,status,mode,prompt,progress,stage,result,error,events,created_at,updated_at"
+            f"&session_id=eq.{quote(session_id, safe='')}"
+            "&order=created_at.asc"
+            "&limit=200"
+        )
+        try:
+            return await self._select_many("jobs", query)
+        except Exception:
+            return []
+
     async def list_generated_files(self, job_id: str) -> list[dict[str, Any]]:
         if not (self.enabled and job_id):
             return []

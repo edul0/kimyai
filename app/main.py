@@ -90,7 +90,7 @@ def _preview_from_history(items: list[dict]) -> str:
     return ""
 
 
-def _session_jobs(session_id: str) -> list[dict]:
+def _local_session_jobs(session_id: str) -> list[dict]:
     items = []
     for key in storage.keys("job:"):
         data = storage.get_json(key)
@@ -99,9 +99,24 @@ def _session_jobs(session_id: str) -> list[dict]:
     return sorted(items, key=lambda item: item.get("created_at", ""))
 
 
-def _session_log_entries(session_id: str, session_data: dict) -> list[dict]:
+async def _session_jobs(session_id: str) -> list[dict]:
+    items_by_id = {item.get("job_id"): item for item in _local_session_jobs(session_id)}
+    for row in await jobs.supabase.list_jobs_for_session(session_id):
+        payload = _job_payload_from_supabase(row)
+        job_id = payload.get("job_id")
+        if not job_id:
+            continue
+        items_by_id[job_id] = payload
+        try:
+            jobs.save(JobState(**payload))
+        except Exception:
+            pass
+    return sorted(items_by_id.values(), key=lambda item: item.get("created_at", ""))
+
+
+async def _session_log_entries(session_id: str, session_data: dict) -> list[dict]:
     entries = []
-    for job in _session_jobs(session_id):
+    for job in await _session_jobs(session_id):
         for event in job.get("eventos", []):
             entries.append(
                 {
@@ -144,8 +159,8 @@ def _session_log_entries(session_id: str, session_data: dict) -> list[dict]:
     return sorted(entries, key=lambda item: item.get("ts") or "")
 
 
-def _session_analytics(session_id: str, session_data: dict) -> dict:
-    jobs_for_session = _session_jobs(session_id)
+async def _session_analytics(session_id: str, session_data: dict) -> dict:
+    jobs_for_session = await _session_jobs(session_id)
     completed = [job for job in jobs_for_session if job.get("status") == "done"]
     failed = [job for job in jobs_for_session if job.get("status") == "error"]
     providers: dict[str, int] = {}
@@ -633,7 +648,7 @@ async def session_logs(sid: str, request: Request):
         raise HTTPException(404, "Sessao nao encontrada.")
     if data.get("owner") and data.get("owner") != owner:
         raise HTTPException(403, "Sessao de outro usuario.")
-    logs = _session_log_entries(sid, data)
+    logs = await _session_log_entries(sid, data)
     return {"session_id": sid, "total": len(logs), "logs": logs[-250:]}
 
 
@@ -645,7 +660,7 @@ async def session_analytics(sid: str, request: Request):
         raise HTTPException(404, "Sessao nao encontrada.")
     if data.get("owner") and data.get("owner") != owner:
         raise HTTPException(403, "Sessao de outro usuario.")
-    return _session_analytics(sid, data)
+    return await _session_analytics(sid, data)
 
 
 @app.get("/api/jobs/{job_id}")
