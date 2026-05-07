@@ -438,8 +438,8 @@ class JobManager:
             original_path = artifact.path.replace("\\", "/").strip().lstrip("/")
             content = self._clean_artifact_content(original_path, artifact.content)
             safe_name = original_path.replace("/", "__") or "index.html"
-            if safe_name.lower().endswith(".html") and not self._looks_like_html_document(content):
-                if recovered_html and self._looks_like_html_document(recovered_html):
+            if safe_name.lower().endswith(".html") and not self._is_renderable_preview_html(content):
+                if recovered_html and self._is_renderable_preview_html(recovered_html):
                     content = recovered_html
                 else:
                     content = self._minimal_preview_html(job.pedido, parsed.title)
@@ -545,7 +545,7 @@ class JobManager:
         if (parsed and self._artifact_has_usable_html(parsed.files)) or result.get("files"):
             return result
         html_candidate = self._extract_html_candidate(raw)
-        if html_candidate and self._looks_like_html_document(html_candidate):
+        if html_candidate and self._is_renderable_preview_html(html_candidate):
             result = dict(result)
             result["raw"] = self._site_artifact_from_html(job.pedido, html_candidate)
             result["summary"] = "Site convertido para artifact com live preview, arquivos e ZIP para download."
@@ -569,7 +569,7 @@ class JobManager:
             if not path.endswith(".html"):
                 continue
             content = self._clean_artifact_content(path, str(getattr(file_item, "content", "")))
-            if "<html" in content.lower() or "<!doctype html" in content.lower():
+            if self._is_renderable_preview_html(content):
                 return True
         return False
 
@@ -589,6 +589,21 @@ class JobManager:
     def _looks_like_html_document(self, content: str) -> bool:
         lowered = (content or "").lower()
         return ("<html" in lowered or "<!doctype html" in lowered) and "</html" in lowered
+
+    def _is_renderable_preview_html(self, content: str) -> bool:
+        if not self._looks_like_html_document(content):
+            return False
+        lowered = (content or "").lower()
+        vite_shell = bool(
+            re.search(r"<div[^>]+id=['\"](?:root|app)['\"][^>]*>\s*</div>", lowered)
+            and re.search(r"<script[^>]+type=['\"]module['\"][^>]+src=['\"][^'\"]*(?:/src/|main\.(?:tsx|jsx|ts|js))", lowered)
+        )
+        if vite_shell:
+            return False
+        has_ui = bool(re.search(r"<(main|section|article|form|h1|h2|p|button|nav|header)\b", lowered))
+        if not has_ui and re.search(r"<div[^>]+id=['\"](?:root|app)['\"][^>]*>\s*</div>", lowered):
+            return False
+        return True
 
     def _site_artifact_from_html(self, pedido: str, html_doc: str) -> str:
         title = self._site_title_from_prompt(pedido)

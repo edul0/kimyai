@@ -101,6 +101,45 @@ def _apply_abnt_style(paragraph):
         self.assertIn("<file path=\"preview.html\">", fixed["raw"])
         self.assertIn("kemy-site-html-repair", fixed["tools_used"])
 
+    def test_vite_shell_is_not_accepted_as_live_preview(self):
+        manager = JobManager(Storage(), Settings())
+        vite_shell = """
+<!doctype html>
+<html lang="pt-BR">
+  <head><meta charset="utf-8" /><title>App</title></head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"""
+        self.assertFalse(manager._is_renderable_preview_html(vite_shell))
+
+    def test_vite_shell_falls_back_to_functional_preview(self):
+        manager = JobManager(Storage(), Settings())
+        job = JobState(
+            job_id="job-site-shell",
+            session_id="session-site-shell",
+            status="running",
+            etapa="teste",
+            progresso=10,
+            pedido="crie um site sobre agendar horario no barbeiro",
+            modo="site",
+            created_at="2026-05-07T00:00:00Z",
+            updated_at="2026-05-07T00:00:00Z",
+        )
+        raw = """
+<kemy_artifact title="BarberShop Booking System">
+<file path="index.html">
+<!doctype html>
+<html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+</file>
+</kemy_artifact>
+"""
+        fixed = manager._ensure_site_artifact(job, {"raw": raw, "tools_used": []})
+        self.assertIn("kemy-site-fallback", fixed["tools_used"])
+        self.assertIn("<file path=\"preview.html\">", fixed["raw"])
+
 
 if __name__ == "__main__":
     unittest.main()
