@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import textwrap
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,16 @@ class ProviderChoice:
     name: str
     model: str
     reason: str
+
+
+@dataclass
+class ProviderMetrics:
+    attempts: int = 0
+    successes: int = 0
+    failures: int = 0
+    avg_latency_ms: float = 0.0
+    last_error: str = ""
+    last_success_at: float = 0.0
 
 
 class LLMRouter:
@@ -34,6 +45,7 @@ class LLMRouter:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.provider_metrics: dict[str, dict[str, ProviderMetrics]] = {}
         self.openrouter_free_state = {
             "available": None,
             "message": "OpenRouter free ainda nao foi testado nesta sessao.",
@@ -60,6 +72,12 @@ class LLMRouter:
             for provider in route
             if configured.get(provider) and (provider != "openai" or not self.settings.free_only)
         ]
+        if self.settings.adaptive_router_enabled and available:
+            available = sorted(
+                available,
+                key=lambda provider: self._provider_score(mode, provider, route.index(provider)),
+                reverse=True,
+            )
         if has_visual and "gemini" in available:
             return ["gemini"] + [provider for provider in available if provider != "gemini"]
         return available
@@ -99,6 +117,7 @@ class LLMRouter:
         attempts = []
         for provider in route:
             current = ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
+            started = time.perf_counter()
             try:
                 if provider == "groq":
                     result = await self._groq(prompt, current, mode)
@@ -112,10 +131,15 @@ class LLMRouter:
                     result = await self._openai(prompt, current, mode)
                 else:
                     continue
+                latency_ms = (time.perf_counter() - started) * 1000
+                self._record_success(mode, provider, latency_ms)
                 result = self._apply_provider_notice(result, provider)
                 result["fallback_chain"] = attempts + [{"provider": provider, "status": "ok"}]
+                result["route_debug"] = self.route_debug(mode)
                 return result
             except Exception as exc:
+                latency_ms = (time.perf_counter() - started) * 1000
+                self._record_failure(mode, provider, latency_ms, exc)
                 self._track_provider_failure(provider, exc)
                 attempts.append(
                     {
@@ -130,7 +154,64 @@ class LLMRouter:
         offline = self._mock_response(prompt, mode, ProviderChoice("mock", "local-planner", "free providers exhausted"), has_visual=has_visual)
         offline = self._apply_provider_notice(offline, "mock")
         offline["fallback_chain"] = attempts + [{"provider": "mock", "status": "ok"}]
+        offline["route_debug"] = self.route_debug(mode)
         return offline
+
+    def route_debug(self, mode: str) -> dict[str, Any]:
+        route = self.ROUTES.get(mode, self.ROUTES["coding"])
+        stats: list[dict[str, Any]] = []
+        for provider in route:
+            metrics = self._metrics(mode, provider)
+            stats.append(
+                {
+                    "provider": provider,
+                    "attempts": metrics.attempts,
+                    "successes": metrics.successes,
+                    "failures": metrics.failures,
+                    "avg_latency_ms": round(metrics.avg_latency_ms, 1),
+                    "score": round(self._provider_score(mode, provider, route.index(provider)), 4),
+                    "last_error": metrics.last_error,
+                }
+            )
+        return {"mode": mode, "adaptive_enabled": self.settings.adaptive_router_enabled, "providers": stats}
+
+    def _metrics(self, mode: str, provider: str) -> ProviderMetrics:
+        mode_stats = self.provider_metrics.setdefault(mode, {})
+        return mode_stats.setdefault(provider, ProviderMetrics())
+
+    def _record_success(self, mode: str, provider: str, latency_ms: float) -> None:
+        metrics = self._metrics(mode, provider)
+        metrics.attempts += 1
+        metrics.successes += 1
+        metrics.last_success_at = time.time()
+        metrics.last_error = ""
+        if metrics.successes == 1:
+            metrics.avg_latency_ms = latency_ms
+            return
+        weight = 0.22
+        metrics.avg_latency_ms = (1 - weight) * metrics.avg_latency_ms + weight * latency_ms
+
+    def _record_failure(self, mode: str, provider: str, latency_ms: float, exc: Exception) -> None:
+        metrics = self._metrics(mode, provider)
+        metrics.attempts += 1
+        metrics.failures += 1
+        metrics.last_error = str(exc)[:240]
+        if metrics.avg_latency_ms <= 0:
+            metrics.avg_latency_ms = latency_ms
+            return
+        weight = 0.22
+        metrics.avg_latency_ms = (1 - weight) * metrics.avg_latency_ms + weight * latency_ms
+
+    def _provider_score(self, mode: str, provider: str, base_index: int) -> float:
+        metrics = self._metrics(mode, provider)
+        if metrics.attempts == 0:
+            return 0.5 - base_index * 0.001
+        success_rate = metrics.successes / max(metrics.attempts, 1)
+        latency_penalty = min(metrics.avg_latency_ms / 3000.0, 1.2)
+        failure_penalty = min(metrics.failures / max(metrics.attempts, 1), 1.0)
+        recency_bonus = 0.08 if metrics.last_success_at and (time.time() - metrics.last_success_at) < 900 else 0.0
+        stability_bonus = 0.05 if metrics.failures == 0 and metrics.successes >= 3 else 0.0
+        return (success_rate * 1.45) - (latency_penalty * 0.25) - (failure_penalty * 0.7) + recency_bonus + stability_bonus
 
     def _mock_response(self, prompt: str, mode: str, choice: ProviderChoice, has_visual: bool = False) -> dict[str, Any]:
         summary = textwrap.shorten(" ".join(prompt.split()), width=260, placeholder="...")

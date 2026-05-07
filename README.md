@@ -75,6 +75,9 @@ Acesse:
 
 - `FREE_ONLY`
 - `LLM_MODE`
+- `KEMY_ADAPTIVE_ROUTER_ENABLED`
+- `KEMY_SELF_REVIEW_ENABLED`
+- `KEMY_SELF_REVIEW_MAX_CHARS`
 - `ORIGENS_CORS`
 - `REDIS_URL`
 - `KEMY_AUTH_USER`
@@ -126,6 +129,11 @@ Para subir o schema do Kimi AI:
 O endpoint `/api/status` mostra `supabase_health.connected`. Se estiver `false`, a Kimi esta apenas com cache local e vai perder estado entre deploys; corrija as chaves `KIMI_SUPABASE_*` ou a exposicao do schema `kemy` na Data API.
 
 O realtime fica preparado para `kemy.sessions`, `kemy.messages`, `kemy.jobs` e `kemy.generated_files`. A aplicacao continua usando service role apenas no backend; o frontend nao recebe chaves sensiveis.
+
+## Qualidade autonoma
+
+- O roteador agora aprende latencia/sucesso dos provedores gratuitos por modo e reordena a fila automaticamente (`adaptive_routes` em `/api/status`).
+- Quando uma resposta de `site` ou `coding` vem fraca/generica, a Kimi roda um auto-refino interno antes de entregar ao usuario.
 
 ## Deploy no Render
 

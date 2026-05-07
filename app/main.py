@@ -345,6 +345,11 @@ async def status():
         "providers": settings.configured_providers,
         "tools": settings.configured_tools,
         "fallback_routes": jobs.router.ROUTES,
+        "adaptive_routes": {
+            "coding": jobs.router.route_debug("coding"),
+            "site": jobs.router.route_debug("site"),
+            "documento": jobs.router.route_debug("documento"),
+        },
         "openrouter_free": jobs.router.openrouter_free_state,
         "gemini": jobs.router.gemini_state,
     }

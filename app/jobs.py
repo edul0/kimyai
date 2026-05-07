@@ -155,6 +155,7 @@ class JobManager:
                 attachments=attachment_context["items"],
                 visual_items=attachment_context["visual_items"],
             )
+            result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
             if job.modo == "site":
                 result = self._ensure_site_artifact(job, result)
             result = self._hydrate_artifacts(job, result)
@@ -203,6 +204,112 @@ class JobManager:
             return brief or fallback
         except Exception:
             return fallback
+
+    async def _maybe_self_review(
+        self,
+        job: JobState,
+        prompt: str,
+        result: dict[str, Any],
+        execution_plan_prompt: str,
+    ) -> dict[str, Any]:
+        if not self.settings.self_review_enabled:
+            return result
+        if job.modo not in {"coding", "site"}:
+            return result
+        if self.settings.llm_mode != "providers":
+            return result
+        raw = str(result.get("raw") or result.get("summary") or "").strip()
+        reason = self._self_review_reason(job.modo, result, raw)
+        if not reason:
+            return result
+        review_prompt = self._build_self_review_prompt(job, prompt, raw, execution_plan_prompt, reason)
+        try:
+            reviewed = await self.router.generate(review_prompt, mode="auditoria")
+            candidate = str(reviewed.get("raw") or reviewed.get("summary") or "").strip()
+            if not candidate:
+                return result
+            if not self._is_review_candidate_better(job.modo, raw, candidate):
+                result["qa_autofix"] = {"applied": False, "reason": reason, "discarded": True}
+                return result
+            merged = dict(result)
+            merged["raw"] = candidate[: self.settings.self_review_max_chars]
+            merged["summary"] = reviewed.get("summary") or result.get("summary") or "Resposta refinada automaticamente."
+            merged["qa_autofix"] = {
+                "applied": True,
+                "reason": reason,
+                "provider": reviewed.get("provider"),
+                "model": reviewed.get("model"),
+            }
+            merged["tools_used"] = list(dict.fromkeys((result.get("tools_used") or []) + ["auto-qa-refiner"]))
+            return merged
+        except Exception:
+            return result
+
+    def _self_review_reason(self, mode: str, result: dict[str, Any], raw: str) -> str:
+        lowered = raw.lower()
+        if mode == "site":
+            files = result.get("files") or []
+            has_html_file = any(str(item.get("name", "")).lower().endswith(".html") for item in files)
+            has_artifact = "<kemy_artifact" in lowered
+            has_html = "<!doctype html" in lowered or "<html" in lowered
+            generic = any(marker in lowered for marker in ["concluido", "feito", "pronto"]) and len(raw) < 220
+            if (not has_artifact and not has_html and not has_html_file) or generic:
+                return "saida-site-fraca"
+        if mode == "coding":
+            generic = any(marker in lowered for marker in ["nao posso", "não posso", "sem acesso", "nao tenho acesso"])
+            if generic and len(raw) < 800:
+                return "saida-coding-bloqueada"
+            if len(raw) < 260 and not (result.get("files") or result.get("diff")):
+                return "saida-coding-curta"
+        return ""
+
+    def _build_self_review_prompt(
+        self,
+        job: JobState,
+        prompt: str,
+        raw: str,
+        execution_plan_prompt: str,
+        reason: str,
+    ) -> str:
+        base = (
+            "Voce e Kimi QA Refiner. Reescreva a resposta final para o usuario em alta qualidade, sem explicar o processo.\n"
+            "Objetivo: manter o pedido original e corrigir lacunas de entrega.\n"
+            "NUNCA devolva analise de auditoria, checklist interno, JSON cru ou metacomentario.\n"
+        )
+        if job.modo == "site":
+            extra = (
+                "Obrigatorio para site: responder com <kemy_artifact title=\"...\"> contendo pelo menos:\n"
+                "1) <file path=\"preview.html\"> com HTML completo\n"
+                "2) <file path=\"README.md\"> com instrucoes de uso\n"
+                "Sem texto fora do artifact.\n"
+            )
+        else:
+            extra = (
+                "Para coding: entregar resposta tecnica acionavel com diagnostico curto, correcao proposta e trechos de codigo objetivos.\n"
+                "Sem desculpas vagas. Sem enrolacao.\n"
+            )
+        return (
+            f"{base}{extra}\n"
+            f"Motivo do refino: {reason}\n\n"
+            f"Plano esperado:\n{execution_plan_prompt}\n\n"
+            f"Pedido original:\n{job.pedido}\n\n"
+            f"Prompt de contexto (resumido):\n{prompt[:4500]}\n\n"
+            f"Resposta atual que precisa ser melhorada:\n{raw[:6000]}\n"
+        )
+
+    def _is_review_candidate_better(self, mode: str, original: str, candidate: str) -> bool:
+        original_l = original.lower()
+        candidate_l = candidate.lower()
+        if mode == "site":
+            original_ok = "<kemy_artifact" in original_l or "<html" in original_l
+            candidate_ok = "<kemy_artifact" in candidate_l or "<html" in candidate_l
+            if candidate_ok and not original_ok:
+                return True
+        if len(candidate.strip()) >= max(320, int(len(original.strip()) * 1.2)):
+            return True
+        if "```" in candidate and "```" not in original:
+            return True
+        return False
 
     def _hydrate_artifacts(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
         parsed = parse_kemy_artifact(result.get("raw") or "")
