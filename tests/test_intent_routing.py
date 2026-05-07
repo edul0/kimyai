@@ -2,7 +2,10 @@ import unittest
 
 from app.config import Settings
 from app.document_service import DocumentService
+from app.jobs import JobManager
 from app.intent_planner import build_execution_plan, classify_request_mode, is_slide_request
+from app.schemas import JobState
+from app.storage import Storage
 
 
 class IntentRoutingTests(unittest.TestCase):
@@ -75,6 +78,28 @@ def _apply_abnt_style(paragraph):
         service = DocumentService(Settings())
         pedido = "gere um docx em formato abnt sobre terceira guerra mundial"
         self.assertFalse(service._is_slide_request(pedido, "## Slide 1\nconteudo gerado"))
+
+    def test_site_html_block_is_repaired_into_artifact(self):
+        manager = JobManager(Storage(), Settings())
+        job = JobState(
+            job_id="job-site-repair",
+            session_id="session-site-repair",
+            status="running",
+            etapa="teste",
+            progresso=10,
+            pedido="gere um site para barbearia",
+            modo="site",
+            created_at="2026-05-07T00:00:00Z",
+            updated_at="2026-05-07T00:00:00Z",
+        )
+        result = {
+            "raw": "```html\n<!doctype html><html><body><h1>Agenda</h1></body></html>\n```",
+            "tools_used": [],
+        }
+        fixed = manager._ensure_site_artifact(job, result)
+        self.assertIn("<kemy_artifact", fixed["raw"])
+        self.assertIn("<file path=\"preview.html\">", fixed["raw"])
+        self.assertIn("kemy-site-html-repair", fixed["tools_used"])
 
 
 if __name__ == "__main__":

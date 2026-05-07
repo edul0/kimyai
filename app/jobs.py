@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import re
 import uuid
 import zipfile
 from datetime import datetime
@@ -307,6 +308,16 @@ class JobManager:
         parsed = parse_kemy_artifact(raw)
         if (parsed and self._artifact_has_usable_html(parsed.files)) or result.get("files"):
             return result
+        html_candidate = self._extract_html_candidate(raw)
+        if html_candidate and self._looks_like_html_document(html_candidate):
+            result = dict(result)
+            result["raw"] = self._site_artifact_from_html(job.pedido, html_candidate)
+            result["summary"] = "Site convertido para artifact com live preview, arquivos e ZIP para download."
+            tools = list(result.get("tools_used") or [])
+            if "kemy-site-html-repair" not in tools:
+                tools.append("kemy-site-html-repair")
+            result["tools_used"] = tools
+            return result
         result = dict(result)
         result["raw"] = self._fallback_site_artifact(job.pedido)
         result["summary"] = "Site gerado com live preview, arquivos e ZIP para download."
@@ -325,6 +336,46 @@ class JobManager:
             if "<html" in content.lower() or "<!doctype html" in content.lower():
                 return True
         return False
+
+    def _extract_html_candidate(self, raw: str) -> str:
+        text = html.unescape((raw or "").strip())
+        fenced = re.search(r"```html\s*(?P<html>[\s\S]*?)```", text, re.IGNORECASE)
+        if fenced:
+            return fenced.group("html").strip()
+        doctype = re.search(r"<!doctype html[\s\S]*?</html\s*>", text, re.IGNORECASE)
+        if doctype:
+            return doctype.group(0).strip()
+        html_doc = re.search(r"<html\b[\s\S]*?</html\s*>", text, re.IGNORECASE)
+        if html_doc:
+            return html_doc.group(0).strip()
+        return ""
+
+    def _looks_like_html_document(self, content: str) -> bool:
+        lowered = (content or "").lower()
+        return ("<html" in lowered or "<!doctype html" in lowered) and "</html" in lowered
+
+    def _site_artifact_from_html(self, pedido: str, html_doc: str) -> str:
+        title = self._site_title_from_prompt(pedido)
+        readme = f"""# {title}
+
+Site recuperado automaticamente pela Kemy a partir de HTML gerado pelo modelo.
+
+## Como usar
+
+- Abra `preview.html` para visualizar imediatamente.
+- Baixe `projeto-kemy.zip` para obter todos os arquivos.
+- Se quiser transformar em React/Vite depois, peça para a Kemy evoluir este preview para projeto completo.
+"""
+        return (
+            f"<kemy_artifact title=\"{html.escape(title, quote=True)}\">\n"
+            "<file path=\"preview.html\">\n"
+            f"{html_doc.strip()}\n"
+            "</file>\n"
+            "<file path=\"README.md\">\n"
+            f"{readme}\n"
+            "</file>\n"
+            "</kemy_artifact>"
+        )
 
     def _clean_artifact_content(self, path: str, content: str) -> str:
         text = html.unescape((content or "").strip())
