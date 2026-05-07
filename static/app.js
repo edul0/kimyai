@@ -406,8 +406,14 @@ function resolveRequestedMode(text) {
   const selectedMode = $("mode").value;
   if (selectedMode !== "coding") return selectedMode;
   const lowered = String(text || "").toLowerCase();
-  const documentMarkers = [".docx", ".pdf", ".md", "markdown", "documento", "gerar pdf"];
+  const imageMarkers = ["gere uma imagem", "gera uma imagem", "crie uma imagem", "desenhe", "ilustre", "imagem de", "foto de", "logo de", "banner de"];
+  const slideMarkers = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"];
+  const documentMarkers = [".docx", "docx", "docxs", ".pdf", "pdf", ".md", "markdown", "documento", "abnt", "relatorio", "relatório", "proposta", "contrato"];
+  const siteMarkers = ["site", "landing page", "dashboard", "frontend", "pagina", "página", "app web", "web app", "html", "tailwind", "saas", "crud"];
+  if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
+  if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
   return selectedMode;
 }
 

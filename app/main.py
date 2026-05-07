@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 import uuid
 from mimetypes import guess_type
@@ -15,7 +16,7 @@ from .agents import DEFAULT_AGENTS
 from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
-from .schemas import ComandoRequest, JobCreateResponse, NovoAgente
+from .schemas import ComandoRequest, JobCreateResponse, JobState, NovoAgente
 from .storage import Storage
 from .supabase_store import SupabaseStore
 
@@ -240,6 +241,69 @@ async def _load_session_for_owner(session_id: str, owner: str | None) -> dict | 
     return await _hydrate_session_from_supabase(session_id, owner)
 
 
+def _job_payload_from_supabase(row: dict) -> dict:
+    return {
+        "job_id": row.get("id"),
+        "session_id": row.get("session_id"),
+        "status": row.get("status") or "done",
+        "etapa": row.get("stage") or "Concluido",
+        "progresso": row.get("progress") if row.get("progress") is not None else 100,
+        "pedido": row.get("prompt") or "",
+        "modo": row.get("mode") or "coding",
+        "created_at": row.get("created_at") or utcnow(),
+        "updated_at": row.get("updated_at") or row.get("created_at") or utcnow(),
+        "resultado": row.get("result"),
+        "erro": row.get("error"),
+        "eventos": row.get("events") or [],
+        "anexos": [],
+    }
+
+
+async def _load_job(job_id: str) -> JobState | None:
+    local = jobs.get(job_id)
+    if local:
+        return local
+    row = await jobs.supabase.get_job(job_id)
+    if not row:
+        return None
+    try:
+        job = JobState(**_job_payload_from_supabase(row))
+    except Exception:
+        return None
+    jobs.save(job)
+    return job
+
+
+def _safe_artifact_name(path_value: str) -> str:
+    return str(path_value or "").replace("\\", "/").strip().lstrip("/").replace("/", "__")
+
+
+def _match_remote_artifact(rows: list[dict], filename: str) -> dict | None:
+    for row in reversed(rows):
+        candidates = {
+            str(row.get("name") or ""),
+            str(row.get("path") or ""),
+            _safe_artifact_name(str(row.get("path") or "")),
+        }
+        if filename in candidates:
+            return row
+    return None
+
+
+def _remote_artifact_response(row: dict, filename: str) -> Response:
+    media_type = row.get("mime_type") or guess_type(filename)[0] or "application/octet-stream"
+    headers = {}
+    disposition = "attachment" if media_type == "application/zip" else "inline"
+    headers["Content-Disposition"] = f'{disposition}; filename="{filename}"'
+    encoded = row.get("content_base64")
+    if encoded:
+        return Response(content=base64.b64decode(encoded), media_type=media_type, headers=headers)
+    content = row.get("content")
+    if content is not None:
+        return Response(content=str(content), media_type=media_type, headers=headers)
+    raise HTTPException(404, "Arquivo remoto indisponivel.")
+
+
 @app.get("/")
 async def root_page():
     index = static_dir / "index.html"
@@ -250,15 +314,19 @@ async def root_page():
 
 @app.get("/api/status")
 async def status():
+    supabase_health = await supabase_auth.healthcheck()
     return {
         "nome": settings.app_name,
         "versao": settings.version,
         "status": "online",
         "free_only": settings.free_only,
         "llm_mode": settings.llm_mode,
-        "storage": storage.backend,
+        "storage": "supabase+memory-cache" if settings.supabase_enabled else storage.backend,
         "cache": storage.status(),
         "supabase": settings.supabase_enabled,
+        "supabase_health": supabase_health,
+        "persistent_sessions": bool(supabase_health.get("connected")),
+        "persistent_artifacts": bool(supabase_health.get("connected")),
         "providers": settings.configured_providers,
         "tools": settings.configured_tools,
         "fallback_routes": jobs.router.ROUTES,
@@ -582,7 +650,7 @@ async def session_analytics(sid: str, request: Request):
 
 @app.get("/api/jobs/{job_id}")
 async def job_status(job_id: str):
-    job = jobs.get(job_id)
+    job = await _load_job(job_id)
     if not job:
         raise HTTPException(404, "Job nao encontrado.")
     return job.model_dump()
@@ -591,7 +659,7 @@ async def job_status(job_id: str):
 @app.get("/api/artefatos/{job_id}/{filename}")
 async def baixar_artefato(job_id: str, filename: str, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    job = jobs.get(job_id)
+    job = await _load_job(job_id)
     if not job:
         raise HTTPException(404, "Job nao encontrado.")
     session = await _load_session_for_owner(job.session_id, owner)
@@ -602,9 +670,15 @@ async def baixar_artefato(job_id: str, filename: str, request: Request):
     files = (job.resultado or {}).get("files", [])
     match = next((item for item in files if item.get("name") == filename), None)
     if not match:
+        remote_match = _match_remote_artifact(await jobs.supabase.list_generated_files(job_id), filename)
+        if remote_match:
+            return _remote_artifact_response(remote_match, filename)
         raise HTTPException(404, "Arquivo nao encontrado.")
     path = Path(str(match.get("path") or "")).resolve()
     if not path.exists() or path.name != filename:
+        remote_match = _match_remote_artifact(await jobs.supabase.list_generated_files(job_id), filename)
+        if remote_match:
+            return _remote_artifact_response(remote_match, filename)
         raise HTTPException(404, "Arquivo indisponivel.")
     media_type = match.get("mime_type") or guess_type(filename)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, filename=filename)
