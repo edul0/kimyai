@@ -1273,6 +1273,7 @@ window.addEventListener("message", (e) => {
   if (e.data === "github_connected") {
     $("githubBtnLabel").textContent = "GitHub Conectado";
     loadGitHubRepos();
+    loadGithubStatus();
   }
 });
 
