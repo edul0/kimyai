@@ -988,26 +988,81 @@ async def github_connect(request: Request):
     return RedirectResponse(url)
 
 @app.get("/api/github/callback")
-async def github_callback(code: str, state: str, response: Response, request: Request):
+async def github_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    # Se acessado direto sem params, mostra página informativa
+    if not code:
+        error_detail = error or "Parâmetro 'code' ausente. Acesse via botão 'Conectar GitHub' no app."
+        html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+        <title>GitHub OAuth – Kemy AI</title>
+        <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
+        .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
+        h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
+        <body><div class="card"><h1>⚠️ OAuth Incompleto</h1>
+        <p>{error_detail}</p>
+        <p>Para conectar o GitHub, use o botão na barra de navegação do Kemy AI.</p>
+        <script>setTimeout(()=>{{if(window.opener)window.close();else window.location.href='/'}},4000)</script>
+        </div></body></html>"""
+        return Response(html, media_type="text/html")
+
+    # Definir user ANTES do bloco async
+    cookie = request.cookies.get(COOKIE_NAME)
+    user = verify_token(cookie, settings) if cookie else None
+
     base = str(request.base_url).rstrip("/")
     payload = {
         "client_id": settings.github_client_id,
         "client_secret": settings.github_client_secret,
         "code": code,
-        "redirect_uri": f"{base}/api/github/callback"
+        "redirect_uri": f"{base}/api/github/callback",
     }
-    async with httpx.AsyncClient() as client:
-        res = await client.post("https://github.com/login/oauth/access_token", json=payload, headers={"Accept": "application/json"})
-        data = res.json()
-        token = data.get("access_token")
-        if not token:
-            error_msg = data.get("error_description", "Erro ao obter token do GitHub")
-            return Response(f"Erro: {error_msg}", status_code=400)
-        cookie = request.cookies.get(COOKIE_NAME)
-        user = verify_token(cookie, settings) if cookie else None
-        if user:
-            storage.set_json(f"github_config:{user}", {"token": token}, ttl=30*86400)
-    html = f"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(
+                "https://github.com/login/oauth/access_token",
+                json=payload,
+                headers={"Accept": "application/json"},
+            )
+            data = res.json()
+    except Exception as exc:
+        error_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+        <title>Erro – Kemy AI</title>
+        <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
+        .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
+        h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
+        <body><div class="card"><h1>❌ Falha de Rede</h1>
+        <p>Não foi possível contatar a API do GitHub.</p>
+        <p style="font-size:12px;color:#6e7681">{str(exc)[:200]}</p>
+        </div></body></html>"""
+        return Response(error_html, media_type="text/html", status_code=502)
+
+    token = data.get("access_token")
+    if not token:
+        gh_error = data.get("error", "unknown")
+        gh_desc = data.get("error_description", "Sem descrição")
+        error_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+        <title>Erro GitHub – Kemy AI</title>
+        <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
+        .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:520px;text-align:center}}
+        h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}code{{background:#21262d;padding:4px 8px;border-radius:6px;color:#f0883e}}</style></head>
+        <body><div class="card"><h1>❌ Token não obtido</h1>
+        <p>Erro do GitHub: <code>{gh_error}</code></p>
+        <p>{gh_desc}</p>
+        <p style="font-size:12px;color:#6e7681">Verifique se GITHUB_CLIENT_ID e GITHUB_CLIENT_SECRET estão corretos no Render.</p>
+        <script>setTimeout(()=>{{if(window.opener)window.close();}},6000)</script>
+        </div></body></html>"""
+        return Response(error_html, media_type="text/html", status_code=400)
+
+    if user:
+        storage.set_json(f"github_config:{user}", {"token": token}, ttl=30 * 86400)
+
+    html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+    <title>GitHub Conectado – Kemy AI</title>
+    <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
+    .card{{background:#161b22;border:1px solid #238636;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
+    h1{{color:#3fb950;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
+    <body><div class="card"><h1>✅ GitHub Conectado!</h1>
+    <p>Conta vinculada com sucesso. Esta janela vai fechar automaticamente.</p>
+    </div>
     <script>
         if (window.opener) {{
             window.opener.postMessage('github_connected', '*');
@@ -1015,8 +1070,7 @@ async def github_callback(code: str, state: str, response: Response, request: Re
         }} else {{
             window.location.href = '/?github=connected&user={user or ""}';
         }}
-    </script>
-    """
+    </script></body></html>"""
     return Response(html, media_type="text/html")
 
 
