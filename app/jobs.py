@@ -19,6 +19,7 @@ from .attachment_service import prepare_attachments
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
+from .github_service import GitHubService
 from .intent_planner import build_execution_plan, classify_request_mode
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
@@ -41,6 +42,13 @@ class JobManager:
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
         self.documents = DocumentService(settings)
+        self.github = GitHubService(
+            token=settings.github_token,
+            default_repo=settings.github_repo_url,
+            default_branch=settings.github_default_branch,
+            user_name=settings.github_user_name,
+            user_email=settings.github_user_email,
+        )
         self.response_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
@@ -144,7 +152,7 @@ class JobManager:
                 execution_plan=execution_plan.as_prompt(),
             )
             site_context = ""
-            if job.modo == "site":
+            if job.modo == "site" and self._is_site_edit_request(job.pedido, session_data):
                 site_context = self._build_site_edit_context(job, session_data)
                 if site_context:
                     prompt = (
@@ -429,6 +437,18 @@ class JobManager:
             "Entregue o artifact completo atualizado com preview.html funcional.\n\n"
             f"{files_block}"
         )
+
+
+    def _is_site_edit_request(self, pedido: str, session_data: dict[str, Any]) -> bool:
+        """Determina se o pedido é uma edição incremental ou um novo projeto."""
+        text = pedido.lower()
+        new_project_signals = ["crie um", "cria um", "crie uma", "cria uma", "fazer um", "fazer uma", "novo site", "nova landing", "novo app", "novo dashboard"]
+        if any(sig in text for sig in new_project_signals): return False
+        edit_signals = ["muda", "mude", "altera", "altere", "adiciona", "adicione", "remove", "remova", "ajusta", "ajuste", "melhora", "melhore", "esse site", "esse projeto", "o layout"]
+        if any(sig in text for sig in edit_signals): return True
+        history = (session_data or {}).get("historico") or []
+        has_recent_site = any(self._extract_site_files_from_history_item(item) for item in history[-6:] if item.get("role") == "assistant")
+        return has_recent_site and len(text.split()) < 20
 
     def _latest_site_snapshot(self, session_data: dict[str, Any]) -> dict[str, Any] | None:
         history = (session_data or {}).get("historico") or []

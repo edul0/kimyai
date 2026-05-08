@@ -19,11 +19,19 @@ from .jobs import JobManager, utcnow
 from .schemas import ComandoRequest, JobCreateResponse, JobState, NovoAgente
 from .storage import Storage
 from .supabase_store import SupabaseStore
+from .github_service import GitHubService
 
 settings = get_settings()
 storage = Storage(settings.redis_url)
 jobs = JobManager(storage, settings)
 supabase_auth = SupabaseStore(settings)
+github = GitHubService(
+    token=settings.github_token,
+    default_repo=settings.github_repo_url,
+    default_branch=settings.github_default_branch,
+    user_name=settings.github_user_name,
+    user_email=settings.github_user_email,
+)
 
 app = FastAPI(
     title=settings.app_name,
@@ -769,3 +777,32 @@ async def remover_agente(slug: str):
         raise HTTPException(404, "Agente nao encontrado.")
     path.unlink()
     return {"status": "removido", "slug": slug}
+
+@app.get("/api/github/connect")
+async def github_connect(request: Request):
+    if not settings.github_client_id:
+        raise HTTPException(status_code=400, detail="GitHub Client ID não configurado.")
+    state = str(uuid.uuid4())
+    redirect_uri = f"{settings.app_public_url}/api/github/callback"
+    url = f"https://github.com/login/oauth/authorize?client_id={settings.github_client_id}&redirect_uri={redirect_uri}&state={state}&scope=repo,user:email"
+    return JSONResponse({"url": url})
+
+@app.get("/api/github/callback")
+async def github_callback(code: str, state: str, response: Response, request: Request):
+    payload = {
+        "client_id": settings.github_client_id,
+        "client_secret": settings.github_client_secret,
+        "code": code,
+        "redirect_uri": f"{settings.app_public_url}/api/github/callback"
+    }
+    async with httpx.AsyncClient() as client:
+        res = await client.post("https://github.com/login/oauth/access_token", json=payload, headers={"Accept": "application/json"})
+        data = res.json()
+        token = data.get("access_token")
+        if not token:
+            return Response("Erro ao obter token do GitHub", status_code=400)
+        cookie = request.cookies.get(COOKIE_NAME)
+        user = verify_token(cookie, settings) if cookie else None
+        if user:
+            storage.set_json(f"github_config:{user}", {"token": token}, ttl=30*86400)
+    return Response("<script>window.opener.postMessage('github_connected', '*'); window.close();</script>", media_type="text/html")

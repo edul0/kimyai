@@ -2756,18 +2756,15 @@ class DocumentService:
         return f'<aside class="slide-visual"><img src="{visual}" alt="{self._escape_html(slide.title)}" /></aside>'
 
     def _render_generated_visual_html(self, slide: Slide) -> str:
-        labels = [self._split_card_item(item)[0] for item in (slide.bullets or [])[:4]]
-        if len(labels) < 4:
-            labels.extend(["Inventario", "Risco", "Custo", "Governanca"][len(labels) : 4])
-        nodes = "".join(f'<span class="visual-node">{self._escape_html(label[:26])}</span>' for label in labels[:4])
-        core = self._escape_html((slide.title or "Estrategia")[:32])
-        return (
-            '<aside class="slide-visual">'
-            '<div class="visual-map">'
-            f'<div class="visual-orbit">{nodes}<strong class="visual-core">{core}</strong></div>'
-            '</div>'
-            '</aside>'
-        )
+        """Render a clean, premium icon-grid visual when no image is available."""
+        items = (slide.bullets or slide.body or [])[:4]
+        icons = ["◈", "◉", "◆", "◇"]
+        cards_html = ""
+        for idx, item in enumerate(items):
+            label = item[:32]
+            icon = icons[idx % len(icons)]
+            cards_html += f'<div class="vg-card"><span class="vg-icon">{icon}</span><span class="vg-label">{label}</span></div>'
+        return f'<aside class="slide-visual"><div class="visual-grid">{cards_html}</div></aside>'
 
     def _render_slide_content(self, slide: Slide) -> str:
         if slide.layout == "lead":
