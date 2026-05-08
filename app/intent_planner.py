@@ -12,8 +12,6 @@ IMAGE_MARKERS = [
     "crie uma imagem",
     "criar uma imagem",
     "faca uma imagem",
-    "desenhe",
-    "ilustre",
     "imagem de",
     "foto de",
     "arte de",
@@ -228,6 +226,8 @@ def classify_request_mode(message: str, current_mode: str = "coding", session_da
     if current_mode == "documento":
         return "documento"
     if _is_daily_request(text):
+        return "planejamento"
+    if not _has_any(text, CODE_MARKERS + SITE_MARKERS + DOCUMENT_MARKERS + SLIDE_MARKERS + IMAGE_MARKERS):
         return "planejamento"
     return "coding"
 

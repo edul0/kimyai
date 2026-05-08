@@ -548,6 +548,7 @@ class JobManager:
         if site_context:
             site_context_hash = hashlib.sha256(site_context.encode("utf-8", errors="ignore")).hexdigest()[:20]
         payload = {
+            "session_id": job.session_id,
             "mode": job.modo,
             "prompt": normalized_prompt,
             "intent": execution_plan.get("intent"),
