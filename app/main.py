@@ -804,7 +804,8 @@ async def github_callback(code: str, state: str, response: Response, request: Re
         data = res.json()
         token = data.get("access_token")
         if not token:
-            return Response("Erro ao obter token do GitHub", status_code=400)
+            error_msg = data.get("error_description", "Erro ao obter token do GitHub")
+            return Response(f"Erro: {error_msg}", status_code=400)
         cookie = request.cookies.get(COOKIE_NAME)
         user = verify_token(cookie, settings) if cookie else None
         if user:
