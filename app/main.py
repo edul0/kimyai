@@ -810,7 +810,17 @@ async def github_callback(code: str, state: str, response: Response, request: Re
         user = verify_token(cookie, settings) if cookie else None
         if user:
             storage.set_json(f"github_config:{user}", {"token": token}, ttl=30*86400)
-    return Response("<script>window.opener.postMessage('github_connected', '*'); window.close();</script>", media_type="text/html")
+    html = """
+    <script>
+        if (window.opener) {
+            window.opener.postMessage('github_connected', '*');
+            window.close();
+        } else {
+            window.location.href = '/';
+        }
+    </script>
+    """
+    return Response(html, media_type="text/html")
 
 
 @app.get("/api/github/repos")
