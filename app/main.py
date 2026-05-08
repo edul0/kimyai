@@ -659,6 +659,7 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
         cmd.mensagem,
         cmd.modo,
         attachments=[item.model_dump() for item in cmd.anexos],
+        github_repo=cmd.github_repo,
     )
     background_tasks.add_task(jobs.run, job.job_id)
     return {
@@ -807,3 +808,24 @@ async def github_callback(code: str, state: str, response: Response, request: Re
         if user:
             storage.set_json(f"github_config:{user}", {"token": token}, ttl=30*86400)
     return Response("<script>window.opener.postMessage('github_connected', '*'); window.close();</script>", media_type="text/html")
+
+
+@app.get("/api/github/repos")
+async def github_repos(request: Request):
+    cookie = request.cookies.get(COOKIE_NAME)
+    user = verify_token(cookie, settings) if cookie else None
+    if not user:
+        return JSONResponse({"repos": []})
+    
+    config = storage.get_json(f"github_config:{user}") or {}
+    token = config.get("token")
+    if not token:
+        return JSONResponse({"repos": []})
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.get("https://api.github.com/user/repos?sort=updated&per_page=100", headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+        if res.status_code != 200:
+            return JSONResponse({"repos": []})
+        data = res.json()
+        repos = [{"name": r["full_name"], "url": r["clone_url"], "default_branch": r["default_branch"]} for r in data]
+        return JSONResponse({"repos": repos})

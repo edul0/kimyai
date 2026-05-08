@@ -511,16 +511,18 @@ async function runAgents(prompt, source = "chat", options = {}) {
   const intentMode = resolveRequestedMode(text);
   const requestedMode = forcedMode || (intentMode === "coding" ? (resolveDailyMode(text) || "coding") : intentMode);
   try {
+    const repoUrl = $("gitRepo")?.value || undefined;
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments, github_repo: repoUrl }),
     });
   } catch (error) {
     clearPersistedSessionId();
     await ensureSession();
+    const repoUrl = $("gitRepo")?.value || undefined;
     data = await api("/api/comando", {
       method: "POST",
-      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments }),
+      body: JSON.stringify({ mensagem: text, session_id: state.sessionId, modo: requestedMode, anexos: attachments, github_repo: repoUrl }),
     });
   }
   persistSessionId(data.session_id);
@@ -1040,6 +1042,7 @@ on("openSessionsBtn", "click", async () => {
   await loadSessions();
   if (state.sessions[0]?.session_id) {
     await openSession(state.sessions[0].session_id).catch(showRunError);
+    showChat();
     return;
   }
   appendMessage("assistant", "Nenhuma conversa encontrada no Storage. Digite algo para inicializar a memória.");
@@ -1240,3 +1243,38 @@ if (urlParams.get("github") === "connected") {
     setTimeout(() => msg.remove(), 4000);
   }, 500);
 }
+
+// --- GitHub Workspace Integration ---
+async function loadGitHubRepos() {
+  const select = $("gitRepo");
+  if (!select) return;
+  try {
+    const res = await api("/api/github/repos");
+    if (res && res.repos && res.repos.length > 0) {
+      select.classList.remove("hidden");
+      let options = '<option value="">Selecione um Workspace</option>';
+      res.repos.forEach(repo => {
+        options += `<option value="${repo.url}">${repo.name}</option>`;
+      });
+      select.innerHTML = options;
+      
+      // Auto-select first repo if available
+      if(res.repos.length === 1) select.selectedIndex = 1;
+    } else {
+      select.classList.add("hidden");
+    }
+  } catch (err) {
+    console.error("Erro ao carregar repos:", err);
+  }
+}
+
+// Load repos when github connected
+window.addEventListener("message", (e) => {
+  if (e.data === "github_connected") {
+    $("githubBtnLabel").textContent = "GitHub Conectado";
+    loadGitHubRepos();
+  }
+});
+
+// Also try loading on init just in case they are already connected
+setTimeout(loadGitHubRepos, 2000);

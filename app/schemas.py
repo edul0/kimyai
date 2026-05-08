@@ -15,6 +15,7 @@ class ComandoRequest(BaseModel):
     imagem_base64: str | None = None
     anexos: list[AttachmentInput] = Field(default_factory=list, max_length=6)
     session_id: str | None = None
+    github_repo: str | None = None
     modo: Literal["coding", "site", "auditoria", "planejamento", "imagem", "documento"] = "coding"
 
 
@@ -48,3 +49,4 @@ class JobState(BaseModel):
     erro: str | None = None
     eventos: list[dict[str, Any]] = Field(default_factory=list)
     anexos: list[AttachmentInput] = Field(default_factory=list)
+    github_repo: str | None = None

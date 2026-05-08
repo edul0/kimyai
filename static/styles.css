@@ -532,6 +532,12 @@ svg {
   width: 100%;
 }
 
+.hero-input {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
 .hero-input textarea {
   background: transparent;
   border: 0;
@@ -539,6 +545,9 @@ svg {
   font-size: 20px;
   color: var(--ink-strong);
   min-height: 140px;
+  width: 100%;
+  resize: none;
+  box-sizing: border-box;
 }
 
 

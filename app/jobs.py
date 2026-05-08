@@ -51,7 +51,7 @@ class JobManager:
         )
         self.response_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-    def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None) -> JobState:
+    def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None, github_repo: str | None = None) -> JobState:
         now = utcnow()
         normalized = attachments or []
         pedido = message.strip()[: self.settings.max_prompt_chars]
