@@ -58,6 +58,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("KIMI_SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
     )
 
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_client_id: str | None = Field(default=None, alias="GITHUB_CLIENT_ID")
+    github_client_secret: str | None = Field(default=None, alias="GITHUB_CLIENT_SECRET")
+    app_public_url: str = Field(default="http://localhost:8000", alias="APP_PUBLIC_URL")
+    github_repo_url: str | None = Field(default=None, alias="GITHUB_REPO_URL")
+    github_default_branch: str = Field(default="main", alias="GITHUB_DEFAULT_BRANCH")
+    github_user_name: str = Field(default="Kemy AI", alias="GITHUB_USER_NAME")
+    github_user_email: str = Field(default="kemy@ai.local", alias="GITHUB_USER_EMAIL")
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
