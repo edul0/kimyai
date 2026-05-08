@@ -53,7 +53,11 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    public_paths = ("/static/", "/api/auth/", "/docs", "/redoc", "/openapi.json", "/api/status", "/favicon.ico")
+    public_paths = (
+        "/static/", "/api/auth/", "/docs", "/redoc", "/openapi.json",
+        "/api/status", "/favicon.ico",
+        "/api/github/connect", "/api/github/callback", "/api/github/me",
+    )
     path = request.url.path
     if path.startswith(public_paths) or path in {"/"}:
         return await call_next(request)
