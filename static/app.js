@@ -374,6 +374,17 @@ function renderJob(job) {
     if (inferredMode) state.lastResultMode = inferredMode;
     appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
+    if (job.resultado.git_output) {
+      const chatLog = $(\"chatLog\");
+      if (chatLog) {
+        chatLog.appendChild(renderGitTerminal(
+          job.resultado.git_operation || \"operation\",
+          job.resultado.git_output,
+          job.resultado.git_success !== false
+        ));
+        chatLog.lastChild.scrollIntoView({ behavior: \"smooth\", block: \"end\" });
+      }
+    }
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
     const previewUrl = extractPreviewUrl(job.resultado);
     if (previewHtml) showPreview(previewHtml);
@@ -1225,22 +1236,7 @@ function renderGitTerminal(operation, output, success) {
   return wrapper;
 }
 
-// Hook into appendResult to show git_output as terminal
-const _originalAppendResult = appendResult;
-function appendResult(result, fallbackText) {
-  _originalAppendResult(result, fallbackText);
-  if (result && result.git_output) {
-    const chatLog = document.getElementById("chatLog");
-    if (chatLog) {
-      chatLog.appendChild(renderGitTerminal(
-        result.git_operation || "operation",
-        result.git_output,
-        result.git_success !== false
-      ));
-      chatLog.lastChild.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }
-}
+// Git terminal rendered directly in renderJob (above) — no monkey-patch needed
 
 // Check GitHub status on load
 loadGithubStatus();
