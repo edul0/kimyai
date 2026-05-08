@@ -795,216 +795,19 @@ async def github_connect(request: Request):
     return RedirectResponse(url)
 
 @app.get("/api/github/callback")
-async def github_callback(code: str, state: str, response: Response, request: Request):
-    base = str(request.base_url).rstrip("/")
-    payload = {
-        "client_id": settings.github_client_id,
-        "client_secret": settings.github_client_secret,
-        "code": code,
-        "redirect_uri": f"{base}/api/github/callback"
-    }
-    async with httpx.AsyncClient() as client:
-        res = await client.post("https://github.com/login/oauth/access_token", json=payload, headers={"Accept": "application/json"})
-        data = res.json()
-        token = data.get("access_token")
-        if not token:
-            error_msg = data.get("error_description", "Erro ao obter token do GitHub")
-@app.post("/api/comando", response_model=JobCreateResponse)
-async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, request: Request):
-    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    sid = cmd.session_id or str(uuid.uuid4())
-    data = await _load_session_for_owner(sid, owner)
-    if not data:
-        now = utcnow()
-        title = cmd.mensagem.strip()[:58] or "Nova conversa"
-        _cache_session_payload(
-            {
-                "session_id": sid,
-                "owner": owner,
-                "title": title,
-                "historico": [],
-                "created_at": now,
-                "updated_at": now,
-            }
-        )
-        await jobs.supabase.insert_session(sid, owner_email=owner, title=title, created_at=now, updated_at=now)
-    else:
-        if data.get("owner") and data.get("owner") != owner:
-            raise HTTPException(403, "Sessao de outro usuario.")
-    session_snapshot = jobs.register_user_turn(sid, cmd.mensagem, owner=owner)
-    last_user = (session_snapshot.get("historico") or [])[-1] if session_snapshot.get("historico") else {}
-    await jobs.supabase.insert_session(
-        sid,
-        owner_email=owner,
-        title=session_snapshot.get("title") or "Nova conversa",
-        created_at=session_snapshot.get("created_at"),
-        updated_at=session_snapshot.get("updated_at"),
-    )
-    await jobs.supabase.insert_message(
-        sid,
-        "user",
-        cmd.mensagem,
-        {
-            "request_parts": last_user.get("request_parts", []),
-            "context_snapshot": last_user.get("context_snapshot", {}),
-            "modo": cmd.modo,
-            "queued_at": utcnow(),
-        },
-    )
-    job = jobs.create(
-        sid,
-        cmd.mensagem,
-        cmd.modo,
-        attachments=[item.model_dump() for item in cmd.anexos],
-        github_repo=cmd.github_repo,
-    )
-    background_tasks.add_task(jobs.run, job.job_id)
-    return {
-        "status": "queued",
-        "job_id": job.job_id,
-        "session_id": sid,
-        "status_url": f"/api/jobs/{job.job_id}",
-    }
-
-
-@app.get("/api/jobs")
-async def listar_jobs():
-    return {"jobs": jobs.list_recent()}
-
-
-@app.get("/api/cache/status")
-async def cache_status():
-    return {"cache": storage.status()}
-
-
-@app.get("/api/logs/{sid}")
-async def session_logs(sid: str, request: Request):
-    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    data = await _load_session_for_owner(sid, owner)
-    if not data:
-        raise HTTPException(404, "Sessao nao encontrada.")
-    if data.get("owner") and data.get("owner") != owner:
-        raise HTTPException(403, "Sessao de outro usuario.")
-    logs = await _session_log_entries(sid, data)
-    return {"session_id": sid, "total": len(logs), "logs": logs[-250:]}
-
-
-@app.get("/api/analytics/{sid}")
-async def session_analytics(sid: str, request: Request):
-    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    data = await _load_session_for_owner(sid, owner)
-    if not data:
-        raise HTTPException(404, "Sessao nao encontrada.")
-    if data.get("owner") and data.get("owner") != owner:
-        raise HTTPException(403, "Sessao de outro usuario.")
-    return await _session_analytics(sid, data)
-
-
-@app.get("/api/jobs/{job_id}")
-async def job_status(job_id: str):
-    job = await _load_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job nao encontrado.")
-    return job.model_dump()
-
-
-@app.get("/api/artefatos/{job_id}/{filename}")
-async def baixar_artefato(job_id: str, filename: str, request: Request):
-    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
-    job = await _load_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job nao encontrado.")
-    session = await _load_session_for_owner(job.session_id, owner)
-    if not session:
-        raise HTTPException(404, "Sessao nao encontrada.")
-    if session.get("owner") and session.get("owner") != owner:
-        raise HTTPException(403, "Sessao de outro usuario.")
-    files = (job.resultado or {}).get("files", [])
-    match = next((item for item in files if item.get("name") == filename), None)
-    if not match:
-        remote_match = _match_remote_artifact(await jobs.supabase.list_generated_files(job_id), filename)
-        if remote_match:
-            return _remote_artifact_response(remote_match, filename)
-        raise HTTPException(404, "Arquivo nao encontrado.")
-    path = Path(str(match.get("path") or "")).resolve()
-    if not path.exists() or path.name != filename:
-        remote_match = _match_remote_artifact(await jobs.supabase.list_generated_files(job_id), filename)
-        if remote_match:
-            return _remote_artifact_response(remote_match, filename)
-        raise HTTPException(404, "Arquivo indisponivel.")
-    media_type = match.get("mime_type") or guess_type(filename)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=filename)
-
-
-@app.get("/api/agente/listar")
-async def listar_agentes():
-    custom = []
-    folder = Path("agentes_customizados")
-    folder.mkdir(exist_ok=True)
-    for arq in folder.glob("*.yaml"):
-        if arq.name.startswith("EXEMPLO"):
-            continue
-        try:
-            custom.append(yaml.safe_load(arq.read_text(encoding="utf-8")))
-        except Exception as exc:
-            custom.append({"arquivo": arq.name, "erro": str(exc)})
-    return {"agentes_fixos": DEFAULT_AGENTS, "agentes_customizados": custom}
-
-
-@app.post("/api/agente/criar")
-async def criar_agente(novo: NovoAgente):
-    if novo.motor not in ["gemini", "groq", "cerebras", "openrouter"]:
-        raise HTTPException(400, "Motor invalido.")
-    slug = re.sub(r"[^a-z0-9_]+", "_", novo.nome.lower()).strip("_")
-    if not slug:
-        raise HTTPException(400, "Nome invalido.")
-    folder = Path("agentes_customizados")
-    folder.mkdir(exist_ok=True)
-    path = folder / f"{slug}.yaml"
-    if path.exists():
-        raise HTTPException(409, "Agente ja existe.")
-    cfg = novo.model_dump()
-    cfg.update({"slug": slug, "criado_em": utcnow()})
-    path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    return {"status": "criado", "agente": cfg}
-
-
-@app.delete("/api/agente/{slug}")
-async def remover_agente(slug: str):
-    path = Path("agentes_customizados") / f"{slug}.yaml"
-    if not path.exists():
-        raise HTTPException(404, "Agente nao encontrado.")
-    path.unlink()
-    return {"status": "removido", "slug": slug}
-
-@app.get("/api/github/connect")
-async def github_connect(request: Request):
-    if not settings.github_client_id:
-        raise HTTPException(status_code=400, detail="GitHub Client ID não configurado.")
-    state = str(uuid.uuid4())
-    base = str(request.base_url).rstrip("/")
-    redirect_uri = f"{base}/api/github/callback"
-    url = f"https://github.com/login/oauth/authorize?client_id={settings.github_client_id}&redirect_uri={redirect_uri}&state={state}&scope=repo,user:email"
-    return RedirectResponse(url)
-
-@app.get("/api/github/callback")
 async def github_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    # Se acessado direto sem params, mostra página informativa
     if not code:
         error_detail = error or "Parâmetro 'code' ausente. Acesse via botão 'Conectar GitHub' no app."
-        html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
-        <title>GitHub OAuth – Kemy AI</title>
+        html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>GitHub OAuth – Kemy AI</title>
         <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
         .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
         h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
-        <body><div class="card"><h1>⚠️ OAuth Incompleto</h1>
-        <p>{error_detail}</p>
+        <body><div class="card"><h1>⚠️ OAuth Incompleto</h1><p>{error_detail}</p>
         <p>Para conectar o GitHub, use o botão na barra de navegação do Kemy AI.</p>
         <script>setTimeout(()=>{{if(window.opener)window.close();else window.location.href='/'}},4000)</script>
         </div></body></html>"""
         return Response(html, media_type="text/html")
 
-    # Definir user ANTES do bloco async
     cookie = request.cookies.get(COOKIE_NAME)
     user = verify_token(cookie, settings) if cookie else None
 
@@ -1024,8 +827,7 @@ async def github_callback(request: Request, code: str | None = None, state: str 
             )
             data = res.json()
     except Exception as exc:
-        error_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
-        <title>Erro – Kemy AI</title>
+        err_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Erro – Kemy AI</title>
         <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
         .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
         h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
@@ -1033,36 +835,32 @@ async def github_callback(request: Request, code: str | None = None, state: str 
         <p>Não foi possível contatar a API do GitHub.</p>
         <p style="font-size:12px;color:#6e7681">{str(exc)[:200]}</p>
         </div></body></html>"""
-        return Response(error_html, media_type="text/html", status_code=502)
+        return Response(err_html, media_type="text/html", status_code=502)
 
     token = data.get("access_token")
     if not token:
         gh_error = data.get("error", "unknown")
         gh_desc = data.get("error_description", "Sem descrição")
-        error_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
-        <title>Erro GitHub – Kemy AI</title>
+        err_html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Erro GitHub – Kemy AI</title>
         <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
         .card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:520px;text-align:center}}
         h1{{color:#ff7b72;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}code{{background:#21262d;padding:4px 8px;border-radius:6px;color:#f0883e}}</style></head>
         <body><div class="card"><h1>❌ Token não obtido</h1>
-        <p>Erro do GitHub: <code>{gh_error}</code></p>
-        <p>{gh_desc}</p>
+        <p>Erro do GitHub: <code>{gh_error}</code></p><p>{gh_desc}</p>
         <p style="font-size:12px;color:#6e7681">Verifique se GITHUB_CLIENT_ID e GITHUB_CLIENT_SECRET estão corretos no Render.</p>
         <script>setTimeout(()=>{{if(window.opener)window.close();}},6000)</script>
         </div></body></html>"""
-        return Response(error_html, media_type="text/html", status_code=400)
+        return Response(err_html, media_type="text/html", status_code=400)
 
     if user:
         storage.set_json(f"github_config:{user}", {"token": token}, ttl=30 * 86400)
 
-    html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
-    <title>GitHub Conectado – Kemy AI</title>
+    html = f"""<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>GitHub Conectado – Kemy AI</title>
     <style>body{{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e6edf3}}
     .card{{background:#161b22;border:1px solid #238636;border-radius:12px;padding:32px;max-width:480px;text-align:center}}
     h1{{color:#3fb950;margin:0 0 12px}}p{{color:#8b949e;margin:8px 0}}</style></head>
     <body><div class="card"><h1>✅ GitHub Conectado!</h1>
-    <p>Conta vinculada com sucesso. Esta janela vai fechar automaticamente.</p>
-    </div>
+    <p>Conta vinculada com sucesso. Esta janela vai fechar automaticamente.</p></div>
     <script>
         if (window.opener) {{
             window.opener.postMessage('github_connected', '*');
@@ -1080,15 +878,12 @@ async def github_me(request: Request):
     cookie = request.cookies.get(COOKIE_NAME)
     user = verify_token(cookie, settings) if cookie else None
     oauth_available = bool(settings.github_client_id)
-    
     if not user:
         return JSONResponse({"connected": False, "oauth_available": oauth_available})
-    
     config = storage.get_json(f"github_config:{user}") or {}
     token = config.get("token")
     if not token:
         return JSONResponse({"connected": False, "oauth_available": oauth_available})
-        
     async with httpx.AsyncClient() as client:
         res = await client.get("https://api.github.com/user", headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
         if res.status_code != 200:
