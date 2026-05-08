@@ -792,11 +792,11 @@ async def github_connect(request: Request):
 
 @app.get("/api/github/callback")
 async def github_callback(code: str, state: str, response: Response, request: Request):
+    base = str(request.base_url).rstrip("/")
     payload = {
         "client_id": settings.github_client_id,
         "client_secret": settings.github_client_secret,
         "code": code,
-        base = str(request.base_url).rstrip("/")
         "redirect_uri": f"{base}/api/github/callback"
     }
     async with httpx.AsyncClient() as client:
