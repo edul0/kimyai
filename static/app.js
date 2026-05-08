@@ -375,14 +375,14 @@ function renderJob(job) {
     appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
     if (job.resultado.git_output) {
-      const chatLog = $(\"chatLog\");
+      const chatLog = $("chatLog");
       if (chatLog) {
         chatLog.appendChild(renderGitTerminal(
-          job.resultado.git_operation || \"operation\",
+          job.resultado.git_operation || "operation",
           job.resultado.git_output,
           job.resultado.git_success !== false
         ));
-        chatLog.lastChild.scrollIntoView({ behavior: \"smooth\", block: \"end\" });
+        chatLog.lastChild.scrollIntoView({ behavior: "smooth", block: "end" });
       }
     }
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
