@@ -785,9 +785,10 @@ async def github_connect(request: Request):
     if not settings.github_client_id:
         raise HTTPException(status_code=400, detail="GitHub Client ID não configurado.")
     state = str(uuid.uuid4())
-    redirect_uri = f"{settings.app_public_url}/api/github/callback"
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base}/api/github/callback"
     url = f"https://github.com/login/oauth/authorize?client_id={settings.github_client_id}&redirect_uri={redirect_uri}&state={state}&scope=repo,user:email"
-    return JSONResponse({"url": url})
+    return RedirectResponse(url)
 
 @app.get("/api/github/callback")
 async def github_callback(code: str, state: str, response: Response, request: Request):
@@ -795,7 +796,8 @@ async def github_callback(code: str, state: str, response: Response, request: Re
         "client_id": settings.github_client_id,
         "client_secret": settings.github_client_secret,
         "code": code,
-        "redirect_uri": f"{settings.app_public_url}/api/github/callback"
+        base = str(request.base_url).rstrip("/")
+        "redirect_uri": f"{base}/api/github/callback"
     }
     async with httpx.AsyncClient() as client:
         res = await client.post("https://github.com/login/oauth/access_token", json=payload, headers={"Accept": "application/json"})
