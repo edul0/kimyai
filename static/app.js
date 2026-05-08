@@ -404,18 +404,34 @@ function formatResult(result) {
   return result.summary || "Concluido.";
 }
 
+let pollErrorCount = 0;
 async function pollJob(jobId) {
-  const job = await api(`/api/jobs/${jobId}`);
-  renderJob(job);
-  if (["done", "error"].includes(job.status)) {
-    clearInterval(state.poll);
-    state.poll = null;
-    $("runBtn").disabled = false;
-    $("homeRunBtn").disabled = false;
-    await loadSessions();
-    return true;
+  try {
+    const job = await api(`/api/jobs/${jobId}`);
+    pollErrorCount = 0;
+    renderJob(job);
+    if (["done", "error"].includes(job.status)) {
+      clearInterval(state.poll);
+      state.poll = null;
+      $("runBtn").disabled = false;
+      $("homeRunBtn").disabled = false;
+      await loadSessions();
+      return true;
+    }
+    return false;
+  } catch (err) {
+    pollErrorCount++;
+    console.error("Erro na sondagem do job:", err);
+    if (pollErrorCount >= 5) {
+      clearInterval(state.poll);
+      state.poll = null;
+      $("runBtn").disabled = false;
+      $("homeRunBtn").disabled = false;
+      appendMessage("assistant", "**Erro de Conexão:** Falha persistente ao se comunicar com o servidor. Por favor, recarregue a página e tente novamente.");
+      return true;
+    }
+    return false;
   }
-  return false;
 }
 
 async function ensureSession(options = {}) {
