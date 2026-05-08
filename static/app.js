@@ -602,9 +602,9 @@ function parseMarkdown(text) {
   html = html.replace(/%%%CODEBLOCK_(\d+)%%%/g, (match, i) => {
     let block = codeBlocks[i];
     // Remove as marcações de escape seguras apenas dentro do pre/code
-    block = block.replace(/```(\w*)\n([\s\S]*?)```/, '<pre style="background: var(--surface-2); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 16px 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$2</code></pre>');
+    block = block.replace(/```(\w*)\n([\s\S]*?)```/, '<div class="code-block-wrapper" style="position: relative; margin: 16px 0;"><button class="copy-code-btn secondary-btn compact-btn" type="button" aria-label="Copiar código" title="Copiar código" style="position: absolute; top: 8px; right: 8px; z-index: 10;">Copiar</button><pre style="background: var(--surface-2); padding: 40px 16px 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$2</code></pre></div>');
     // Fallback caso o LLM não envie o tipo de linguagem
-    block = block.replace(/```([\s\S]*?)```/, '<pre style="background: var(--surface-2); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 16px 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$1</code></pre>');
+    block = block.replace(/```([\s\S]*?)```/, '<div class="code-block-wrapper" style="position: relative; margin: 16px 0;"><button class="copy-code-btn secondary-btn compact-btn" type="button" aria-label="Copiar código" title="Copiar código" style="position: absolute; top: 8px; right: 8px; z-index: 10;">Copiar</button><pre style="background: var(--surface-2); padding: 40px 16px 16px; border-radius: var(--radius-md); overflow-x: auto; border: 1px solid var(--line-strong); margin: 0;"><code style="font-family: \'JetBrains Mono\', monospace; font-size: 14px;">$1</code></pre></div>');
     return block;
   });
 
@@ -1095,3 +1095,148 @@ checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");
 });
+
+document.addEventListener("paste", (event) => {
+  if (state.authMode !== "login" && !state.currentUser) return;
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  const files = [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].kind === "file" || items[i].type.startsWith("image/")) {
+      const file = items[i].getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  if (files.length) {
+    handleFileSelection(files);
+  }
+});
+
+document.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  document.body.classList.add("drag-active");
+});
+
+document.addEventListener("dragleave", (event) => {
+  if (event.relatedTarget === null) {
+    document.body.classList.remove("drag-active");
+  }
+});
+
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  document.body.classList.remove("drag-active");
+  if (state.authMode !== "login" && !state.currentUser) return;
+  const files = event.dataTransfer?.files;
+  if (files && files.length) {
+    handleFileSelection(files);
+  }
+});
+
+document.body.addEventListener("click", (event) => {
+  if (event.target.classList.contains("copy-code-btn")) {
+    const codeNode = event.target.nextElementSibling;
+    const codeText = codeNode?.textContent;
+    if (codeText) {
+      navigator.clipboard.writeText(codeText);
+      const originalText = event.target.textContent;
+      event.target.textContent = "Copiado!";
+      setTimeout(() => {
+        if (event.target) event.target.textContent = originalText;
+      }, 2000);
+    }
+  }
+});
+
+
+// ── GitHub Integration ────────────────────────────────────────────────────────
+async function loadGithubStatus() {
+  try {
+    const resp = await fetch("/api/github/me", { credentials: "include" });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const btn = document.getElementById("githubConnectBtn");
+    const label = document.getElementById("githubBtnLabel");
+    if (!btn || !label) return;
+
+    if (data.connected) {
+      btn.classList.add("connected");
+      btn.href = "#";
+      btn.title = `Conectado como @${data.github_login}. Clique para desconectar.`;
+      if (data.github_avatar) {
+        label.innerHTML = `<img src="${data.github_avatar}" class="gh-avatar" alt="@${data.github_login}"> @${data.github_login}`;
+      } else {
+        label.textContent = `@${data.github_login}`;
+      }
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        if (!confirm(`Desconectar GitHub (@${data.github_login})?`)) return;
+        await fetch("/api/github/disconnect", { method: "DELETE", credentials: "include" });
+        location.reload();
+      }, { once: true });
+    } else if (!data.oauth_available) {
+      btn.style.display = "none"; // Hide if OAuth not configured on server
+    }
+  } catch (e) {
+    // Silently ignore
+  }
+}
+
+function renderGitTerminal(operation, output, success) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "git-terminal";
+  const color = success ? "#3fb950" : "#ff7b72";
+  const icon = success ? "✅" : "❌";
+  wrapper.innerHTML = `
+    <div class="git-terminal-header">
+      <div class="terminal-dots">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+      </div>
+      <span class="terminal-title">git ${operation} — ${icon} ${success ? "sucesso" : "erro"}</span>
+    </div>
+    <div class="git-terminal-body" style="border-top: 1px solid rgba(255,255,255,0.05);">${
+      output.replace(/</g, "&lt;").replace(/>/g, "&gt;")
+             .replace(/✅[^\n]*/g, m => `<span class="git-success">${m}</span>`)
+             .replace(/❌[^\n]*/g, m => `<span class="git-error">${m}</span>`)
+             .replace(/⚠️[^\n]*/g, m => `<span class="git-info">${m}</span>`)
+    }</div>
+  `;
+  return wrapper;
+}
+
+// Hook into appendResult to show git_output as terminal
+const _originalAppendResult = appendResult;
+function appendResult(result, fallbackText) {
+  _originalAppendResult(result, fallbackText);
+  if (result && result.git_output) {
+    const chatLog = document.getElementById("chatLog");
+    if (chatLog) {
+      chatLog.appendChild(renderGitTerminal(
+        result.git_operation || "operation",
+        result.git_output,
+        result.git_success !== false
+      ));
+      chatLog.lastChild.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }
+}
+
+// Check GitHub status on load
+loadGithubStatus();
+
+// Check if redirected back from GitHub OAuth
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get("github") === "connected") {
+  const user = urlParams.get("user");
+  history.replaceState({}, "", window.location.pathname);
+  loadGithubStatus();
+  setTimeout(() => {
+    const msg = document.createElement("div");
+    msg.style.cssText = "position:fixed;top:22px;right:80px;z-index:9999;padding:12px 20px;background:rgba(63,185,80,0.15);border:1px solid rgba(63,185,80,0.4);border-radius:12px;color:#3fb950;font-weight:700;font-size:14px;backdrop-filter:blur(12px);";
+    msg.textContent = `✅ GitHub @${user} conectado com sucesso!`;
+    document.body.appendChild(msg);
+    setTimeout(() => msg.remove(), 4000);
+  }, 500);
+}
