@@ -26,6 +26,23 @@ class JobCreateResponse(BaseModel):
     status_url: str
 
 
+class SitePublishRequest(BaseModel):
+    session_id: str | None = None
+    slug: str | None = Field(default=None, max_length=80)
+    target: Literal["internal", "vercel"] = "internal"
+
+
+class SitePublishResponse(BaseModel):
+    status: str
+    slug: str
+    target: Literal["internal", "vercel"]
+    preview_url: str
+    live_url: str
+    subdomain_url: str | None = None
+    file_count: int = 0
+    notes: str | None = None
+
+
 class NovoAgente(BaseModel):
     nome: str = Field(..., min_length=2, max_length=80)
     cargo: str = Field(..., min_length=2, max_length=120)

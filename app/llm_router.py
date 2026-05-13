@@ -503,6 +503,14 @@ class LLMRouter:
                 "Entregue conteudo pensado para o renderizador PPTX aplicar capa, cards, metricas, timeline, tabela e fechamento sem estourar layout. "
                 "Nao devolva JSON cru."
             )
+        if mode == "coding":
+            return (
+                f"{base} "
+                "Modo coding estrito: se o pedido for para corrigir, estruturar, refatorar ou evoluir codigo existente, nao mude para criacao de site novo e nao troque o tipo de entrega. "
+                "Use o contexto do workspace/repositorio ativo e proponha alteracoes diretamente nos arquivos desse projeto. "
+                "Quando o usuario mencionar Vercel, Supabase, Render, GitHub ou deploy, entregue passos praticos e configuracoes reais dessa integracao no proprio projeto. "
+                "Nao invente funcoes fora do pedido. Se houver ambiguidade, escolha a interpretacao mais conservadora focada no objetivo principal do usuario."
+            )
         if mode != "site":
             return base
         return (

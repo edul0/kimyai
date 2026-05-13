@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     github_default_branch: str = Field(default="main", alias="GITHUB_DEFAULT_BRANCH")
     github_user_name: str = Field(default="Kemy AI", alias="GITHUB_USER_NAME")
     github_user_email: str = Field(default="kemy@ai.local", alias="GITHUB_USER_EMAIL")
+    vercel_token: str | None = Field(default=None, alias="VERCEL_TOKEN")
+    vercel_team_id: str | None = Field(default=None, alias="VERCEL_TEAM_ID")
+    vercel_project_id: str | None = Field(default=None, alias="VERCEL_PROJECT_ID")
+    site_base_domain: str | None = Field(default=None, alias="KEMY_SITE_BASE_DOMAIN")
+    site_public_prefix: str = Field(default="/p", alias="KEMY_SITE_PUBLIC_PREFIX")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -92,6 +97,7 @@ class Settings(BaseSettings):
             "browserless": bool(self.browserless_api_key or self.browserless_url),
             "pollinations": bool(self.pollinations_api_key),
             "gotenberg": bool(self.gotenberg_url),
+            "vercel": bool(self.vercel_token),
         }
 
     @property

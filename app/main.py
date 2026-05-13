@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import re
+import shutil
 import uuid
 from mimetypes import guess_type
 from pathlib import Path
@@ -17,7 +18,7 @@ from .agents import DEFAULT_AGENTS
 from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
-from .schemas import ComandoRequest, JobCreateResponse, JobState, NovoAgente
+from .schemas import ComandoRequest, JobCreateResponse, JobState, NovoAgente, SitePublishRequest, SitePublishResponse
 from .storage import Storage
 from .supabase_store import SupabaseStore
 from .github_service import GitHubService
@@ -53,6 +54,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    base_domain = str(settings.site_base_domain or "").strip().lower().strip("/")
+    if base_domain and host.endswith(f".{base_domain}"):
+        slug = host[: -(len(base_domain) + 1)].strip(".")
+        if slug:
+            asset_path = request.url.path.lstrip("/")
+            try:
+                return _published_file_response(slug, asset_path)
+            except HTTPException:
+                pass
     public_paths = (
         "/static/", "/api/auth/", "/docs", "/redoc", "/openapi.json",
         "/api/status", "/favicon.ico",
@@ -68,6 +79,51 @@ async def require_login(request: Request, call_next):
 static_dir = Path(__file__).resolve().parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+published_sites_root = Path("generated_documents") / "published_sites"
+published_sites_root.mkdir(parents=True, exist_ok=True)
+
+
+def _normalize_public_prefix(value: str) -> str:
+    cleaned = str(value or "/p").strip()
+    if not cleaned.startswith("/"):
+        cleaned = f"/{cleaned}"
+    cleaned = cleaned.rstrip("/") or "/p"
+    return cleaned
+
+
+def _sanitize_slug(value: str, fallback: str = "site-kemy") -> str:
+    base = (value or "").strip().lower()
+    base = re.sub(r"[^a-z0-9-]+", "-", base)
+    base = re.sub(r"-{2,}", "-", base).strip("-")
+    if not base:
+        base = fallback
+    if not re.match(r"^[a-z0-9]", base):
+        base = f"s-{base}"
+    return base[:60]
+
+
+def _allocate_site_slug(base_slug: str) -> str:
+    slug = _sanitize_slug(base_slug, fallback="site-kemy")
+    if not (published_sites_root / slug).exists():
+        return slug
+    for index in range(2, 1000):
+        candidate = f"{slug}-{index}"
+        if not (published_sites_root / candidate).exists():
+            return candidate
+    return f"{slug}-{uuid.uuid4().hex[:8]}"
+
+
+def _site_subdomain_url(slug: str) -> str | None:
+    domain = str(settings.site_base_domain or "").strip().strip("/")
+    if not domain:
+        return None
+    if domain.startswith("http://") or domain.startswith("https://"):
+        domain = domain.split("://", 1)[1]
+    return f"https://{slug}.{domain}"
+
+
+SITE_PUBLIC_PREFIX = _normalize_public_prefix(settings.site_public_prefix)
 
 
 def _cache_session_payload(payload: dict) -> dict:
@@ -406,6 +462,77 @@ def _workspace_file_payload(
     return payload
 
 
+def _is_publishable_text_file(path_value: str, mime_type: str = "") -> bool:
+    path = str(path_value or "").lower()
+    mime = str(mime_type or "").lower()
+    if path.endswith((".html", ".htm", ".css", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".json", ".txt", ".md", ".svg")):
+        return True
+    if mime.startswith("text/"):
+        return True
+    return mime in {"application/json", "application/javascript", "image/svg+xml"}
+
+
+def _safe_publish_path(value: str) -> str:
+    raw = str(value or "").replace("\\", "/").strip().lstrip("/")
+    if not raw:
+        return ""
+    parts = [segment for segment in raw.split("/") if segment not in {"", "."}]
+    if not parts or any(segment == ".." for segment in parts):
+        return ""
+    normalized = "/".join(parts)
+    if normalized.startswith(".git/") or normalized == ".git":
+        return ""
+    return normalized
+
+
+def _collect_publish_files(data: dict) -> list[dict]:
+    candidate = _latest_workspace_candidate(data) or {}
+    merged: dict[str, dict] = {}
+
+    def add_entry(path: str, content: str, mime_type: str = "") -> None:
+        safe_path = _safe_publish_path(path)
+        if not safe_path:
+            return
+        if not _is_publishable_text_file(safe_path, mime_type):
+            return
+        text = str(content or "")
+        if not text.strip():
+            return
+        merged[safe_path.lower()] = {"path": safe_path, "content": text, "mime_type": mime_type or guess_type(safe_path)[0] or "text/plain"}
+
+    for file_item in candidate.get("files") or []:
+        if not isinstance(file_item, dict):
+            continue
+        path = str(file_item.get("relative_path") or file_item.get("path") or file_item.get("name") or "")
+        add_entry(path, str(file_item.get("content") or ""), str(file_item.get("mime_type") or ""))
+
+    workspace_snapshot = candidate.get("workspace_snapshot") or {}
+    if isinstance(workspace_snapshot, dict):
+        for row in workspace_snapshot.get("files") or []:
+            if not isinstance(row, dict):
+                continue
+            add_entry(
+                str(row.get("path") or row.get("relative_path") or row.get("name") or ""),
+                str(row.get("content") or ""),
+                guess_type(str(row.get("path") or row.get("relative_path") or row.get("name") or ""))[0] or "text/plain",
+            )
+
+    site_snapshot = candidate.get("site_snapshot") or {}
+    if isinstance(site_snapshot, dict):
+        for row in site_snapshot.get("files") or []:
+            if not isinstance(row, dict):
+                continue
+            add_entry(
+                str(row.get("path") or row.get("relative_path") or row.get("name") or ""),
+                str(row.get("content") or ""),
+                guess_type(str(row.get("path") or row.get("relative_path") or row.get("name") or ""))[0] or "text/plain",
+            )
+
+    files = list(merged.values())
+    files.sort(key=lambda item: (0 if str(item.get("path", "")).lower().endswith("preview.html") else 1, str(item.get("path", "")).lower()))
+    return files
+
+
 def _latest_workspace_candidate(session_data: dict) -> dict | None:
     history = session_data.get("historico") or []
     for item in reversed(history):
@@ -443,6 +570,141 @@ def _assistant_has_workspace_signal(item: dict) -> bool:
     return bool(files or site_snapshot or workspace_snapshot or preview_url)
 
 
+def _pick_primary_html(files: list[dict]) -> str:
+    if not files:
+        return ""
+    preferred = ("preview.html", "index.html")
+    lowered_paths = {str(item.get("path") or "").lower(): item for item in files}
+    for name in preferred:
+        for path, item in lowered_paths.items():
+            if path.endswith(name):
+                return str(item.get("path") or "")
+    for item in files:
+        path = str(item.get("path") or "").lower()
+        if path.endswith(".html"):
+            return str(item.get("path") or "")
+    return ""
+
+
+def _publish_internal_site(
+    slug: str,
+    files: list[dict],
+    owner: str | None,
+    session_id: str,
+) -> dict:
+    site_dir = published_sites_root / slug
+    if site_dir.exists():
+        shutil.rmtree(site_dir, ignore_errors=True)
+    site_dir.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for item in files:
+        path = _safe_publish_path(str(item.get("path") or ""))
+        content = str(item.get("content") or "")
+        if not path or not content:
+            continue
+        target = site_dir / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written += 1
+
+    primary = _pick_primary_html(files)
+    if primary and primary.lower() != "index.html":
+        source = site_dir / _safe_publish_path(primary)
+        if source.exists():
+            (site_dir / "index.html").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    if not (site_dir / "index.html").exists():
+        fallback_title = slug.replace("-", " ").title()
+        (site_dir / "index.html").write_text(
+            (
+                "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<title>{fallback_title}</title></head><body>"
+                f"<h1>{fallback_title}</h1><p>Site publicado pela Kemy AI.</p></body></html>"
+            ),
+            encoding="utf-8",
+        )
+        written += 1
+
+    metadata = {
+        "slug": slug,
+        "owner": owner,
+        "session_id": session_id,
+        "file_count": written,
+        "created_at": utcnow(),
+        "primary_html": primary or "index.html",
+    }
+    (site_dir / "_meta.json").write_text(yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    base = str(settings.app_public_url or "").rstrip("/")
+    preview_path = f"{SITE_PUBLIC_PREFIX}/{slug}/"
+    live_url = f"{base}{preview_path}" if base else preview_path
+    return {
+        "slug": slug,
+        "target": "internal",
+        "preview_url": preview_path,
+        "live_url": live_url,
+        "subdomain_url": _site_subdomain_url(slug),
+        "file_count": written,
+        "notes": "Configure wildcard DNS para usar subdominio automatico." if _site_subdomain_url(slug) else "Publicado no host interno da Kemy.",
+    }
+
+
+async def _publish_site_to_vercel(slug: str, files: list[dict]) -> dict:
+    if not settings.vercel_token:
+        raise HTTPException(400, "VERCEL_TOKEN nao configurado no servidor.")
+    payload_files = []
+    for item in files:
+        path = _safe_publish_path(str(item.get("path") or ""))
+        content = str(item.get("content") or "")
+        if not path or not content:
+            continue
+        payload_files.append({"file": path, "data": content})
+    if not payload_files:
+        raise HTTPException(400, "Nenhum arquivo textual disponivel para deploy no Vercel.")
+
+    params = {}
+    if settings.vercel_team_id:
+        params["teamId"] = settings.vercel_team_id
+    body: dict[str, object] = {
+        "name": slug,
+        "files": payload_files,
+        "target": "production",
+        "projectSettings": {"framework": None},
+    }
+    if settings.vercel_project_id:
+        body["project"] = settings.vercel_project_id
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(
+            "https://api.vercel.com/v13/deployments",
+            params=params,
+            json=body,
+            headers={"Authorization": f"Bearer {settings.vercel_token}", "Content-Type": "application/json"},
+        )
+    if response.status_code not in {200, 201}:
+        try:
+            payload = response.json()
+            message = payload.get("error", {}).get("message") or payload.get("message") or response.text
+        except Exception:
+            message = response.text
+        raise HTTPException(502, f"Falha no deploy Vercel: {message}")
+    payload = response.json()
+    deployment_url = payload.get("url")
+    if deployment_url and not str(deployment_url).startswith("http"):
+        deployment_url = f"https://{deployment_url}"
+    preview_url = str(payload.get("inspectorUrl") or deployment_url or "")
+    return {
+        "slug": slug,
+        "target": "vercel",
+        "preview_url": preview_url or deployment_url or "",
+        "live_url": deployment_url or "",
+        "subdomain_url": None,
+        "file_count": len(payload_files),
+        "notes": "Deploy publicado no Vercel.",
+    }
+
+
 def _match_remote_artifact(rows: list[dict], filename: str) -> dict | None:
     for row in reversed(rows):
         candidates = {
@@ -469,12 +731,54 @@ def _remote_artifact_response(row: dict, filename: str) -> Response:
     raise HTTPException(404, "Arquivo remoto indisponivel.")
 
 
+def _published_file_response(slug: str, asset_path: str = "") -> Response:
+    site_dir = published_sites_root / _sanitize_slug(slug)
+    if not site_dir.exists():
+        raise HTTPException(404, "Site publicado nao encontrado.")
+    rel = str(asset_path or "").replace("\\", "/").lstrip("/")
+    if not rel:
+        rel = "index.html"
+    target = (site_dir / rel).resolve()
+    try:
+        target.relative_to(site_dir.resolve())
+    except Exception:
+        raise HTTPException(400, "Caminho invalido.")
+    if not target.exists() or not target.is_file():
+        if rel != "index.html":
+            fallback = site_dir / "index.html"
+            if fallback.exists():
+                target = fallback
+            else:
+                raise HTTPException(404, "Arquivo do site nao encontrado.")
+        else:
+            raise HTTPException(404, "Arquivo do site nao encontrado.")
+    media_type = guess_type(str(target))[0] or "application/octet-stream"
+    return FileResponse(target, media_type=media_type)
+
+
 @app.get("/")
-async def root_page():
+async def root_page(request: Request):
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    base_domain = str(settings.site_base_domain or "").strip().lower().strip("/")
+    if base_domain and host and host.endswith(f".{base_domain}"):
+        slug = host[: -(len(base_domain) + 1)].strip(".")
+        if slug:
+            return _published_file_response(slug, "index.html")
     index = static_dir / "index.html"
     if index.exists():
         return FileResponse(index)
     return {"nome": settings.app_name, "versao": settings.version, "docs": "/docs"}
+
+
+@app.get(f"{SITE_PUBLIC_PREFIX}" + "/{slug}")
+@app.get(f"{SITE_PUBLIC_PREFIX}" + "/{slug}/")
+async def published_site_root(slug: str):
+    return _published_file_response(slug, "index.html")
+
+
+@app.get(f"{SITE_PUBLIC_PREFIX}" + "/{slug}/{asset_path:path}")
+async def published_site_asset(slug: str, asset_path: str):
+    return _published_file_response(slug, asset_path)
 
 
 @app.get("/api/status")
@@ -504,6 +808,11 @@ async def status():
             "enabled": settings.response_cache_enabled,
             "ttl_seconds": settings.response_cache_ttl_seconds,
             "items": len(jobs.response_cache),
+        },
+        "site_publishing": {
+            "public_prefix": SITE_PUBLIC_PREFIX,
+            "base_domain": settings.site_base_domain or "",
+            "vercel_enabled": bool(settings.vercel_token),
         },
         "openrouter_free": jobs.router.openrouter_free_state,
         "gemini": jobs.router.gemini_state,
@@ -809,6 +1118,55 @@ async def workspace_sessao(sid: str, request: Request):
         "files": returned_files,
         "file_count": len(returned_files),
         "file_count_total": len(files_by_path),
+    }
+
+
+@app.post("/api/site/publicar", response_model=SitePublishResponse)
+async def publicar_site(payload: SitePublishRequest, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    sid = (payload.session_id or "").strip()
+    if not sid:
+        raise HTTPException(400, "session_id e obrigatorio para publicar.")
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
+        raise HTTPException(404, "Sessao nao encontrada para publicar.")
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+
+    files = _collect_publish_files(data)
+    if not files:
+        raise HTTPException(400, "Nao encontrei arquivos textuais do projeto nesta sessao para publicar.")
+
+    title_hint = str(data.get("title") or "site-kemy")
+    requested_slug = (payload.slug or "").strip()
+    base_slug = _sanitize_slug(requested_slug or title_hint, fallback="site-kemy")
+    slug = _allocate_site_slug(base_slug)
+
+    if payload.target == "vercel":
+        result = await _publish_site_to_vercel(slug, files)
+    else:
+        result = _publish_internal_site(slug, files, owner, sid)
+
+    return SitePublishResponse(
+        status="ok",
+        slug=result["slug"],
+        target=result["target"],
+        preview_url=str(result.get("preview_url") or ""),
+        live_url=str(result.get("live_url") or ""),
+        subdomain_url=result.get("subdomain_url"),
+        file_count=int(result.get("file_count") or 0),
+        notes=result.get("notes"),
+    )
+
+
+@app.get("/api/integracoes/status")
+async def integracoes_status():
+    return {
+        "supabase": settings.supabase_enabled,
+        "vercel": bool(settings.vercel_token),
+        "github": bool(settings.github_client_id),
+        "site_base_domain": settings.site_base_domain or "",
+        "site_public_prefix": SITE_PUBLIC_PREFIX,
     }
 
 

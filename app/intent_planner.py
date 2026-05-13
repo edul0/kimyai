@@ -100,6 +100,7 @@ CODE_MARKERS = [
     "implemente",
     "refatore",
     "supabase",
+    "vercel",
     "postgres",
     "render",
     "github",

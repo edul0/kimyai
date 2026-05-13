@@ -14,6 +14,8 @@ Plataforma de agentes para coding, arquitetura, auditoria e deploy, com backend 
 - O modo `documento` identifica pedidos de `.docx`, Word, relatorio, proposta ou PDF e gera os dois arquivos com links de download.
 - O planejador `app/intent_planner.py` interpreta o pedido, escolhe stack/linguagem, separa `site/coding/docx/slides/imagem/planejamento` e define contrato de entrega antes de chamar o modelo.
 - Projetos de site/app saem como artifact com preview, arquivos visiveis e ZIP para download.
+- Agora e possivel publicar o site com slug unico em rota online (`/p/{slug}`) e opcionalmente enviar deploy direto para Vercel.
+- Quando existir wildcard DNS configurado, o mesmo slug pode responder em subdominio (`slug.seu-dominio`).
 - Slides agora saem com pipeline dedicado: `PPTX + HTML preview` e tentativa de `PDF` em layout 16:9.
 
 ## Agentes nativos
@@ -121,6 +123,17 @@ Prefira estas variaveis no Render:
 
 As variaveis `SUPABASE_*` continuam funcionando como fallback legado.
 
+### Publicacao de site online
+
+- `KEMY_SITE_PUBLIC_PREFIX` (padrao `/p`)
+- `KEMY_SITE_BASE_DOMAIN` (opcional, para subdominio wildcard)
+
+### Vercel (opcional)
+
+- `VERCEL_TOKEN`
+- `VERCEL_TEAM_ID` (opcional)
+- `VERCEL_PROJECT_ID` (opcional)
+
 ## Supabase
 
 Para subir o schema do Kimi AI:
@@ -161,6 +174,9 @@ O realtime fica preparado para `kemy.sessions`, `kemy.messages`, `kemy.jobs` e `
 - `POST /api/comando`
 - `GET /api/jobs/{job_id}`
 - `GET /api/artefatos/{job_id}/{filename}`
+- `POST /api/site/publicar`
+- `GET /p/{slug}`
+- `GET /api/integracoes/status`
 - `GET /api/agente/listar`
 - `POST /api/agente/criar`
 - `GET /api/status`

@@ -718,7 +718,7 @@ function resolveRequestedMode(text) {
   const slideMarkers = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"];
   const documentMarkers = [".docx", "docx", "docxs", ".pdf", "pdf", ".md", "markdown", "documento", "abnt", "relatorio", "relatório", "proposta", "contrato"];
   const siteMarkers = ["site", "landing page", "dashboard", "frontend", "pagina", "página", "app web", "web app", "html", "tailwind", "saas", "crud"];
-  const codeMarkers = ["codigo", "código", "code", "bug", "erro", "api", "backend", "fastapi", "react", "vite", "typescript", "github", "git", "supabase", "sql", "commit", "branch", "pull request", "pr"];
+  const codeMarkers = ["codigo", "código", "code", "bug", "erro", "api", "backend", "fastapi", "react", "vite", "typescript", "github", "git", "supabase", "vercel", "sql", "commit", "branch", "pull request", "pr"];
   const repoMarkers = ["git", "github", "repositorio", "repositório", "repo", "branch", "commit", "pull request", "pr", "merge", "deploy"];
   const maintenanceMarkers = ["arrume", "arrumar", "corrija", "corrigir", "conserte", "consertar", "ajuste", "ajustar", "refatore", "refatorar", "fix", "debug", "melhore", "melhorar", "atualize", "atualizar"];
   const siteFollowupMarkers = ["mude", "altere", "ajuste", "refaca", "refaça", "melhore", "evolua", "troque", "adicione", "implemente", "deixe", "aplique"];
@@ -911,6 +911,47 @@ async function applyWorkspaceEdit() {
   }
 }
 
+function toSlug(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+async function launchPublishedSite(target = "internal") {
+  if (!state.sessionId) {
+    appendMessage("assistant", "Abra uma tarefa antes de publicar online.");
+    return;
+  }
+  const suggestion = toSlug($("sessionTitle")?.textContent || "site-kemy") || "site-kemy";
+  const rawSlug = window.prompt("Slug do site online (ex.: pokedex-quiz):", suggestion);
+  if (rawSlug === null) return;
+  const slug = toSlug(rawSlug || suggestion) || suggestion;
+  try {
+    const response = await api("/api/site/publicar", {
+      method: "POST",
+      body: JSON.stringify({ session_id: state.sessionId, slug, target }),
+    });
+    const liveUrl = response.live_url || response.preview_url;
+    const subdomainUrl = response.subdomain_url || "";
+    const lines = [
+      `Site publicado com sucesso (${target}).`,
+      liveUrl ? `- URL: ${liveUrl}` : "",
+      subdomainUrl ? `- Subdominio: ${subdomainUrl}` : "",
+      response.notes ? `- Nota: ${response.notes}` : "",
+    ].filter(Boolean);
+    appendMessage("assistant", lines.join("\n"));
+    if (String(liveUrl || "").startsWith("/")) {
+      showPreviewUrl(liveUrl);
+    } else if (/^https?:\/\//i.test(String(liveUrl || ""))) {
+      window.open(liveUrl, "_blank", "noopener,noreferrer");
+    }
+  } catch (error) {
+    appendMessage("assistant", `Falha ao publicar online: ${error.message}`);
+  }
+}
+
 // ==========================================
 // KEMY MARKDOWN PARSER
 // Transforma o texto cru do LLM em HTML bonito
@@ -1003,6 +1044,8 @@ function appendResult(result, fallbackText) {
           ${previewUrl ? `<a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer" class="primary-link">Abrir preview do projeto</a>` : ""}
           ${inlinePreview ? `<button type="button" class="primary-link" data-open-inline-preview>Abrir live preview</button>` : ""}
           ${archiveUrl ? `<a href="${escapeHtml(archiveUrl)}" target="_blank" rel="noreferrer" class="primary-link">Baixar projeto ZIP</a>` : ""}
+          <button type="button" class="secondary-btn compact-btn" data-publish-site>Lancar online</button>
+          <button type="button" class="secondary-btn compact-btn" data-publish-vercel>Publicar no Vercel</button>
         </div>
         ${downloadableFiles.length ? `
           <div class="file-actions">
@@ -1015,6 +1058,8 @@ function appendResult(result, fallbackText) {
     `;
     $("chatLog").appendChild(node);
     node.querySelector("[data-open-inline-preview]")?.addEventListener("click", () => showPreview(inlinePreview));
+    node.querySelector("[data-publish-site]")?.addEventListener("click", () => launchPublishedSite("internal"));
+    node.querySelector("[data-publish-vercel]")?.addEventListener("click", () => launchPublishedSite("vercel"));
     if (inlinePreview) showPreview(inlinePreview);
     else if (previewUrl) showPreviewUrl(previewUrl);
     node.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -1039,6 +1084,8 @@ function appendResult(result, fallbackText) {
             <div class="project-actions">
               ${previewUrl ? `<a href="${escapeHtml(previewUrl)}" target="_blank" rel="noreferrer" class="primary-link">Abrir preview do projeto</a>` : ""}
               ${archiveUrl ? `<a href="${escapeHtml(archiveUrl)}" target="_blank" rel="noreferrer" class="primary-link">Baixar projeto ZIP</a>` : ""}
+              <button type="button" class="secondary-btn compact-btn" data-publish-site>Lancar online</button>
+              <button type="button" class="secondary-btn compact-btn" data-publish-vercel>Publicar no Vercel</button>
             </div>
           ` : ""}
           <div class="file-actions">
@@ -1049,6 +1096,8 @@ function appendResult(result, fallbackText) {
         </div>
       `;
       $("chatLog").appendChild(node);
+      node.querySelector("[data-publish-site]")?.addEventListener("click", () => launchPublishedSite("internal"));
+      node.querySelector("[data-publish-vercel]")?.addEventListener("click", () => launchPublishedSite("vercel"));
       node.scrollIntoView({ block: "end", behavior: "smooth" });
       return;
     }
