@@ -74,6 +74,25 @@ Acesse:
 - `http://localhost:8000/docs`
 - `http://localhost:8000/api/status`
 
+## Operacao local sem Render (Desktop)
+
+Agora existe uma trilha oficial para rodar a Kemy no seu PC, sem dependencias de Render:
+
+- Launcher desktop: [local_app/README.md](/C:/Users/dudul/Documents/New project/kemyai/local_app/README.md)
+- Cliente de visao sob demanda (F12): [local_client/README.md](/C:/Users/dudul/Documents/New project/kemyai/local_client/README.md)
+
+Build do executavel Windows:
+
+```powershell
+.\local_app\build_exe.ps1
+```
+
+Executavel gerado:
+
+```text
+dist\KemyDesktop\KemyDesktop.exe
+```
+
 ## Variaveis importantes
 
 ### Basicas
@@ -172,6 +191,7 @@ O realtime fica preparado para `kemy.sessions`, `kemy.messages`, `kemy.jobs` e `
 - `GET /api/sessao/listar`
 - `GET /api/sessao/{sid}/historico`
 - `POST /api/comando`
+- `POST /api/vision/analyze`
 - `GET /api/jobs/{job_id}`
 - `GET /api/artefatos/{job_id}/{filename}`
 - `POST /api/site/publicar`
