@@ -20,7 +20,7 @@ from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
 from .github_service import GitHubService
-from .intent_planner import build_execution_plan, classify_request_mode
+from .intent_planner import build_execution_plan, classify_request_mode, validate_request_intent
 from .llm_router import LLMRouter
 from .pollinations import PollinationsImageService
 from .schemas import JobState
@@ -181,11 +181,14 @@ class JobManager:
         try:
             self._raise_if_canceled(job)
             session_data = self.storage.get_json(f"session:{job.session_id}", {})
-            effective_mode = self._resolve_mode(job.pedido, job.modo, session_data)
+            intent_validation = validate_request_intent(job.pedido, job.modo, session_data)
+            effective_mode = intent_validation.mode
             if effective_mode != job.modo:
                 job.modo = effective_mode
                 self.save(job)
             await self._event_async(job, "Kemy", "Lendo a conversa e o contexto.", 15)
+            self._raise_if_canceled(job)
+            await self._event_async(job, "Validador", intent_validation.event_text(), 18)
             self._raise_if_canceled(job)
             await asyncio.sleep(0)
             history = session_data.get("historico", [])
@@ -200,10 +203,15 @@ class JobManager:
                 await self._event_async(job, "Kemy", f"Raciocinio tecnico: {reasoning_trace}", 20)
                 self._raise_if_canceled(job)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
+            learning_context = self._build_error_learning_context(session_data)
+            validation_prompt = intent_validation.as_prompt()
 
             await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
             self._raise_if_canceled(job)
-            refined_prompt = await self._refine_prompt(job, history, compact_context, execution_plan.as_prompt())
+            execution_plan_prompt = f"{validation_prompt}\n\n{execution_plan.as_prompt()}"
+            if learning_context:
+                execution_plan_prompt = f"{execution_plan_prompt}\n\n{learning_context}"
+            refined_prompt = await self._refine_prompt(job, history, compact_context, execution_plan_prompt)
             self._raise_if_canceled(job)
 
             await self._event_async(job, "Kemy", f"Plano definido: {execution_plan.stack}.", 30)
@@ -214,7 +222,7 @@ class JobManager:
                 memory,
                 compact_context,
                 refined_prompt=refined_prompt,
-                execution_plan=execution_plan.as_prompt(),
+                execution_plan=execution_plan_prompt,
             )
             if job.github_repo:
                 repo_hint = self._repo_display_name(job.github_repo)
@@ -267,6 +275,7 @@ class JobManager:
                 self._raise_if_canceled(job)
                 result["tools_used"] = ["pollinations"]
                 result["execution_plan"] = execution_plan_data
+                result["intent_validation"] = intent_validation.as_dict()
                 await self._finish_job(job, result)
                 return
 
@@ -300,6 +309,7 @@ class JobManager:
                     "execution_plan": execution_plan_data,
                 }
                 result["execution_plan"] = execution_plan_data
+                result["intent_validation"] = intent_validation.as_dict()
                 await self._finish_job(job, result)
                 return
 
@@ -327,9 +337,9 @@ class JobManager:
                 self._raise_if_canceled(job)
                 result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
                 self._raise_if_canceled(job)
-                if job.modo == "site":
-                    result = self._ensure_site_artifact(job, result)
                 self._set_cached_response(cache_key, result)
+            if job.modo == "site":
+                result = self._ensure_site_artifact(job, result)
             result = self._hydrate_artifacts(job, result)
             self._raise_if_canceled(job)
             result["pipeline"] = {
@@ -341,6 +351,7 @@ class JobManager:
             if job.github_repo:
                 result["github_repo"] = job.github_repo
             result["execution_plan"] = execution_plan_data
+            result["intent_validation"] = intent_validation.as_dict()
             tools_used = list(dict.fromkeys((result.get("tools_used") or []) + (tool_context.get("used") or [])))
             if cached_response:
                 tools_used.append("response-cache")
@@ -359,6 +370,7 @@ class JobManager:
         except JobCanceledError as exc:
             await self._mark_job_canceled(job, str(exc) or "Execucao cancelada pelo usuario.")
         except Exception as exc:  # pragma: no cover - defensive runtime guard
+            self._record_error_learning(job, exc)
             job.status = "error"
             job.etapa = "Erro na execucao"
             job.erro = str(exc)
@@ -955,6 +967,68 @@ class JobManager:
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         return f"resp:{job.modo}:{digest}"
 
+    def _build_error_learning_context(self, session_data: dict[str, Any] | None) -> str:
+        lessons = (session_data or {}).get("error_memory") or []
+        if not isinstance(lessons, list) or not lessons:
+            return ""
+        lines: list[str] = []
+        for item in lessons[-6:]:
+            if not isinstance(item, dict):
+                continue
+            mode = str(item.get("mode") or "auto")
+            pedido = str(item.get("pedido") or "").strip()
+            error = str(item.get("error") or item.get("lesson") or "").strip()
+            if not error:
+                continue
+            lesson = self._lesson_from_error(error, mode, pedido)
+            lines.append(f"- [{mode}] {lesson}")
+        if not lines:
+            return ""
+        return (
+            "## Aprendizados de erros recentes desta conversa\n"
+            "Use estes pontos como protecoes, sem mencionar ao usuario se nao for necessario:\n"
+            f"{chr(10).join(lines)}\n"
+        )
+
+    def _lesson_from_error(self, error: str, mode: str, pedido: str = "") -> str:
+        lowered = f"{error} {pedido}".lower()
+        if "document" in lowered and "site" in lowered:
+            return "nao misturar documento com site; respeitar o modo validado antes de gerar arquivo"
+        if "preview" in lowered or "iframe" in lowered or "html" in lowered:
+            return "para site, entregar preview.html renderizavel e manter arquivos do projeto acessiveis"
+        if "nao autenticado" in lowered or "não autenticado" in lowered:
+            return "validar sessao/autenticacao antes de aplicar alteracoes no preview"
+        if "missing" in lowered and "argument" in lowered:
+            return "checar assinatura das funcoes antes de chamar geradores de documento/slide"
+        if "codigo" in lowered or "code" in lowered or "repo" in lowered or "git" in lowered:
+            return "quando houver workspace/repositorio, ler contexto e editar codigo existente em vez de criar template generico"
+        clipped = re.sub(r"\s+", " ", error).strip()[:180]
+        return clipped or "revalidar pedido, modo e entregavel antes de responder"
+
+    def _record_error_learning(self, job: JobState, exc: Exception | str, lesson: str | None = None) -> None:
+        try:
+            key = f"session:{job.session_id}"
+            now = utcnow()
+            data = self.storage.get_json(key, {"session_id": job.session_id, "historico": [], "created_at": now})
+            errors = data.setdefault("error_memory", [])
+            if not isinstance(errors, list):
+                errors = []
+            error_text = str(exc)
+            entry = {
+                "ts": now,
+                "job_id": job.job_id,
+                "mode": job.modo,
+                "pedido": job.pedido[:220],
+                "error": error_text[:600],
+                "lesson": lesson or self._lesson_from_error(error_text, job.modo, job.pedido),
+            }
+            errors.append(entry)
+            data["error_memory"] = errors[-12:]
+            data["updated_at"] = now
+            self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
+        except Exception:
+            return
+
     def _attachments_fingerprint(self, attachments: list[dict[str, Any]]) -> list[str]:
         fingerprints: list[str] = []
         for item in attachments or []:
@@ -1112,7 +1186,9 @@ class JobManager:
     def _ensure_site_artifact(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
         raw = result.get("raw") or result.get("summary") or ""
         parsed = parse_kemy_artifact(raw)
-        if (parsed and self._artifact_has_usable_html(parsed.files)) or result.get("files"):
+        if parsed and self._artifact_has_usable_html(parsed.files):
+            return result
+        if result.get("files") and self._result_files_have_usable_html(result):
             return result
         html_candidate = self._extract_html_candidate(raw)
         if html_candidate and self._is_renderable_preview_html(html_candidate):
@@ -1131,6 +1207,11 @@ class JobManager:
         if "kemy-site-fallback" not in tools:
             tools.append("kemy-site-fallback")
         result["tools_used"] = tools
+        self._record_error_learning(
+            job,
+            "site result without usable preview.html",
+            lesson="site precisa entregar preview.html real; nao aceitar doc/pdf como resultado principal de site",
+        )
         return result
 
     def _artifact_has_usable_html(self, files: list[Any]) -> bool:
@@ -1139,6 +1220,20 @@ class JobManager:
             if not path.endswith(".html"):
                 continue
             content = self._clean_artifact_content(path, str(getattr(file_item, "content", "")))
+            if self._is_renderable_preview_html(content):
+                return True
+        return False
+
+    def _result_files_have_usable_html(self, result: dict[str, Any]) -> bool:
+        if result.get("preview_url") or result.get("site_url"):
+            return True
+        for file_item in result.get("files") or []:
+            if not isinstance(file_item, dict):
+                continue
+            path = str(file_item.get("name") or file_item.get("path") or file_item.get("relative_path") or "").lower()
+            if not path.endswith(".html"):
+                continue
+            content = self._clean_artifact_content(path, str(file_item.get("content") or ""))
             if self._is_renderable_preview_html(content):
                 return True
         return False

@@ -543,9 +543,11 @@ def _latest_workspace_candidate(session_data: dict) -> dict | None:
         site_snapshot = item.get("site_snapshot") or result.get("site_snapshot")
         workspace_snapshot = item.get("workspace_snapshot") or result.get("workspace_snapshot")
         preview_url = result.get("preview_url") or item.get("preview_url")
-        if files or site_snapshot or workspace_snapshot or preview_url:
+        mode_hint = str(item.get("mode") or result.get("mode") or session_data.get("last_mode") or "coding").lower()
+        has_project_file = _has_project_workspace_signal(files, site_snapshot, workspace_snapshot, preview_url)
+        if (files or site_snapshot or workspace_snapshot or preview_url) and has_project_file:
             return {
-                "mode": item.get("mode") or result.get("mode") or session_data.get("last_mode") or "coding",
+                "mode": mode_hint,
                 "summary": result.get("summary") or item.get("content") or "",
                 "artifact_title": result.get("artifact_title") or result.get("document_title") or "",
                 "preview_url": preview_url or "",
@@ -561,13 +563,35 @@ def _latest_workspace_candidate(session_data: dict) -> dict | None:
     return None
 
 
+def _has_project_workspace_signal(files: list, site_snapshot: Any, workspace_snapshot: Any, preview_url: Any) -> bool:
+    if preview_url or isinstance(site_snapshot, dict):
+        return True
+    if isinstance(workspace_snapshot, dict) and workspace_snapshot.get("files"):
+        return True
+    project_suffixes = (".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".json", ".md", ".py", ".sql", ".yml", ".yaml", ".zip")
+    document_only_suffixes = (".docx", ".pdf", ".pptx")
+    saw_file = False
+    saw_project = False
+    saw_document = False
+    for item in files or []:
+        if not isinstance(item, dict):
+            continue
+        saw_file = True
+        name = str(item.get("path") or item.get("relative_path") or item.get("name") or "").lower()
+        if name.endswith(project_suffixes):
+            saw_project = True
+        if name.endswith(document_only_suffixes):
+            saw_document = True
+    return saw_project or (saw_file and not saw_document)
+
+
 def _assistant_has_workspace_signal(item: dict) -> bool:
     result = item.get("result") or {}
     files = item.get("files") or result.get("files") or []
     site_snapshot = item.get("site_snapshot") or result.get("site_snapshot")
     workspace_snapshot = item.get("workspace_snapshot") or result.get("workspace_snapshot")
     preview_url = item.get("preview_url") or result.get("preview_url")
-    return bool(files or site_snapshot or workspace_snapshot or preview_url)
+    return _has_project_workspace_signal(files, site_snapshot, workspace_snapshot, preview_url)
 
 
 def _pick_primary_html(files: list[dict]) -> str:

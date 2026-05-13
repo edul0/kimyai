@@ -184,6 +184,97 @@ class ExecutionPlan:
         }
 
 
+@dataclass(frozen=True)
+class IntentValidation:
+    surface: str
+    mode: str
+    confidence: float
+    reasons: list[str] = field(default_factory=list)
+    safeguards: list[str] = field(default_factory=list)
+
+    def event_text(self) -> str:
+        readable_surface = "Code Workspace" if self.surface == "code_workspace" else "Kemy Studio"
+        reason = "; ".join(self.reasons[:2]) or "pedido analisado pelo contexto"
+        guard = f" Protecao: {self.safeguards[0]}" if self.safeguards else ""
+        return f"Pedido validado: {readable_surface} -> {self.mode} ({int(self.confidence * 100)}%). {reason}.{guard}"
+
+    def as_prompt(self) -> str:
+        reasons = "\n".join(f"- {item}" for item in self.reasons) or "- Sem marcador explicito; usar contexto da conversa."
+        safeguards = "\n".join(f"- {item}" for item in self.safeguards) or "- Sem conflito detectado."
+        return (
+            "## Validacao operacional do pedido\n"
+            f"- Area: {self.surface}\n"
+            f"- Modo validado: {self.mode}\n"
+            f"- Confianca: {int(self.confidence * 100)}%\n"
+            "## Evidencias\n"
+            f"{reasons}\n"
+            "## Protecoes contra erro recorrente\n"
+            f"{safeguards}\n"
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "surface": self.surface,
+            "mode": self.mode,
+            "confidence": self.confidence,
+            "reasons": self.reasons,
+            "safeguards": self.safeguards,
+        }
+
+
+def validate_request_intent(
+    message: str,
+    current_mode: str = "coding",
+    session_data: dict[str, Any] | None = None,
+) -> IntentValidation:
+    text = _normalize(message)
+    mode = classify_request_mode(message, current_mode, session_data)
+    reasons: list[str] = []
+    safeguards: list[str] = []
+    explicit = _explicit_mode_from_text(text)
+
+    if explicit:
+        reasons.append(f"marcador explicito detectado para {explicit}")
+    if _has_any(text, REPO_MARKERS):
+        reasons.append("pedido cita repositorio/GitHub/deploy")
+    if _has_any(text, SITE_MARKERS):
+        reasons.append("pedido pede interface, site, app web ou preview")
+    if _has_any(text, DOCUMENT_MARKERS):
+        reasons.append("pedido pede documento, DOCX, PDF ou formato textual")
+    if _has_any(text, SLIDE_MARKERS):
+        reasons.append("pedido pede apresentacao/slides")
+    if _has_any(text, IMAGE_MARKERS):
+        reasons.append("pedido pede imagem ou referencia visual")
+
+    if mode == "site" and _has_any(text, DOCUMENT_MARKERS):
+        safeguards.append("site/app venceu marcadores de documento para evitar DOCX indevido")
+    if mode == "coding" and str((session_data or {}).get("last_github_repo") or "").strip():
+        safeguards.append("workspace/repositorio vinculado tem prioridade sobre template generico")
+    if mode == "documento" and _has_any(text, SITE_MARKERS):
+        safeguards.append("revalidar antes de gerar documento; ha marcador visual misto")
+    if mode in {"site", "coding"}:
+        safeguards.append("entregar arquivo/preview real, nao apenas explicacao")
+    if mode == "documento":
+        safeguards.append("nao incluir codigo-fonte interno dentro do DOCX/PDF")
+
+    code_surface_modes = {"site", "coding", "auditoria"}
+    surface = "code_workspace" if mode in code_surface_modes or _has_any(text, REPO_MARKERS) else "kemy_studio"
+    confidence = 0.9 if explicit else 0.72
+    if _has_any(text, FOLLOWUP_MARKERS) and _previous_mode(session_data):
+        confidence = max(confidence, 0.82)
+        reasons.append("continuidade detectada pela conversa anterior")
+    if not reasons:
+        reasons.append("roteamento decidido por contexto e modo atual")
+
+    return IntentValidation(
+        surface=surface,
+        mode=mode,
+        confidence=min(confidence, 0.96),
+        reasons=reasons[:5],
+        safeguards=safeguards[:5],
+    )
+
+
 def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any] | None = None) -> ExecutionPlan:
     text = _normalize(message)
     effective_mode = classify_request_mode(message, mode, compact_context)
@@ -203,10 +294,10 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
         )
     if is_slide_request(message):
         return _slide_plan(text)
-    if is_document_request(message):
-        return _docx_plan()
     if effective_mode == "site":
         return _site_plan(text)
+    if is_document_request(message):
+        return _docx_plan()
     if effective_mode == "planejamento":
         return ExecutionPlan(
             mode="planejamento",
@@ -218,6 +309,22 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
             quality_rules=[
                 "Ser direto, util e acionavel.",
                 "Usar contexto da conversa para evitar repetir perguntas.",
+            ],
+        )
+    if effective_mode == "coding" and (_has_any(text, REPO_MARKERS + MAINTENANCE_MARKERS) or str((compact_context or {}).get("repo") or "")):
+        return ExecutionPlan(
+            mode="coding",
+            intent="manutencao de codigo/workspace",
+            stack="stack real detectada no repositorio ou workspace vinculado",
+            language="linguagem dos arquivos afetados",
+            deliverable="patch no projeto existente com preview quando houver frontend",
+            expected_files=["arquivos alterados do repositorio", "relatorio curto de validacao"],
+            run_commands=["testes/build disponiveis no projeto", "python -m compileall app quando aplicavel"],
+            response_contract="Corrigir o projeto existente; nao criar template generico se ha repositorio ou workspace.",
+            quality_rules=[
+                "Ler contexto do workspace/repositorio antes de propor arquivos novos.",
+                "Se houver frontend, manter live preview coerente com os arquivos reais.",
+                "Explicar somente o essencial: o que mudou, como validar e riscos restantes.",
             ],
         )
     if _has_any(text, CODE_MARKERS):
@@ -318,14 +425,14 @@ def _explicit_mode_from_text(text: str) -> str | None:
         return "imagem"
     if _has_any(text, SLIDE_MARKERS):
         return "documento"
-    if _has_any(text, DOCUMENT_MARKERS):
-        return "documento"
     repo_maintenance = _has_any(text, REPO_MARKERS) and _has_any(text, MAINTENANCE_MARKERS)
     mixed_site_code_fix = _has_any(text, SITE_MARKERS) and _has_any(text, CODE_MARKERS) and _has_any(text, MAINTENANCE_MARKERS)
     if repo_maintenance or mixed_site_code_fix:
         return "coding"
     if _has_any(text, SITE_MARKERS):
         return "site"
+    if _has_any(text, DOCUMENT_MARKERS):
+        return "documento"
     if _has_any(text, CODE_MARKERS):
         return "coding"
     if _is_daily_request(text):

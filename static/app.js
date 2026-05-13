@@ -20,6 +20,7 @@ const state = {
   running: false,
   unauthorizedNotified: false,
   canceledJobsNotified: new Set(),
+  activeSurface: localStorage.getItem("kemy.surface") || "studio",
 };
 
 const REASONING_PATTERNS = [
@@ -83,6 +84,26 @@ function clearPersistedSessionId(user = state.currentUser) {
   const key = sessionStorageKey(user);
   if (key) localStorage.removeItem(key);
   state.sessionId = null;
+}
+
+function setSurface(surface = "studio") {
+  state.activeSurface = surface === "code" ? "code" : "studio";
+  localStorage.setItem("kemy.surface", state.activeSurface);
+  $("surfaceStudioBtn")?.classList.toggle("active", state.activeSurface === "studio");
+  $("surfaceCodeBtn")?.classList.toggle("active", state.activeSurface === "code");
+  const mode = $("mode");
+  if (mode) {
+    if (state.activeSurface === "code" && !["coding", "site", "auditoria"].includes(mode.value)) {
+      mode.value = "coding";
+    }
+    if (state.activeSurface === "studio" && mode.value === "auditoria") {
+      mode.value = "planejamento";
+    }
+  }
+}
+
+function inferSurfaceFromMode(mode = "") {
+  return ["coding", "site", "auditoria"].includes(mode) ? "code" : "studio";
 }
 
 function setRunningState(running, jobId = null) {
@@ -826,8 +847,9 @@ function resetProgress(message) {
 function renderJob(job) {
   $("jobBadge").textContent = `Status: ${job.status} (${job.progresso}%)`;
   const events = Array.isArray(job.eventos) ? job.eventos : [];
-  $("timeline").innerHTML = events
-    .slice(-8)
+  const motorEvents = events.filter((event) => !isReasoningEvent(event?.msg || ""));
+  const visibleMotorEvents = (motorEvents.length ? motorEvents : events).slice(-4);
+  $("timeline").innerHTML = visibleMotorEvents
     .map((event) => `<li><p><strong style="color: var(--ink-strong);">${escapeHtml(event.agente)}</strong>: ${escapeHtml(event.msg)}</p></li>`)
     .join("");
   renderReasoningTrace(job);
@@ -841,6 +863,7 @@ function renderJob(job) {
     state.lastOutput = formatResult(job.resultado);
     const inferredMode = job.modo || inferModeFromResult(job.resultado, state.lastOutput);
     if (inferredMode) state.lastResultMode = inferredMode;
+    if (inferredMode) setSurface(inferSurfaceFromMode(inferredMode));
     appendResult(job.resultado, state.lastOutput);
     state.renderedJobs.add(job.job_id);
     if (job.resultado.git_output) {
@@ -950,7 +973,6 @@ async function ensureSession(options = {}) {
 
 function resolveRequestedModeLegacy(text) {
   const selectedMode = $("mode").value;
-  if (selectedMode !== "coding") return selectedMode;
   const lowered = String(text || "").toLowerCase();
   const imageMarkers = ["gere uma imagem", "gera uma imagem", "crie uma imagem", "desenhe", "ilustre", "imagem de", "foto de", "logo de", "banner de"];
   const slideMarkers = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"];
@@ -959,8 +981,9 @@ function resolveRequestedModeLegacy(text) {
   const siteFollowupMarkers = ["mude", "altere", "ajuste", "refaca", "refaça", "melhore", "evolua", "troque", "adicione", "implemente", "deixe", "aplique"];
   if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
   if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
-  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
+  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (selectedMode !== "coding") return selectedMode;
   const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
   if (state.lastResultMode === "site" && hasSiteFollowupSignal) return "site";
   return selectedMode;
@@ -968,7 +991,6 @@ function resolveRequestedModeLegacy(text) {
 
 function resolveRequestedMode(text) {
   const selectedMode = $("mode").value;
-  if (selectedMode !== "coding") return selectedMode;
   const lowered = String(text || "").toLowerCase();
   const repoSelected = Boolean(($("gitRepo")?.value || "").trim());
   const imageMarkers = ["gere uma imagem", "gera uma imagem", "crie uma imagem", "desenhe", "ilustre", "imagem de", "foto de", "logo de", "banner de"];
@@ -983,11 +1005,18 @@ function resolveRequestedMode(text) {
     && maintenanceMarkers.some((marker) => lowered.includes(marker));
   if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
   if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
-  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (repoMaintenance && (codeMarkers.some((marker) => lowered.includes(marker)) || siteMarkers.some((marker) => lowered.includes(marker)))) {
     return "coding";
   }
   if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
+  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (selectedMode !== "coding") return selectedMode;
+  if (state.activeSurface === "code" && (repoSelected || codeMarkers.some((marker) => lowered.includes(marker)) || maintenanceMarkers.some((marker) => lowered.includes(marker)))) {
+    return "coding";
+  }
+  if (state.activeSurface === "studio" && !codeMarkers.some((marker) => lowered.includes(marker)) && !siteMarkers.some((marker) => lowered.includes(marker))) {
+    return resolveDailyMode(text) || "planejamento";
+  }
   const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
   if (state.lastResultMode === "site" && hasSiteFollowupSignal) return "site";
   return selectedMode;
@@ -1786,6 +1815,9 @@ on("newSessionBtn", "click", () => newSession({ openChat: true }).catch(console.
 on("backHomeBtn", "click", showHome);
 on("refreshSessionsBtn", "click", () => loadSessions().catch(console.error));
 on("copyBtn", "click", () => navigator.clipboard.writeText(state.lastOutput || ""));
+on("surfaceStudioBtn", "click", () => setSurface("studio"));
+on("surfaceCodeBtn", "click", () => setSurface("code"));
+on("mode", "change", () => setSurface(inferSurfaceFromMode($("mode")?.value || "coding")));
 on("systemToggle", "click", async () => {
   await loadStatus().catch(console.error);
   await loadSessionInsights();
@@ -1888,6 +1920,7 @@ setTheme(localStorage.getItem("kemy.theme") || "light");
 setAuthMode("login");
 updatePreviewFullscreenUI();
 setPreviewTab("live");
+setSurface(state.activeSurface);
 clearWorkspaceStudio();
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");

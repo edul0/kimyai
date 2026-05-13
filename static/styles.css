@@ -2,37 +2,37 @@
 
 
 :root {
-  --bg: #f3f8f5;
-  --bg-elevated: #fbfdfc;
-  --surface-2: #eff5f2;
-  --surface-3: #e6eeea;
-  --accent: #12a37a;
-  --accent-strong: #0d7b5c;
-  --accent-soft: rgba(18, 163, 122, 0.12);
-  --accent-glow: rgba(18, 163, 122, 0.28);
-  --mint: #63e5c3;
-  --success: #119f74;
+  --bg: #f5f6f4;
+  --bg-elevated: #fbfbfa;
+  --surface-2: #f0f1ef;
+  --surface-3: #e7e9e5;
+  --accent: #5f7f75;
+  --accent-strong: #2f5f55;
+  --accent-soft: rgba(95, 127, 117, 0.12);
+  --accent-glow: rgba(95, 127, 117, 0.16);
+  --mint: #cbd8d2;
+  --success: #3a7c68;
   --danger: #d94d3f;
   --surface: #ffffff;
   --surface-solid: #ffffff;
   --surface-rgb: 255, 255, 255;
   --surface-soft: #f7fbf9;
   --surface-strong: #edf4f0;
-  --ink: #19392d;
-  --ink-strong: #07150f;
-  --muted: #5e786d;
-  --line: rgba(25, 57, 45, 0.085);
-  --line-strong: rgba(25, 57, 45, 0.16);
+  --ink: #37423d;
+  --ink-strong: #111614;
+  --muted: #6d7772;
+  --line: rgba(17, 22, 20, 0.085);
+  --line-strong: rgba(17, 22, 20, 0.16);
   --radius-xs: 8px;
   --radius-sm: 12px;
   --radius-md: 18px;
   --radius-lg: 26px;
   --radius-xl: 34px;
-  --shadow-sm: 0 4px 12px rgba(7, 21, 15, 0.05);
-  --shadow-soft: 0 8px 24px rgba(7, 21, 15, 0.08);
-  --shadow: 0 12px 34px rgba(7, 21, 15, 0.08);
-  --shadow-strong: 0 22px 58px rgba(7, 21, 15, 0.13);
-  --shadow-lg: 0 24px 68px rgba(7, 21, 15, 0.12);
+  --shadow-sm: 0 3px 10px rgba(17, 22, 20, 0.045);
+  --shadow-soft: 0 8px 22px rgba(17, 22, 20, 0.065);
+  --shadow: 0 12px 30px rgba(17, 22, 20, 0.075);
+  --shadow-strong: 0 18px 46px rgba(17, 22, 20, 0.11);
+  --shadow-lg: 0 22px 60px rgba(17, 22, 20, 0.11);
   --nav-height: 72px;
   --font-main: "SF Pro Text", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-display: "SF Pro Display", "Sora", "Inter", system-ui, -apple-system, sans-serif;
@@ -80,8 +80,8 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(76% 58% at 10% -12%, rgba(18, 163, 122, 0.1), transparent 68%),
-    radial-gradient(66% 52% at 100% -2%, rgba(13, 123, 92, 0.07), transparent 74%),
+    radial-gradient(76% 58% at 10% -12%, rgba(95, 127, 117, 0.055), transparent 68%),
+    radial-gradient(66% 52% at 100% -2%, rgba(47, 95, 85, 0.04), transparent 74%),
     linear-gradient(180deg, var(--bg-elevated), var(--bg));
   color: var(--ink);
   font-family: var(--font-main);
@@ -114,8 +114,8 @@ body::after {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(34% 30% at 78% 76%, rgba(99, 229, 195, 0.14), transparent 72%),
-    radial-gradient(26% 24% at 18% 22%, rgba(18, 163, 122, 0.08), transparent 75%);
+    radial-gradient(34% 30% at 78% 76%, rgba(95, 127, 117, 0.055), transparent 72%),
+    radial-gradient(26% 24% at 18% 22%, rgba(47, 95, 85, 0.045), transparent 75%);
   z-index: -1;
 }
 
@@ -259,7 +259,7 @@ svg {
 .secondary-btn:hover,
 .glass-select:hover {
   transform: translateY(-1px);
-  border-color: rgba(21, 150, 111, 0.42);
+  border-color: rgba(95, 127, 117, 0.38);
   background: var(--surface-solid);
   box-shadow: var(--shadow);
 }
@@ -547,8 +547,8 @@ svg {
   min-height: calc(100vh - var(--nav-height));
   padding: clamp(26px, 4.5vw, 52px) clamp(18px, 3vw, 34px);
   background:
-    radial-gradient(circle at 16% 24%, rgba(18, 163, 122, 0.13), transparent 48%),
-    radial-gradient(circle at 88% -16%, rgba(99, 229, 195, 0.18), transparent 44%),
+    radial-gradient(circle at 16% 24%, rgba(95, 127, 117, 0.06), transparent 48%),
+    radial-gradient(circle at 88% -16%, rgba(203, 216, 210, 0.16), transparent 44%),
     linear-gradient(180deg, rgba(var(--surface-rgb), 0.22), rgba(var(--surface-rgb), 0.06));
 }
 
@@ -921,14 +921,44 @@ svg {
   max-width: 46%;
 }
 
+.surface-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-solid), var(--surface-2) 44%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.55) inset;
+}
+
+.surface-option {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.surface-option.active {
+  background: var(--surface-solid);
+  color: var(--ink-strong);
+  box-shadow: var(--shadow-sm);
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
   min-height: 24px;
   padding: 0 11px;
-  border: 1px solid rgba(18, 163, 122, 0.28);
+  border: 1px solid rgba(95, 127, 117, 0.26);
   border-radius: 999px;
-  background: rgba(18, 163, 122, 0.12);
+  background: rgba(95, 127, 117, 0.1);
   color: var(--success);
   font-size: 10.5px;
   font-weight: 850;
