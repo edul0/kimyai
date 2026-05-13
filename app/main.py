@@ -235,6 +235,8 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                 "image_data_url": metadata.get("image_data_url"),
                 "files": files,
                 "preview_url": metadata.get("preview_url"),
+                "mode": metadata.get("mode"),
+                "site_snapshot": metadata.get("site_snapshot"),
                 "result": {
                     "summary": metadata.get("summary"),
                     "image_url": metadata.get("image_url"),
@@ -244,6 +246,8 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                     "files": files,
                     "document_title": metadata.get("document_title"),
                     "preview_url": metadata.get("preview_url"),
+                    "mode": metadata.get("mode"),
+                    "site_snapshot": metadata.get("site_snapshot"),
                 },
             }
         )
@@ -548,6 +552,8 @@ async def listar_sessoes(request: Request):
                         "image_data_url": metadata.get("image_data_url"),
                         "files": files,
                         "preview_url": metadata.get("preview_url"),
+                        "mode": metadata.get("mode"),
+                        "site_snapshot": metadata.get("site_snapshot"),
                         "result": {
                             "summary": metadata.get("summary"),
                             "image_url": metadata.get("image_url"),
@@ -557,6 +563,8 @@ async def listar_sessoes(request: Request):
                             "files": files,
                             "document_title": metadata.get("document_title"),
                             "preview_url": metadata.get("preview_url"),
+                            "mode": metadata.get("mode"),
+                            "site_snapshot": metadata.get("site_snapshot"),
                         },
                     }
                 )

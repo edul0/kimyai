@@ -256,7 +256,10 @@ function renderSessions() {
         <div class="saved-session-main" data-session-id="${session.session_id}">
           <strong style="display: block; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;">${escapeHtml(session.title || "Nova conversa")}</strong>
         </div>
-        <button type="button" class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir tarefa" title="Excluir tarefa"><span aria-hidden="true">&times;</span></button>
+        <button type="button" class="saved-session-delete" data-delete-session="${session.session_id}" aria-label="Excluir tarefa" title="Excluir tarefa">
+          <span aria-hidden="true">&times;</span>
+          <span class="saved-session-delete-label">Excluir</span>
+        </button>
       </div>
     `)
     .join("");
@@ -333,6 +336,7 @@ async function openSession(sessionId, options = {}) {
   const lastAssistantWithPreview = [...history].reverse().find((item) => {
     if (item.role !== "assistant") return false;
     const target = item.result || item;
+    if (!hasPreviewSignal(target, item.content || "")) return false;
     return Boolean(extractPreviewHtml(target, item.content || "") || extractPreviewUrl(target));
   });
   const previewHtml = lastAssistantWithPreview ? extractPreviewHtml(lastAssistantWithPreview.result || lastAssistantWithPreview, lastAssistantWithPreview.content || "") : "";
@@ -494,11 +498,7 @@ function inferModeFromResult(result, fallbackText = "") {
   if (result.document_title || files.some((file) => String(file.name || file.path || "").toLowerCase().endsWith(".docx"))) {
     return "documento";
   }
-  if (
-    extractPreviewUrl(result) ||
-    extractPreviewHtml(result, fallbackText) ||
-    files.some((file) => String(file.name || file.path || "").toLowerCase().endsWith(".html"))
-  ) {
+  if (hasPreviewSignal(result, fallbackText) || extractPreviewHtml(result, fallbackText)) {
     return "site";
   }
   return "";
@@ -823,6 +823,34 @@ function inferLanguage(name) {
   return map[suffix] || suffix;
 }
 
+function hasPreviewSignal(result, fallbackText = "") {
+  const files = result?.files || [];
+  const hasHtmlFile = files.some((file) => {
+    const name = String(file.relative_path || file.name || file.path || "").toLowerCase();
+    const mime = String(file.mime_type || "").toLowerCase();
+    return name.endsWith(".html") || mime === "text/html";
+  });
+  const hasPreviewUrl = Boolean(result?.preview_url || result?.site_url);
+  const hasArchive = Boolean(result?.project_archive_url);
+  const hasArtifactTitle = Boolean(result?.artifact_title);
+  const rawSource = decodeHtmlEntities([result?.raw, result?.summary].filter(Boolean).join("\n"));
+  const hasArtifactTag = /<kemy_artifact\b/i.test(rawSource);
+  const hasHtmlDocument = /<!doctype html|<html\b/i.test(rawSource);
+  const fallbackSource = decodeHtmlEntities(String(fallbackText || ""));
+  const fallbackHasArtifact = /<kemy_artifact\b/i.test(fallbackSource);
+  const fallbackHasCompleteHtml = /<!doctype html|<html\b/i.test(fallbackSource);
+  return Boolean(
+    hasHtmlFile ||
+    hasPreviewUrl ||
+    hasArchive ||
+    hasArtifactTitle ||
+    hasArtifactTag ||
+    hasHtmlDocument ||
+    fallbackHasArtifact ||
+    fallbackHasCompleteHtml
+  );
+}
+
 function titleFromPrompt(text) {
   return text.trim().replace(/\s+/g, " ").slice(0, 58) || "Nova conversa";
 }
@@ -848,10 +876,14 @@ function showRunError(error) {
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
+  if (!hasPreviewSignal(result, fallbackText)) return "";
   let fromPreview = "";
   let fromFile = "";
   let fromFence = "";
+  let fromArtifact = "";
+  let previewSignalFound = false;
   if (result?.preview_html) {
+    previewSignalFound = true;
     fromPreview = normalizePreviewHtml(result.preview_html);
     if (fromPreview && !looksLikeViteShellHtml(fromPreview)) return fromPreview;
   }
@@ -861,21 +893,30 @@ function extractPreviewHtml(result, fallbackText = "") {
     return name.endsWith("preview.html") || name.endsWith("index.html") || name.endsWith(".html");
   });
   if (htmlFile?.content) {
+    previewSignalFound = true;
     fromFile = normalizePreviewHtml(htmlFile.content);
     if (fromFile && !looksLikeViteShellHtml(fromFile)) return fromFile;
-  }
-  const match = fallbackText.match(/```html\s*([\s\S]*?)```/i);
-  if (match) {
-    fromFence = normalizePreviewHtml(match[1]);
-    if (fromFence && !looksLikeViteShellHtml(fromFence)) return fromFence;
   }
   const artifactFiles = extractArtifactFiles([result?.raw, result?.summary, fallbackText].filter(Boolean).join("\n"));
   const artifactHtml = artifactFiles.find((file) => file.path.toLowerCase().endsWith("preview.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith("index.html"))
     || artifactFiles.find((file) => file.path.toLowerCase().endsWith(".html"));
-  const fromArtifact = normalizePreviewHtml(artifactHtml?.content || "");
+  if (artifactHtml) previewSignalFound = true;
+  fromArtifact = normalizePreviewHtml(artifactHtml?.content || "");
   if (fromArtifact && !looksLikeViteShellHtml(fromArtifact)) return fromArtifact;
-  if (fromPreview || fromFile || fromFence || fromArtifact) return buildEmergencyPreviewHtml(result, fallbackText);
+
+  const shouldUseFence = previewSignalFound || /<kemy_artifact\b/i.test(String(fallbackText || ""));
+  if (shouldUseFence) {
+    const match = String(fallbackText || "").match(/```html\s*([\s\S]*?)```/i);
+    if (match) {
+      fromFence = normalizePreviewHtml(match[1]);
+      if (fromFence && !looksLikeViteShellHtml(fromFence)) return fromFence;
+    }
+  }
+
+  if (previewSignalFound && (fromPreview || fromFile || fromArtifact || fromFence)) {
+    return buildEmergencyPreviewHtml(result, fallbackText);
+  }
   return "";
 }
 

@@ -2,12 +2,18 @@
 
 
 :root {
+  --bg: #f2f8f4;
+  --bg-elevated: #f9fcfa;
   --surface-2: #f3f7f5;
   --surface-3: #ebf1ef;
   --accent: #15966f;
   --accent-strong: #0f7a5a;
   --accent-soft: rgba(21, 150, 111, 0.12);
+  --accent-glow: rgba(21, 150, 111, 0.3);
+  --mint: #6fe4bf;
+  --danger: #d94d3f;
   --surface: #ffffff;
+  --surface-solid: #ffffff;
   --surface-rgb: 255, 255, 255;
   --surface-soft: #f8faf9;
   --surface-strong: #f0f4f2;
@@ -22,19 +28,27 @@
   --radius-lg: 26px;
   --radius-xl: 34px;
   --shadow-sm: 0 4px 12px rgba(6, 17, 13, 0.05);
+  --shadow-soft: 0 8px 24px rgba(6, 17, 13, 0.08);
   --shadow: 0 12px 34px rgba(6, 17, 13, 0.08);
+  --shadow-strong: 0 22px 58px rgba(6, 17, 13, 0.14);
   --shadow-lg: 0 24px 68px rgba(6, 17, 13, 0.12);
   --nav-height: 72px;
   --font-main: "Outfit", "Inter", system-ui, -apple-system, sans-serif;
 }
 
 [data-theme="dark"] {
+  --bg: #07120e;
+  --bg-elevated: #0b1b14;
   --surface-2: #16241e;
   --surface-3: #1f332a;
   --accent: #4adeb2;
   --accent-strong: #2dd4bf;
   --accent-soft: rgba(74, 222, 178, 0.15);
+  --accent-glow: rgba(45, 212, 191, 0.24);
+  --mint: #78f3c9;
+  --danger: #f87171;
   --surface: #0a110e;
+  --surface-solid: #0f1a15;
   --surface-rgb: 10, 17, 14;
   --surface-soft: #111d18;
   --surface-strong: #1a2a23;
@@ -44,7 +58,9 @@
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.14);
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.34);
   --shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+  --shadow-strong: 0 24px 62px rgba(0, 0, 0, 0.52);
   --shadow-lg: 0 24px 68px rgba(0, 0, 0, 0.45);
 }
 
@@ -680,10 +696,13 @@ svg {
 }
 
 .saved-session-delete {
-  width: 34px;
+  min-width: 34px;
   height: 34px;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
   flex: 0 0 auto;
   border: 1px solid rgba(217, 77, 63, 0.32);
   border-radius: 999px;
@@ -700,6 +719,13 @@ svg {
 .saved-session-delete span {
   pointer-events: none;
   transform: translateY(-1px);
+}
+
+.saved-session-delete-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  transform: none;
 }
 
 .saved-session-delete:hover {
@@ -1496,6 +1522,15 @@ dialog::backdrop {
 
   .session-list {
     grid-template-columns: 1fr;
+  }
+
+  .saved-session-delete {
+    min-width: 34px;
+    padding: 0 8px;
+  }
+
+  .saved-session-delete-label {
+    display: none;
   }
 
   .home-minimal-copy h1 {

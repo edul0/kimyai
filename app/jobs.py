@@ -1102,6 +1102,82 @@ Site gerado automaticamente pela Kemy para: {pedido}
         self._event(job, agente, msg, progresso)
         await self.supabase.insert_job(job.model_dump())
 
+    def _compact_file_entry(self, file_item: dict[str, Any], include_content: bool = False, content_limit: int = 0) -> dict[str, Any]:
+        payload = {
+            "name": file_item.get("name"),
+            "relative_path": file_item.get("relative_path"),
+            "path": file_item.get("path"),
+            "mime_type": file_item.get("mime_type"),
+            "download_url": file_item.get("download_url"),
+            "language": file_item.get("language"),
+        }
+        size_value = file_item.get("size_bytes")
+        if size_value is not None:
+            payload["size_bytes"] = size_value
+        if include_content and content_limit > 0:
+            content = str(file_item.get("content") or "")
+            if content:
+                payload["content"] = content[:content_limit]
+        return payload
+
+    def _compact_files(self, files: list[dict[str, Any]], include_content: bool = False, content_limit: int = 0) -> list[dict[str, Any]]:
+        compacted: list[dict[str, Any]] = []
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            compacted.append(self._compact_file_entry(item, include_content=include_content, content_limit=content_limit))
+        return compacted
+
+    def _display_answer_for_history(self, result: dict[str, Any]) -> str:
+        files = result.get("files") or []
+        summary = str(result.get("summary") or "").strip()
+        if files:
+            return summary or "Entrega concluida com arquivos prontos para preview/download."
+        raw = str(result.get("raw") or "").strip()
+        return raw or summary or "Concluido."
+
+    def _compact_result_metadata(self, result: dict[str, Any], mode: str | None = None) -> dict[str, Any]:
+        files = self._compact_files(result.get("files") or [])
+        metadata = {
+            "summary": result.get("summary"),
+            "document_title": result.get("document_title"),
+            "artifact_title": result.get("artifact_title"),
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "tools_used": list(result.get("tools_used") or []),
+            "preview_url": result.get("preview_url"),
+            "project_archive_url": result.get("project_archive_url"),
+            "image_url": result.get("image_url"),
+            "files": files,
+        }
+        if mode:
+            metadata["mode"] = mode
+        execution_plan = result.get("execution_plan")
+        if isinstance(execution_plan, dict):
+            metadata["execution_plan"] = {
+                "mode": execution_plan.get("mode"),
+                "intent": execution_plan.get("intent"),
+                "document_kind": execution_plan.get("document_kind"),
+            }
+        attachments_used = result.get("attachments_used")
+        if isinstance(attachments_used, list):
+            metadata["attachments_used"] = attachments_used[:8]
+        pipeline = result.get("pipeline")
+        if isinstance(pipeline, dict):
+            metadata["pipeline"] = {
+                "orchestrator_mode": pipeline.get("orchestrator_mode"),
+                "system": pipeline.get("system"),
+            }
+        return metadata
+
+    def _safe_image_data_url(self, value: Any, max_chars: int = 180_000) -> str:
+        data_url = str(value or "")
+        if not data_url.startswith("data:"):
+            return ""
+        if len(data_url) > max_chars:
+            return ""
+        return data_url
+
     def _append_history(
         self,
         session_id: str,
@@ -1111,7 +1187,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
     ) -> tuple[dict[str, Any], bool, dict[str, Any], dict[str, Any]]:
         key = f"session:{session_id}"
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": utcnow()})
-        answer = result.get("raw") or result.get("summary", "")
+        answer = self._display_answer_for_history(result)
         now = utcnow()
         history = data.setdefault("historico", [])
         previous_context = data.get("contexto_compacto") or {}
@@ -1139,6 +1215,8 @@ Site gerado automaticamente pela Kemy para: {pedido}
         if not data.get("title") or data.get("title") == "Nova conversa":
             data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
         site_snapshot = self._site_snapshot_from_result(result)
+        public_files = self._compact_files(result.get("files") or [])
+        result_metadata = self._compact_result_metadata(result, mode=mode)
         assistant_entry = {
             "ts": now,
             "role": "assistant",
@@ -1148,23 +1226,11 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "model": result.get("model"),
             "tools_used": result.get("tools_used", []),
             "image_url": result.get("image_url"),
-            "image_data_url": result.get("image_data_url"),
-            "files": result.get("files", []),
+            "image_data_url": self._safe_image_data_url(result.get("image_data_url")),
+            "files": public_files,
             "preview_url": result.get("preview_url"),
-            "result": {
-                "summary": result.get("summary"),
-                "image_url": result.get("image_url"),
-                "image_data_url": result.get("image_data_url"),
-                "provider": result.get("provider"),
-                "model": result.get("model"),
-                "files": result.get("files", []),
-                "document_title": result.get("document_title"),
-                "preview_url": result.get("preview_url"),
-            },
+            "result": result_metadata,
         }
-        if mode:
-            assistant_entry["mode"] = mode
-            assistant_entry["result"]["mode"] = mode
         if site_snapshot:
             assistant_entry["site_snapshot"] = site_snapshot
             assistant_entry["result"]["site_snapshot"] = site_snapshot
@@ -1234,8 +1300,15 @@ Site gerado automaticamente pela Kemy para: {pedido}
                     "context_snapshot": user_message.get("context_snapshot", {}),
                 },
             )
-        assistant_metadata = dict(result)
+        assistant_metadata = self._compact_result_metadata(result, mode=job.modo)
         assistant_metadata["context_snapshot"] = assistant_message.get("context_snapshot", {})
-        await self.supabase.insert_message(job.session_id, "assistant", result.get("raw") or result.get("summary", ""), assistant_metadata)
+        if assistant_message.get("site_snapshot"):
+            assistant_metadata["site_snapshot"] = assistant_message.get("site_snapshot")
+        await self.supabase.insert_message(
+            job.session_id,
+            "assistant",
+            self._display_answer_for_history(result),
+            assistant_metadata,
+        )
         for file_item in result.get("files") or []:
             await self.supabase.insert_generated_file(job.job_id, file_item)

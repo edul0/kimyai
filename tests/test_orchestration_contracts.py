@@ -58,6 +58,38 @@ class OrchestrationContractsTests(unittest.TestCase):
         self.assertIsNotNone(cached)
         self.assertEqual(cached["summary"], "cacheado")
 
+    def test_display_answer_prefers_summary_for_file_deliveries(self):
+        manager = JobManager(Storage(), Settings())
+        result = {
+            "summary": "Projeto entregue com preview.",
+            "raw": "<kemy_artifact title=\"Site\">...</kemy_artifact>",
+            "files": [{"name": "preview.html", "content": "<html></html>"}],
+        }
+        answer = manager._display_answer_for_history(result)
+        self.assertEqual(answer, "Projeto entregue com preview.")
+
+    def test_compact_result_metadata_removes_heavy_file_content(self):
+        manager = JobManager(Storage(), Settings())
+        result = {
+            "summary": "Entrega pronta",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "files": [
+                {
+                    "name": "preview.html",
+                    "relative_path": "preview.html",
+                    "mime_type": "text/html",
+                    "download_url": "/api/artefatos/job/preview.html",
+                    "language": "html",
+                    "content": "<!doctype html><html>...</html>",
+                }
+            ],
+        }
+        compact = manager._compact_result_metadata(result, mode="site")
+        self.assertEqual(compact["mode"], "site")
+        self.assertEqual(compact["files"][0]["name"], "preview.html")
+        self.assertNotIn("content", compact["files"][0])
+
 
 if __name__ == "__main__":
     unittest.main()
