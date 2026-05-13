@@ -19,6 +19,24 @@ class ComandoRequest(BaseModel):
     modo: Literal["coding", "site", "auditoria", "planejamento", "imagem", "documento"] = "coding"
 
 
+class VisionAnalyzeRequest(BaseModel):
+    image_base64: str = Field(..., min_length=32, max_length=12000000)
+    pergunta: str = Field(default="Analise esta tela e responda objetivamente.", min_length=3, max_length=1200)
+    session_id: str | None = None
+    contexto: str | None = Field(default=None, max_length=2000)
+    modo: Literal["planejamento", "coding", "site", "auditoria"] = "planejamento"
+
+
+class VisionAnalyzeResponse(BaseModel):
+    status: Literal["ok"]
+    provider: str
+    model: str
+    resposta: str
+    resumo: str
+    session_id: str | None = None
+    route_debug: dict[str, Any] = Field(default_factory=dict)
+
+
 class JobCreateResponse(BaseModel):
     status: str
     job_id: str

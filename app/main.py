@@ -18,7 +18,16 @@ from .agents import DEFAULT_AGENTS
 from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
 from .config import get_settings
 from .jobs import JobManager, utcnow
-from .schemas import ComandoRequest, JobCreateResponse, JobState, NovoAgente, SitePublishRequest, SitePublishResponse
+from .schemas import (
+    ComandoRequest,
+    JobCreateResponse,
+    JobState,
+    NovoAgente,
+    SitePublishRequest,
+    SitePublishResponse,
+    VisionAnalyzeRequest,
+    VisionAnalyzeResponse,
+)
 from .storage import Storage
 from .supabase_store import SupabaseStore
 from .github_service import GitHubService
@@ -378,6 +387,27 @@ async def _load_job(job_id: str) -> JobState | None:
 
 def _safe_artifact_name(path_value: str) -> str:
     return str(path_value or "").replace("\\", "/").strip().lstrip("/").replace("/", "__")
+
+
+def _decode_base64_image_payload(value: str) -> tuple[bytes, str]:
+    raw = str(value or "").strip()
+    mime_type = "image/png"
+    if raw.startswith("data:") and "," in raw:
+        header, encoded = raw.split(",", 1)
+        raw = encoded
+        if ";base64" in header:
+            mime_hint = header.replace("data:", "").split(";")[0].strip()
+            if mime_hint:
+                mime_type = mime_hint
+    try:
+        decoded = base64.b64decode(raw, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Imagem base64 invalida: {exc}") from exc
+    if not decoded:
+        raise HTTPException(status_code=400, detail="Imagem base64 vazia.")
+    if len(decoded) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagem excede 8MB.")
+    return decoded, mime_type
 
 
 def _is_textual_mime(mime_type: str) -> bool:
@@ -1386,6 +1416,60 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
         "job_id": job.job_id,
         "session_id": sid,
         "status_url": f"/api/jobs/{job.job_id}",
+    }
+
+
+@app.post("/api/vision/analyze", response_model=VisionAnalyzeResponse)
+async def vision_analyze(payload: VisionAnalyzeRequest, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    session_id = payload.session_id
+    if session_id:
+        data = await _load_session_for_owner(session_id, owner)
+        if not data:
+            raise HTTPException(404, "Sessao nao encontrada.")
+        if data.get("owner") and data.get("owner") != owner:
+            raise HTTPException(403, "Sessao de outro usuario.")
+
+    image_bytes, mime_type = _decode_base64_image_payload(payload.image_base64)
+    question = " ".join(str(payload.pergunta or "").split()).strip()
+    context = " ".join(str(payload.contexto or "").split()).strip()
+    if not question:
+        question = "Analise esta tela e responda objetivamente."
+    if context:
+        prompt = (
+            "Voce esta no modo de visao sob demanda da Kemy. "
+            "Responda de forma objetiva em portugues.\n\n"
+            f"Contexto adicional do usuario: {context}\n"
+            f"Pergunta principal: {question}"
+        )
+    else:
+        prompt = (
+            "Voce esta no modo de visao sob demanda da Kemy. "
+            "Responda de forma objetiva em portugues.\n\n"
+            f"Pergunta principal: {question}"
+        )
+
+    result = await jobs.router.generate(
+        prompt=prompt,
+        mode=payload.modo,
+        visual_items=[
+            {
+                "name": "screen-capture.png",
+                "mime_type": mime_type,
+                "data": image_bytes,
+            }
+        ],
+    )
+    raw = str(result.get("raw") or "").strip()
+    summary = str(result.get("summary") or raw[:320] or "Analise visual concluida.")
+    return {
+        "status": "ok",
+        "provider": str(result.get("provider") or "unknown"),
+        "model": str(result.get("model") or "unknown"),
+        "resposta": raw,
+        "resumo": summary,
+        "session_id": session_id,
+        "route_debug": result.get("route_debug") or {},
     }
 
 
