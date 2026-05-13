@@ -765,9 +765,62 @@ function inferModeFromHistory(history) {
   return "";
 }
 
+function isPreviewOnlyRequest(text = "") {
+  const lowered = String(text || "").toLowerCase().trim();
+  if (!lowered) return false;
+  const previewMarkers = [
+    "ver o preview",
+    "abrir preview",
+    "mostrar preview",
+    "live preview",
+    "deixa eu ver o preview",
+    "quero ver o preview",
+    "mostra o preview",
+  ];
+  const creationMarkers = ["crie", "gera", "gere", "mude", "altere", "adicione", "implemente", "refatore", "arrume", "corrija"];
+  const hasPreviewMarker = previewMarkers.some((marker) => lowered.includes(marker));
+  if (!hasPreviewMarker) return false;
+  if (creationMarkers.some((marker) => lowered.includes(marker))) return false;
+  return true;
+}
+
+function extractInlinePreviewFromWorkspace(snapshot) {
+  const files = snapshot?.files || [];
+  const htmlFile = files.find((file) => String(file.path || "").toLowerCase().endsWith(".html") && String(file.content || "").trim());
+  if (!htmlFile) return "";
+  return normalizePreviewHtml(String(htmlFile.content || ""));
+}
+
+async function tryOpenExistingPreview() {
+  if (!$("previewPanel").classList.contains("hidden")) {
+    const frame = $("previewFrame");
+    if (frame?.srcdoc || frame?.src) return true;
+  }
+  const snapshot = await refreshWorkspaceStudio().catch(() => null);
+  if (!snapshot || !snapshot.ready) return false;
+  if (snapshot.preview_url) {
+    showPreviewUrl(snapshot.preview_url);
+    return true;
+  }
+  const inline = extractInlinePreviewFromWorkspace(snapshot);
+  if (inline) {
+    showPreview(inline);
+    return true;
+  }
+  return false;
+}
+
 async function runAgents(prompt, source = "chat", options = {}) {
   const text = (prompt || "").trim();
   if (!text) return;
+  if (!options.forcedMode && isPreviewOnlyRequest(text)) {
+    const opened = await tryOpenExistingPreview();
+    if (opened) {
+      showChat();
+      appendMessage("assistant", "Preview atual aberto no painel lateral.");
+      return;
+    }
+  }
   const displayText = (options.displayText || text).trim();
   const forcedMode = options.forcedMode || "";
   const keepAttachments = Boolean(options.keepAttachments);
@@ -1042,15 +1095,29 @@ function appendResult(result, fallbackText) {
 }
 
 function extractImageSource(result) {
-  return result?.image_data_url || result?.result?.image_data_url || extractImageUrl(result);
+  const directDataUrl = String(result?.image_data_url || result?.result?.image_data_url || "").trim();
+  if (isLikelyImageSource(directDataUrl)) return directDataUrl;
+  const directUrl = extractImageUrl(result);
+  return isLikelyImageSource(directUrl) ? directUrl : "";
 }
 
 function extractImageUrl(result) {
   const direct = result?.image_url || result?.result?.image_url;
-  if (direct) return direct;
+  if (direct) return String(direct).trim();
   const text = [result?.raw, result?.summary, result?.content].filter(Boolean).join("\n");
   const match = text.match(/https?:\/\/\S+/i);
   return match ? match[0].replace(/[)\],.]+$/, "") : "";
+}
+
+function isLikelyImageSource(value = "") {
+  const source = String(value || "").trim();
+  if (!source) return false;
+  if (source.startsWith("data:image/")) return true;
+  if (!/^https?:\/\//i.test(source)) return false;
+  const lowered = source.toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(lowered)) return true;
+  if (lowered.includes("pollinations") || lowered.includes("/image/") || lowered.includes("images.")) return true;
+  return false;
 }
 
 function prioritizeFiles(files) {

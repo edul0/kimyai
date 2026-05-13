@@ -49,6 +49,14 @@ SITE_MARKERS = [
     "saas",
     "crud",
 ]
+PREVIEW_MARKERS = [
+    "preview",
+    "live preview",
+    "ver o preview",
+    "abrir preview",
+    "mostrar preview",
+    "deixa eu ver o preview",
+]
 REPO_MARKERS = [
     "git",
     "github",
@@ -248,6 +256,11 @@ def classify_request_mode(message: str, current_mode: str = "coding", session_da
     explicit = _explicit_mode_from_text(text)
     if explicit:
         return explicit
+    if _has_any(text, PREVIEW_MARKERS):
+        previous = _previous_mode(session_data)
+        if previous in {"site", "coding"}:
+            return previous
+        return "site"
     linked_repo = str((session_data or {}).get("last_github_repo") or "").strip()
     repo_bound_maintenance = bool(linked_repo) and _has_any(text, MAINTENANCE_MARKERS) and (
         _has_any(text, CODE_MARKERS + SITE_MARKERS) or len(text.split()) <= 20
@@ -298,6 +311,8 @@ def _docx_plan() -> ExecutionPlan:
 
 
 def _explicit_mode_from_text(text: str) -> str | None:
+    if _has_any(text, PREVIEW_MARKERS):
+        return "site"
     if _has_any(text, IMAGE_MARKERS):
         return "imagem"
     if _has_any(text, SLIDE_MARKERS):
