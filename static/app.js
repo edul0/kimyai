@@ -14,7 +14,26 @@ const state = {
   workspaceFiles: [],
   workspaceSelectedPath: "",
   workspacePoll: null,
+  workspaceEditMode: false,
+  workspaceEditingPath: "",
+  activeJobId: null,
+  running: false,
+  unauthorizedNotified: false,
+  canceledJobsNotified: new Set(),
 };
+
+const REASONING_PATTERNS = [
+  /raciocinio tecnico/i,
+  /lapidando o pedido/i,
+  /plano definido/i,
+  /consultando ferramentas/i,
+  /orquestrador ativo/i,
+  /revisando resposta/i,
+  /montando arquivos/i,
+  /pedido visual detectado/i,
+  /corrigir codigo existente/i,
+  /usar workspace/i,
+];
 
 const $ = (id) => document.getElementById(id);
 const on = (id, event, handler) => {
@@ -66,9 +85,91 @@ function clearPersistedSessionId(user = state.currentUser) {
   state.sessionId = null;
 }
 
+function setRunningState(running, jobId = null) {
+  state.running = Boolean(running);
+  state.activeJobId = running ? jobId : null;
+  if ($("runBtn")) $("runBtn").disabled = state.running;
+  if ($("homeRunBtn")) $("homeRunBtn").disabled = state.running;
+  if ($("previewApplyBtn")) $("previewApplyBtn").disabled = state.running;
+  if ($("workspaceApplyBtn")) $("workspaceApplyBtn").disabled = state.running;
+  const cancelBtn = $("cancelRunBtn");
+  if (cancelBtn) {
+    cancelBtn.classList.toggle("hidden", !state.running);
+    cancelBtn.disabled = !state.running;
+  }
+}
+
+function finishActiveJobUI() {
+  clearInterval(state.poll);
+  state.poll = null;
+  setRunningState(false, null);
+}
+
+function resetReasoningTrace(message = "Aguardando proxima execucao.", badge = "Aguardando") {
+  const trace = $("reasoningTrace");
+  const badgeNode = $("reasoningBadge");
+  if (badgeNode) badgeNode.textContent = badge;
+  if (!trace) return;
+  trace.innerHTML = `<li><p>${escapeHtml(message)}</p></li>`;
+}
+
+function isReasoningEvent(message = "") {
+  const source = String(message || "");
+  return REASONING_PATTERNS.some((pattern) => pattern.test(source));
+}
+
+function renderReasoningTrace(job) {
+  const trace = $("reasoningTrace");
+  const badgeNode = $("reasoningBadge");
+  if (!trace || !badgeNode) return;
+
+  const status = String(job?.status || "aguardando");
+  const badgeMap = {
+    queued: "Na fila",
+    running: "Raciocinando",
+    done: "Concluido",
+    error: "Com erro",
+    canceled: "Cancelado",
+  };
+  badgeNode.textContent = badgeMap[status] || status;
+
+  const events = Array.isArray(job?.eventos) ? job.eventos : [];
+  const selected = events.filter((event) => isReasoningEvent(event?.msg || ""));
+  const rows = (selected.length ? selected : events).slice(-7);
+  if (!rows.length) {
+    resetReasoningTrace("Sem eventos tecnicos ainda.", badgeNode.textContent);
+    return;
+  }
+  trace.innerHTML = rows
+    .map((event) => {
+      const agent = escapeHtml(String(event?.agente || "Kemy"));
+      const cleaned = String(event?.msg || "").replace(/^Raciocinio tecnico:\s*/i, "");
+      return `<li><p><strong>${agent}</strong> ${escapeHtml(cleaned)}</p></li>`;
+    })
+    .join("");
+}
+
+async function handleUnauthorizedState(detail = "Sessao expirada. Faca login novamente.") {
+  finishActiveJobUI();
+  resetReasoningTrace("Sessao expirada. Faça login para continuar.", "Sessao");
+  if (!state.unauthorizedNotified) {
+    state.unauthorizedNotified = true;
+    if (!$("chatView").classList.contains("hidden")) {
+      appendMessage("assistant", `**Sessao expirada:** ${detail}`);
+    }
+  }
+  clearPersistedSessionId();
+  try {
+    await checkAuth();
+  } catch {
+    $("loginView").classList.remove("hidden");
+    $("appView").classList.add("hidden");
+  }
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    credentials: "same-origin",
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
@@ -79,6 +180,10 @@ async function api(path, options = {}) {
       message = payload.detail || payload.message || message;
     } catch {
       message = await response.text();
+    }
+    if (response.status === 401 && !String(path || "").startsWith("/api/auth/")) {
+      await handleUnauthorizedState(message || "Nao autenticado.");
+      throw new Error("Sessao expirada. Faca login novamente.");
     }
     throw new Error(message);
   }
@@ -157,6 +262,7 @@ function setPreviewTab(tab) {
   $("workspacePanel").classList.toggle("hidden", !isCode);
   $("previewTabLive").classList.toggle("preview-tab-active", !isCode);
   $("previewTabCode").classList.toggle("preview-tab-active", isCode);
+  $("previewQuickEditBtn").classList.toggle("hidden", isCode);
   if (isCode) {
     refreshWorkspaceStudio().catch(console.error);
     startWorkspacePolling();
@@ -178,6 +284,7 @@ function setAuthMode(mode) {
 async function checkAuth() {
   const data = await api("/api/auth/me");
   state.currentUser = data.user || null;
+  state.unauthorizedNotified = false;
   $("loginView").classList.toggle("hidden", data.authenticated);
   $("appView").classList.toggle("hidden", !data.authenticated);
   if (data.authenticated) {
@@ -274,11 +381,18 @@ function clearWorkspaceStudio() {
   state.workspaceSnapshot = null;
   state.workspaceFiles = [];
   state.workspaceSelectedPath = "";
+  state.workspaceEditMode = false;
+  state.workspaceEditingPath = "";
   $("workspaceTitle").textContent = "Coding Studio";
   $("workspaceMeta").textContent = "Aguardando arquivos do projeto...";
   $("workspaceFiles").innerHTML = "";
   $("workspaceCurrentFile").textContent = "Selecione um arquivo";
   $("workspaceCode").innerHTML = "<code>// O código aparecerá aqui em tempo real.</code>";
+  $("workspaceCode").classList.remove("hidden");
+  $("workspaceCodeEditor").classList.add("hidden");
+  $("workspaceCodeEditor").value = "";
+  $("workspaceCodeEditorActions").classList.add("hidden");
+  $("workspaceStartEditBtn").classList.add("hidden");
   $("workspaceDownloadFile").classList.add("hidden");
   $("workspaceDownloadFile").removeAttribute("href");
 }
@@ -333,6 +447,112 @@ function pickWorkspaceFile(files) {
   return withContent[0] || files.sort((a, b) => workspaceFileRank(a) - workspaceFileRank(b))[0];
 }
 
+function getSelectedWorkspaceFile() {
+  return state.workspaceFiles.find((file) => file.path === state.workspaceSelectedPath) || null;
+}
+
+function updateWorkspaceEditButton(file) {
+  const button = $("workspaceStartEditBtn");
+  const quickButton = $("previewQuickEditBtn");
+  if (!button) {
+    if (quickButton) quickButton.disabled = true;
+    return;
+  }
+  const canEdit = Boolean(file && (file.content || file.download_url) && !state.workspaceEditMode);
+  button.classList.toggle("hidden", !canEdit);
+  if (quickButton) quickButton.disabled = !Boolean(file && (file.content || file.download_url));
+}
+
+function setWorkspaceEditMode(enabled, file = null, content = "") {
+  state.workspaceEditMode = Boolean(enabled);
+  state.workspaceEditingPath = enabled ? String(file?.path || "") : "";
+  const codeView = $("workspaceCode");
+  const editor = $("workspaceCodeEditor");
+  const actions = $("workspaceCodeEditorActions");
+  const startBtn = $("workspaceStartEditBtn");
+  if (!codeView || !editor || !actions || !startBtn) return;
+
+  codeView.classList.toggle("hidden", state.workspaceEditMode);
+  editor.classList.toggle("hidden", !state.workspaceEditMode);
+  actions.classList.toggle("hidden", !state.workspaceEditMode);
+  startBtn.classList.toggle("hidden", state.workspaceEditMode || !file);
+  if (state.workspaceEditMode) {
+    editor.value = String(content || "");
+    editor.focus();
+  }
+}
+
+async function startWorkspaceFileEdit() {
+  const current = getSelectedWorkspaceFile();
+  if (!current) {
+    appendMessage("assistant", "Selecione um arquivo no Coding Studio antes de editar.");
+    return;
+  }
+  let content = String(current.content || "");
+  if (!content && current.download_url) {
+    try {
+      const resp = await fetch(current.download_url, { credentials: "include" });
+      if (resp.ok) {
+        content = await resp.text();
+        current.content = content;
+      }
+    } catch {
+      content = "";
+    }
+  }
+  setWorkspaceEditMode(true, current, content);
+}
+
+function cancelWorkspaceFileEdit() {
+  const current = getSelectedWorkspaceFile();
+  setWorkspaceEditMode(false, null, "");
+  updateWorkspaceEditButton(current);
+}
+
+async function applyWorkspaceCodeEdit() {
+  const editor = $("workspaceCodeEditor");
+  const applyBtn = $("workspaceApplyCodeBtn");
+  if (!editor || !state.workspaceEditingPath) {
+    appendMessage("assistant", "Nenhum arquivo em edicao no momento.");
+    return;
+  }
+  const editedCode = String(editor.value || "");
+  if (!editedCode.trim()) {
+    appendMessage("assistant", "O codigo editado esta vazio. Ajuste antes de aplicar.");
+    return;
+  }
+  const filePath = state.workspaceEditingPath;
+  const file = getSelectedWorkspaceFile();
+  const language = String(file?.language || inferLanguage(filePath) || "text");
+  const modeHint = (state.workspaceSnapshot?.mode === "site" || state.lastResultMode === "site") ? "site" : "coding";
+  const scopedPrompt = [
+    "No workspace ativo desta conversa, aplique uma edicao direta de arquivo.",
+    `Arquivo alvo: ${filePath}`,
+    "Acao obrigatoria: substituir integralmente este arquivo pelo conteudo abaixo, preservando os demais arquivos do projeto.",
+    "Nao mude o tipo de entrega e nao gere template novo.",
+    `\`\`\`${language}`,
+    editedCode,
+    "```",
+  ].join("\n");
+
+  if (applyBtn) applyBtn.disabled = true;
+  try {
+    await runAgents(scopedPrompt, "chat", {
+      forcedMode: modeHint,
+      displayText: `Editar codigo: ${filePath}`,
+      keepPromptInput: true,
+      keepAttachments: false,
+    });
+    if (file) file.content = editedCode;
+    setWorkspaceEditMode(false, null, "");
+    updateWorkspaceEditButton(getSelectedWorkspaceFile());
+    setPreviewTab("code");
+    await refreshWorkspaceStudio();
+  } finally {
+    if (applyBtn) applyBtn.disabled = false;
+  }
+}
+
 function renderWorkspaceFiles(files) {
   const container = $("workspaceFiles");
   if (!files.length) {
@@ -358,12 +578,15 @@ function renderWorkspaceFiles(files) {
 async function selectWorkspaceFile(path) {
   const current = state.workspaceFiles.find((file) => file.path === path);
   if (!current) return;
+  if (state.workspaceEditMode && state.workspaceEditingPath && state.workspaceEditingPath !== path) {
+    cancelWorkspaceFileEdit();
+  }
   state.workspaceSelectedPath = path;
   renderWorkspaceFiles(state.workspaceFiles);
   let content = String(current.content || "");
   if (!content && current.download_url && String(current.mime_type || "").toLowerCase().startsWith("text/")) {
     try {
-      const resp = await fetch(current.download_url, { credentials: "same-origin" });
+      const resp = await fetch(current.download_url, { credentials: "include" });
       if (resp.ok) {
         content = await resp.text();
         current.content = content;
@@ -381,7 +604,17 @@ async function selectWorkspaceFile(path) {
     $("workspaceDownloadFile").classList.add("hidden");
     $("workspaceDownloadFile").removeAttribute("href");
   }
+  if (state.workspaceEditMode && state.workspaceEditingPath === current.path) {
+    updateWorkspaceEditButton(current);
+    return;
+  }
+  $("workspaceCode").classList.remove("hidden");
+  $("workspaceCodeEditor").classList.add("hidden");
+  $("workspaceCodeEditorActions").classList.add("hidden");
+  state.workspaceEditMode = false;
+  state.workspaceEditingPath = "";
   $("workspaceCode").innerHTML = `<code>${escapeHtml(content || "// Arquivo sem conteúdo textual disponível neste momento.")}</code>`;
+  updateWorkspaceEditButton(current);
 }
 
 function renderWorkspaceStudio(snapshot) {
@@ -399,6 +632,13 @@ function renderWorkspaceStudio(snapshot) {
   $("workspaceMeta").textContent = `${mode} | ${count} arquivo(s)${contextSummary}`.trim();
   if (!files.length) {
     state.workspaceSelectedPath = "";
+    state.workspaceEditMode = false;
+    state.workspaceEditingPath = "";
+    $("workspaceCode").classList.remove("hidden");
+    $("workspaceCodeEditor").classList.add("hidden");
+    $("workspaceCodeEditor").value = "";
+    $("workspaceCodeEditorActions").classList.add("hidden");
+    $("workspaceStartEditBtn").classList.add("hidden");
     renderWorkspaceFiles([]);
     $("workspaceCurrentFile").textContent = "Selecione um arquivo";
     $("workspaceCode").innerHTML = "<code>// Ainda não há código disponível para esta tarefa.</code>";
@@ -419,6 +659,16 @@ function renderWorkspaceStudio(snapshot) {
     $("workspaceDownloadFile").removeAttribute("href");
   }
   $("workspaceCode").innerHTML = `<code>${escapeHtml(String(selected.content || "// Arquivo sem conteúdo textual disponível neste momento."))}</code>`;
+  if (state.workspaceEditMode && state.workspaceEditingPath === selected.path) {
+    updateWorkspaceEditButton(selected);
+    return;
+  }
+  $("workspaceCode").classList.remove("hidden");
+  $("workspaceCodeEditor").classList.add("hidden");
+  $("workspaceCodeEditorActions").classList.add("hidden");
+  state.workspaceEditMode = false;
+  state.workspaceEditingPath = "";
+  updateWorkspaceEditButton(selected);
 }
 
 async function refreshWorkspaceStudio() {
@@ -570,13 +820,22 @@ async function deleteSession(sessionId) {
 function resetProgress(message) {
   $("jobBadge").textContent = "Status: Aguardando";
   $("timeline").innerHTML = `<li><p>${escapeHtml(message)}</p></li>`;
+  resetReasoningTrace("Aguardando nova solicitacao.");
 }
 
 function renderJob(job) {
   $("jobBadge").textContent = `Status: ${job.status} (${job.progresso}%)`;
-  $("timeline").innerHTML = (job.eventos || [])
+  const events = Array.isArray(job.eventos) ? job.eventos : [];
+  $("timeline").innerHTML = events
+    .slice(-8)
     .map((event) => `<li><p><strong style="color: var(--ink-strong);">${escapeHtml(event.agente)}</strong>: ${escapeHtml(event.msg)}</p></li>`)
     .join("");
+  renderReasoningTrace(job);
+
+  if (job.status === "canceled" && !state.canceledJobsNotified.has(job.job_id)) {
+    state.canceledJobsNotified.add(job.job_id);
+    appendMessage("assistant", "Execucao cancelada. Quando quiser, me envie um novo comando que continuo daqui.");
+  }
 
   if (job.resultado && job.status === "done" && !state.renderedJobs.has(job.job_id)) {
     state.lastOutput = formatResult(job.resultado);
@@ -619,7 +878,7 @@ function renderJob(job) {
         .catch(() => {});
     }
   }
-  if (job.erro) {
+  if (job.erro && job.status !== "canceled") {
     appendMessage("assistant", `**Erro na execução:** ${job.erro}`);
   }
 }
@@ -650,23 +909,21 @@ async function pollJob(jobId) {
     const job = await api(`/api/jobs/${jobId}`);
     pollErrorCount = 0;
     renderJob(job);
-    if (["done", "error"].includes(job.status)) {
-      clearInterval(state.poll);
-      state.poll = null;
-      $("runBtn").disabled = false;
-      $("homeRunBtn").disabled = false;
+    if (["done", "error", "canceled"].includes(job.status)) {
+      finishActiveJobUI();
       await loadSessions();
       return true;
     }
     return false;
   } catch (err) {
+    if (/sessao expirada|nao autenticado/i.test(String(err?.message || "").toLowerCase())) {
+      finishActiveJobUI();
+      return true;
+    }
     pollErrorCount++;
     console.error("Erro na sondagem do job:", err);
     if (pollErrorCount >= 5) {
-      clearInterval(state.poll);
-      state.poll = null;
-      $("runBtn").disabled = false;
-      $("homeRunBtn").disabled = false;
+      finishActiveJobUI();
       appendMessage("assistant", "**Erro de Conexão:** Falha persistente ao se comunicar com o servidor. Por favor, recarregue a página e tente novamente.");
       return true;
     }
@@ -826,8 +1083,7 @@ async function runAgents(prompt, source = "chat", options = {}) {
   const keepAttachments = Boolean(options.keepAttachments);
   await ensureSession({ forceNewSession: source === "home" });
   showChat();
-  $("runBtn").disabled = true;
-  $("homeRunBtn").disabled = true;
+  setRunningState(true, null);
   appendMessage("user", displayText);
   const attachments = [...state.attachments];
   if (!options.keepPromptInput) {
@@ -838,6 +1094,7 @@ async function runAgents(prompt, source = "chat", options = {}) {
   $("sessionTitle").textContent = titleFromPrompt(text);
   $("jobBadge").textContent = "Processando...";
   $("timeline").innerHTML = `<li><p>Processando arquitetura da resposta e acionando agentes...</p></li>`;
+  resetReasoningTrace("Preparando trilha tecnica em tempo real...", "Inicializando");
 
   let data;
   const intentMode = resolveRequestedMode(text);
@@ -858,6 +1115,7 @@ async function runAgents(prompt, source = "chat", options = {}) {
     });
   }
   persistSessionId(data.session_id);
+  setRunningState(true, data.job_id);
   const done = await pollJob(data.job_id);
   clearInterval(state.poll);
   if (!done) state.poll = setInterval(() => pollJob(data.job_id).catch(console.error), 900);
@@ -908,6 +1166,26 @@ async function applyWorkspaceEdit() {
     await refreshWorkspaceStudio();
   } finally {
     $("workspaceApplyBtn").disabled = false;
+  }
+}
+
+async function cancelActiveJob() {
+  if (!state.activeJobId) {
+    appendMessage("assistant", "Nao existe execucao ativa para cancelar.");
+    return;
+  }
+  const jobId = state.activeJobId;
+  $("cancelRunBtn").disabled = true;
+  $("jobBadge").textContent = "Status: cancelando...";
+  try {
+    await api(`/api/jobs/${jobId}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+    appendMessage("assistant", "Cancelamento solicitado. Vou interromper esta execucao.");
+  } catch (error) {
+    appendMessage("assistant", `Nao consegui cancelar agora: ${error.message}`);
+    $("cancelRunBtn").disabled = false;
   }
 }
 
@@ -1264,13 +1542,13 @@ function setPromptAndMaybeRun(text, run = false) {
 }
 
 function showRunError(error) {
-  $("runBtn").disabled = false;
-  $("homeRunBtn").disabled = false;
+  finishActiveJobUI();
   appendMessage("assistant", `**Falha do Sistema:** ${error.message}`);
 }
 
 function extractPreviewHtml(result, fallbackText = "") {
   if (!hasPreviewSignal(result, fallbackText)) return "";
+  const modeHint = resultModeHint(result);
   let fromPreview = "";
   let fromFile = "";
   let fromFence = "";
@@ -1308,7 +1586,7 @@ function extractPreviewHtml(result, fallbackText = "") {
     }
   }
 
-  if (previewSignalFound && (fromPreview || fromFile || fromArtifact || fromFence)) {
+  if (previewSignalFound && (fromPreview || fromFile || fromArtifact || fromFence) && modeHint === "site") {
     return buildEmergencyPreviewHtml(result, fallbackText);
   }
   return "";
@@ -1520,6 +1798,7 @@ on("chatForm", "submit", (event) => {
   runAgents($("prompt").value, "chat").catch(showRunError);
 });
 on("homeRunBtn", "click", () => runAgents($("homePrompt").value, "home").catch(showRunError));
+on("cancelRunBtn", "click", () => cancelActiveJob().catch(showRunError));
 on("openSessionsBtn", "click", async () => {
   await loadSessions();
   if (state.sessions[0]?.session_id) {
@@ -1537,7 +1816,14 @@ on("closePreviewBtn", "click", hidePreview);
 on("previewFullscreenBtn", "click", togglePreviewFullscreen);
 on("previewTabLive", "click", () => setPreviewTab("live"));
 on("previewTabCode", "click", () => setPreviewTab("code"));
+on("previewQuickEditBtn", "click", async () => {
+  setPreviewTab("code");
+  await startWorkspaceFileEdit().catch(showRunError);
+});
 on("workspaceRefreshBtn", "click", () => refreshWorkspaceStudio().catch(showRunError));
+on("workspaceStartEditBtn", "click", () => startWorkspaceFileEdit().catch(showRunError));
+on("workspaceCancelEditBtn", "click", cancelWorkspaceFileEdit);
+on("workspaceApplyCodeBtn", "click", () => applyWorkspaceCodeEdit().catch(showRunError));
 on("previewEditForm", "submit", (event) => {
   event.preventDefault();
   applyPreviewEdit().catch(showRunError);
@@ -1578,6 +1864,17 @@ on("workspacePrompt", "keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     applyWorkspaceEdit().catch(showRunError);
+  }
+});
+
+on("workspaceCodeEditor", "keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    applyWorkspaceCodeEdit().catch(showRunError);
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelWorkspaceFileEdit();
   }
 });
 

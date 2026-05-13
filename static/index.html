@@ -155,6 +155,16 @@
             </ol>
           </section>
 
+          <section class="reasoning-stream" aria-label="Linha tecnica em tempo real">
+            <div class="reasoning-head">
+              <strong>Linha tecnica em tempo real</strong>
+              <span id="reasoningBadge">Aguardando</span>
+            </div>
+            <ol id="reasoningTrace" class="reasoning-trace">
+              <li><p>A trilha de execucao vai aparecer aqui durante a geracao.</p></li>
+            </ol>
+          </section>
+
           <div id="chatLog" class="messages" aria-live="polite"></div>
 
           <form id="chatForm" class="chat-composer">
@@ -167,6 +177,7 @@
                 <button id="plusBtn" class="secondary-btn" type="button" title="Adicionar contexto">Contexto</button>
                 <button id="voiceBtn" class="secondary-btn" type="button" title="Ditar comando">Voz</button>
               </div>
+              <button id="cancelRunBtn" class="secondary-btn hidden" type="button" aria-label="Cancelar execução">Cancelar</button>
               <button id="runBtn" type="submit" aria-label="Enviar">Enviar</button>
             </div>
           </form>
@@ -178,6 +189,7 @@
             <div class="preview-head-actions">
               <button id="previewTabLive" class="secondary-btn" type="button" title="Visualização do projeto">Preview</button>
               <button id="previewTabCode" class="secondary-btn" type="button" title="Arquivos e código em tempo real">Coding Studio</button>
+              <button id="previewQuickEditBtn" class="secondary-btn" type="button" title="Editar o arquivo selecionado no Coding Studio">Editar codigo</button>
               <button id="previewFullscreenBtn" class="secondary-btn" type="button" title="Tela cheia do preview">Tela cheia</button>
               <button id="closePreviewBtn" class="secondary-btn" type="button">Fechar</button>
             </div>
@@ -196,9 +208,17 @@
               <article class="workspace-code">
                 <div class="workspace-code-head">
                   <span id="workspaceCurrentFile">Selecione um arquivo</span>
-                  <a id="workspaceDownloadFile" class="secondary-btn compact-btn hidden" target="_blank" rel="noreferrer">Baixar arquivo</a>
+                  <div class="workspace-code-actions-head">
+                    <button id="workspaceStartEditBtn" class="secondary-btn compact-btn hidden" type="button">Editar arquivo</button>
+                    <a id="workspaceDownloadFile" class="secondary-btn compact-btn hidden" target="_blank" rel="noreferrer">Baixar arquivo</a>
+                  </div>
                 </div>
                 <pre id="workspaceCode"><code>// O código aparecerá aqui em tempo real.</code></pre>
+                <textarea id="workspaceCodeEditor" class="workspace-code-editor hidden" spellcheck="false" placeholder="// Edite o codigo aqui e clique em Aplicar edicao."></textarea>
+                <div id="workspaceCodeEditorActions" class="workspace-code-editor-actions hidden">
+                  <button id="workspaceCancelEditBtn" class="secondary-btn compact-btn" type="button">Cancelar edicao</button>
+                  <button id="workspaceApplyCodeBtn" class="compact-btn" type="button">Aplicar edicao no workspace</button>
+                </div>
               </article>
             </div>
             <form id="workspaceEditForm" class="workspace-edit-bar">

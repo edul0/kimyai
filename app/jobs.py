@@ -33,6 +33,10 @@ def utcnow() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
+class JobCanceledError(Exception):
+    """Raised when a user requested job cancellation."""
+
+
 class JobManager:
     def __init__(self, storage: Storage, settings: Settings):
         self.storage = storage
@@ -119,6 +123,49 @@ class JobManager:
         data = self.storage.get_json(f"job:{job_id}")
         return JobState(**data) if data else None
 
+    def _cancel_key(self, job_id: str) -> str:
+        return f"job_cancel:{job_id}"
+
+    def _is_cancel_requested(self, job_id: str) -> bool:
+        flag = self.storage.get_json(self._cancel_key(job_id), {})
+        return bool(flag and flag.get("requested"))
+
+    def cancel(self, job_id: str, requested_by: str = "user") -> JobState | None:
+        job = self.get(job_id)
+        if not job:
+            return None
+        if job.status in {"done", "error", "canceled"}:
+            return job
+        self.storage.set_json(
+            self._cancel_key(job_id),
+            {
+                "requested": True,
+                "requested_by": requested_by,
+                "requested_at": utcnow(),
+            },
+            ttl=self.settings.job_ttl_seconds,
+        )
+        cancel_msg = "Execucao cancelada pelo usuario."
+        if not any(str(event.get("msg") or "").lower() == cancel_msg.lower() for event in job.eventos):
+            job.eventos.append(
+                {
+                    "ts": utcnow(),
+                    "agente": "Kemy",
+                    "msg": cancel_msg,
+                    "progresso": min(max(job.progresso, 1), 98),
+                }
+            )
+        job.status = "canceled"
+        job.etapa = "Cancelado pelo usuario"
+        job.erro = cancel_msg
+        job.updated_at = utcnow()
+        self.save(job)
+        return job
+
+    def _raise_if_canceled(self, job: JobState) -> None:
+        if self._is_cancel_requested(job.job_id):
+            raise JobCanceledError("Execucao cancelada pelo usuario.")
+
     def list_recent(self) -> list[dict[str, Any]]:
         jobs = []
         for key in self.storage.keys("job:"):
@@ -132,12 +179,14 @@ class JobManager:
         if not job:
             return
         try:
+            self._raise_if_canceled(job)
             session_data = self.storage.get_json(f"session:{job.session_id}", {})
             effective_mode = self._resolve_mode(job.pedido, job.modo, session_data)
             if effective_mode != job.modo:
                 job.modo = effective_mode
                 self.save(job)
             await self._event_async(job, "Kemy", "Lendo a conversa e o contexto.", 15)
+            self._raise_if_canceled(job)
             await asyncio.sleep(0)
             history = session_data.get("historico", [])
             memory = session_data.get("memoria", [])
@@ -146,10 +195,16 @@ class JobManager:
             if execution_plan.mode != job.modo:
                 job.modo = execution_plan.mode
                 self.save(job)
+            reasoning_trace = self._build_reasoning_trace(job.pedido, job.modo)
+            if reasoning_trace:
+                await self._event_async(job, "Kemy", f"Raciocinio tecnico: {reasoning_trace}", 20)
+                self._raise_if_canceled(job)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
 
             await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
+            self._raise_if_canceled(job)
             refined_prompt = await self._refine_prompt(job, history, compact_context, execution_plan.as_prompt())
+            self._raise_if_canceled(job)
 
             await self._event_async(job, "Kemy", f"Plano definido: {execution_plan.stack}.", 30)
             prompt = build_coding_prompt(
@@ -207,7 +262,9 @@ class JobManager:
 
             if job.modo == "imagem":
                 await self._event_async(job, "Kemy", "Pedido visual detectado. Vou gerar a imagem na rota apropriada.", 48)
+                self._raise_if_canceled(job)
                 result = await self.pollinations.generate(job.pedido)
+                self._raise_if_canceled(job)
                 result["tools_used"] = ["pollinations"]
                 result["execution_plan"] = execution_plan_data
                 await self._finish_job(job, result)
@@ -215,6 +272,7 @@ class JobManager:
 
             if job.modo == "documento":
                 await self._event_async(job, "Kemy", "Orquestrador ativo. Passando o trabalho para o sistema de documentos.", 45)
+                self._raise_if_canceled(job)
                 if cached_response:
                     await self._event_async(job, "Kemy", "Rascunho reutilizado do contexto para acelerar a entrega.", 56)
                     draft = cached_response
@@ -227,8 +285,11 @@ class JobManager:
                         visual_items=attachment_context["visual_items"],
                     )
                     self._set_cached_response(cache_key, draft)
+                self._raise_if_canceled(job)
                 await self._event_async(job, "Kemy", "Montando arquivos finais do documento.", 72)
+                self._raise_if_canceled(job)
                 result = self.documents.generate(job.session_id, job.job_id, job.pedido, draft, plan=execution_plan_data)
+                self._raise_if_canceled(job)
                 result["tools_used"] = list(
                     dict.fromkeys((draft.get("tools_used") or []) + (result.get("tools_used") or []) + ["python-docx", "reportlab"])
                 )
@@ -249,22 +310,28 @@ class JobManager:
                 result["cache"] = {"hit": True}
             else:
                 await self._event_async(job, "Kemy", "Consultando ferramentas quando necessario.", 42)
+                self._raise_if_canceled(job)
                 tool_context = await self.tools.enrich(job.pedido, job.modo)
+                self._raise_if_canceled(job)
                 if tool_context.get("context"):
                     prompt = f"{prompt}\n\n[CONTEXTO DE FERRAMENTAS]\n{tool_context['context']}"
 
                 await self._event_async(job, "Kemy", "Orquestrador ativo. Escolhendo o melhor motor gratuito.", 55)
+                self._raise_if_canceled(job)
                 result = await self.router.generate(
                     prompt,
                     job.modo,
                     attachments=attachment_context["items"],
                     visual_items=attachment_context["visual_items"],
                 )
+                self._raise_if_canceled(job)
                 result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
+                self._raise_if_canceled(job)
                 if job.modo == "site":
                     result = self._ensure_site_artifact(job, result)
                 self._set_cached_response(cache_key, result)
             result = self._hydrate_artifacts(job, result)
+            self._raise_if_canceled(job)
             result["pipeline"] = {
                 "prompt_crafter": refined_prompt,
                 "orchestrator_mode": job.modo,
@@ -285,9 +352,12 @@ class JobManager:
                 ]
 
             await self._event_async(job, "Kemy", "Revisando resposta antes de entregar.", 75)
+            self._raise_if_canceled(job)
             result.setdefault("security_report", "Nenhum segredo deve ser escrito no repositorio; use variaveis de ambiente.")
 
             await self._finish_job(job, result)
+        except JobCanceledError as exc:
+            await self._mark_job_canceled(job, str(exc) or "Execucao cancelada pelo usuario.")
         except Exception as exc:  # pragma: no cover - defensive runtime guard
             job.status = "error"
             job.etapa = "Erro na execucao"
@@ -1055,7 +1125,7 @@ class JobManager:
             result["tools_used"] = tools
             return result
         result = dict(result)
-        result["raw"] = self._fallback_site_artifact(job.pedido)
+        result["raw"] = self._fallback_site_artifact_v2(job.pedido)
         result["summary"] = "Site gerado com live preview, arquivos e ZIP para download."
         tools = list(result.get("tools_used") or [])
         if "kemy-site-fallback" not in tools:
@@ -1368,16 +1438,196 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "</kemy_artifact>"
         )
 
+    def _fallback_site_artifact_v2(self, pedido: str) -> str:
+        title = self._site_title_from_prompt(pedido)
+        normalized_prompt = " ".join(pedido.split())
+        lowered = normalized_prompt.lower()
+        safe_title = html.escape(title)
+        safe_prompt = html.escape(normalized_prompt)
+        premium_dark = any(token in lowered for token in ["dourado", "preto", "premium", "luxo", "black"])
+        include_prices = any(token in lowered for token in ["preco", "precos", "valor", "valores", "tabela"])
+        include_gallery = any(token in lowered for token in ["imagem", "imagens", "foto", "fotos", "corte", "cortes", "galeria"])
+        gallery_sources = [
+            "https://source.unsplash.com/1200x900/?barber,shop",
+            "https://source.unsplash.com/1200x900/?haircut,barber",
+            "https://source.unsplash.com/1200x900/?beard,barbershop",
+        ]
+        services = [
+            ("Corte Classico", "Acabamento alinhado com navalha e finalizacao premium.", "R$ 45"),
+            ("Degrade Premium", "Tecnica moderna com transicao limpa e styling.", "R$ 60"),
+            ("Barba Completa", "Toalha quente, desenho e hidratacao da pele.", "R$ 35"),
+            ("Combo Corte + Barba", "Pacote executivo para visual completo.", "R$ 85"),
+        ]
+        service_cards = []
+        for name, desc, price in services:
+            price_html = f"<p class=\"price\">{html.escape(price)}</p>" if include_prices else ""
+            service_cards.append(
+                f"<article class=\"service-card\">"
+                f"<h3>{html.escape(name)}</h3>"
+                f"<p>{html.escape(desc)}</p>"
+                f"{price_html}"
+                "</article>"
+            )
+        gallery_html = ""
+        if include_gallery:
+            gallery_items = "".join(
+                f"<figure><img src=\"{src}\" alt=\"Corte de cabelo\" loading=\"lazy\"/></figure>"
+                for src in gallery_sources
+            )
+            gallery_html = (
+                "<section class=\"gallery\" id=\"galeria\">"
+                "<div class=\"section-head\"><span>Galeria</span><h2>Cortes em destaque</h2></div>"
+                f"<div class=\"gallery-grid\">{gallery_items}</div>"
+                "</section>"
+            )
+        palette_css = (
+            ":root{--bg:#050708;--surface:#101316;--surface-2:#191d21;--text:#f6f6f0;--muted:#c4c7cc;--brand:#d6b16d;--line:rgba(214,177,109,.28);--button:#d6b16d;--button-text:#0b0d0f;}"
+            if premium_dark
+            else ":root{--bg:#f3f8f6;--surface:#ffffff;--surface-2:#eef4f1;--text:#10231d;--muted:#5f756e;--brand:#128d72;--line:rgba(16,35,29,.14);--button:#10231d;--button-text:#ffffff;}"
+        )
+        subtitle = (
+            "Barbearia premium com atendimento por agenda, visual marcante e experiencia focada no cliente."
+            if premium_dark
+            else "Atendimento moderno para clientes agendarem online com rapidez e conforto."
+        )
+        html_doc = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    {palette_css}
+    *{{box-sizing:border-box}}
+    body{{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}}
+    .wrap{{width:min(1180px,calc(100% - 36px));margin:0 auto}}
+    header{{padding:26px 0;display:flex;justify-content:space-between;align-items:center;gap:14px}}
+    .logo{{font-size:30px;font-weight:900;letter-spacing:-.04em}}
+    nav{{display:flex;gap:18px;color:var(--muted);font-weight:700}}
+    .hero{{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-bottom:18px}}
+    .panel{{border:1px solid var(--line);border-radius:28px;background:var(--surface);padding:28px;box-shadow:0 14px 42px rgba(0,0,0,.12)}}
+    .eyebrow{{display:inline-flex;padding:7px 12px;border-radius:999px;background:color-mix(in srgb,var(--brand),transparent 84%);color:var(--brand);font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}}
+    h1{{margin:18px 0 12px;font-size:clamp(36px,6vw,68px);line-height:.96;letter-spacing:-.06em}}
+    .lead{{margin:0;color:var(--muted);font-size:18px;line-height:1.5}}
+    .actions{{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}}
+    .btn{{border:0;border-radius:999px;padding:14px 20px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}}
+    .btn-primary{{background:var(--button);color:var(--button-text)}}
+    .btn-secondary{{background:transparent;color:var(--text);border:1px solid var(--line)}}
+    .booking h2{{margin:0 0 12px;font-size:26px;letter-spacing:-.03em}}
+    .grid{{display:grid;gap:10px}}
+    label{{display:grid;gap:6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}}
+    input,select{{width:100%;padding:13px 14px;border-radius:14px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);font:inherit}}
+    .services{{margin:16px 0 22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}}
+    .service-card{{border:1px solid var(--line);border-radius:20px;background:var(--surface);padding:18px}}
+    .service-card h3{{margin:0 0 7px;font-size:21px;letter-spacing:-.03em}}
+    .service-card p{{margin:0;color:var(--muted);line-height:1.48}}
+    .price{{margin-top:12px!important;font-size:18px!important;font-weight:800;color:var(--brand)!important}}
+    .section-head span{{color:var(--brand);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}}
+    .section-head h2{{margin:6px 0 0;font-size:34px;letter-spacing:-.04em}}
+    .gallery{{margin:14px 0 40px}}
+    .gallery-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}}
+    .gallery-grid figure{{margin:0;border-radius:18px;overflow:hidden;border:1px solid var(--line);background:var(--surface)}}
+    .gallery-grid img{{width:100%;height:230px;object-fit:cover;display:block}}
+    .request-note{{margin:0 0 24px;color:var(--muted);font-size:13px}}
+    @media (max-width:900px){{
+      nav{{display:none}}
+      .hero{{grid-template-columns:1fr}}
+      .gallery-grid{{grid-template-columns:1fr}}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">{safe_title}</div>
+      <nav><span>Servicos</span><span>Agenda</span><span>Galeria</span><span>Contato</span></nav>
+    </header>
+    <section class="hero">
+      <article class="panel">
+        <span class="eyebrow">Agenda online</span>
+        <h1>{safe_title}</h1>
+        <p class="lead">{html.escape(subtitle)}</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#agendar">Agendar agora</a>
+          <a class="btn btn-secondary" href="#servicos">Ver servicos</a>
+        </div>
+      </article>
+      <form id="agendar" class="panel booking">
+        <h2>Reserve seu horario</h2>
+        <div class="grid">
+          <label>Nome<input placeholder="Seu nome"/></label>
+          <label>Servico<select>{''.join(f'<option>{html.escape(item[0])}</option>' for item in services[:4])}</select></label>
+          <label>Data<input type="date"/></label>
+          <label>Horario<input type="time"/></label>
+        </div>
+        <button class="btn btn-primary" type="button" onclick="alert('Agendamento simulado com sucesso!')">Confirmar agendamento</button>
+      </form>
+    </section>
+    <section id="servicos">
+      <div class="section-head"><span>Servicos</span><h2>Catalogo de cortes</h2></div>
+      <div class="services">{''.join(service_cards)}</div>
+    </section>
+    {gallery_html}
+    <p class="request-note"><strong>Pedido aplicado:</strong> {safe_prompt}</p>
+  </div>
+</body>
+</html>"""
+        readme = f"""# {title}
+
+Site de contingencia personalizado pela Kemy para: {pedido}
+
+## O que foi aplicado automaticamente
+
+- Nome do projeto: `{title}`
+- {"Tabela de precos ficticios incluida." if include_prices else "Estrutura de servicos pronta para receber precos."}
+- {"Galeria de imagens de cortes incluida no preview." if include_gallery else "Sem galeria automatica porque o pedido nao exigiu imagens."}
+- {"Paleta premium escura (dourado + preto) aplicada." if premium_dark else "Paleta clara profissional aplicada."}
+
+## Como usar
+
+- Abra `preview.html` para visualizar imediatamente.
+- Se quiser ajustes de marca (cores, nome, precos, imagens), peca no campo de edicao do preview.
+"""
+        return (
+            f"<kemy_artifact title=\"{html.escape(title, quote=True)}\">\n"
+            "<file path=\"preview.html\">\n"
+            f"{html_doc}\n"
+            "</file>\n"
+            "<file path=\"README.md\">\n"
+            f"{readme}\n"
+            "</file>\n"
+            "</kemy_artifact>"
+        )
+
     def _site_title_from_prompt(self, pedido: str) -> str:
         text = " ".join(pedido.split()).strip(" .")
         lowered = text.lower()
+        explicit_name = self._extract_brand_name_from_prompt(text)
+        if explicit_name:
+            return explicit_name
         if "barbe" in lowered or "corte" in lowered or "cabelo" in lowered:
-            return "Barbearia Agenda"
+            return "Studio de Cortes Premium"
         if "imobili" in lowered:
             return "Imobiliaria Prime"
         if "restaurante" in lowered or "comida" in lowered:
             return "Mesa Reservada"
         return (text[:48].strip() or "Site Kemy").title()
+
+    def _extract_brand_name_from_prompt(self, text: str) -> str:
+        source = " ".join((text or "").split())
+        patterns = [
+            r"(?:com\s+nome|nome\s*[:\-]|chamado|chamada)\s+([A-Za-z0-9À-ÿ][A-Za-z0-9À-ÿ '&-]{2,42})",
+            r"(?:marca|empresa)\s*[:\-]\s*([A-Za-z0-9À-ÿ][A-Za-z0-9À-ÿ '&-]{2,42})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, source, flags=re.IGNORECASE)
+            if not match:
+                continue
+            candidate = re.split(r"(?:\s+(?:com|e|para|no|na|de|do|da)\s+.*)$", match.group(1).strip(), maxsplit=1, flags=re.IGNORECASE)[0]
+            cleaned = re.sub(r"\s{2,}", " ", candidate).strip(" .,:;!-")
+            if len(cleaned) >= 3:
+                return cleaned[:52]
+        return ""
 
     def _repo_display_name(self, repo_url: str) -> str:
         value = str(repo_url or "").strip().rstrip("/")
@@ -1405,7 +1655,52 @@ Site gerado automaticamente pela Kemy para: {pedido}
         }
         return mapping.get(suffix, suffix or "text")
 
+    def _build_reasoning_trace(self, pedido: str, mode: str) -> str:
+        text = " ".join((pedido or "").split()).lower()
+        requirements: list[str] = []
+        if mode == "site":
+            if "nome" in text:
+                requirements.append("usar nome de marca solicitado")
+            if "preco" in text or "valor" in text:
+                requirements.append("incluir tabela/lista de precos")
+            if "imagem" in text or "foto" in text:
+                requirements.append("incluir galeria de imagens contextual")
+            if any(token in text for token in ["dourado", "preto", "premium", "luxo"]):
+                requirements.append("aplicar direcao visual premium solicitada")
+            if "agend" in text:
+                requirements.append("manter fluxo de agendamento funcional")
+        if mode == "coding":
+            if any(token in text for token in ["arrume", "corrija", "conserte", "refatore", "ajuste", "bug", "erro"]):
+                requirements.append("corrigir codigo existente sem criar template novo")
+            if any(token in text for token in ["workspace", "repositorio", "repo", "github", "git"]):
+                requirements.append("usar workspace/repositorio ativo da sessao")
+        if mode == "documento" and any(token in text for token in ["abnt", "docx", "pdf", "relatorio"]):
+            requirements.append("entregar documento estruturado sem codigo tecnico")
+        if not requirements:
+            return ""
+        return "; ".join(requirements[:4]) + "."
+
+    async def _mark_job_canceled(self, job: JobState, reason: str = "Execucao cancelada pelo usuario.") -> None:
+        reason = (reason or "Execucao cancelada pelo usuario.").strip()
+        if not any(str(event.get("msg") or "").lower() == reason.lower() for event in job.eventos):
+            job.eventos.append(
+                {
+                    "ts": utcnow(),
+                    "agente": "Kemy",
+                    "msg": reason,
+                    "progresso": min(max(job.progresso, 1), 98),
+                }
+            )
+        job.status = "canceled"
+        job.etapa = "Cancelado pelo usuario"
+        job.erro = reason
+        job.updated_at = utcnow()
+        self.save(job)
+        await self.supabase.insert_job(job.model_dump())
+
     def _event(self, job: JobState, agente: str, msg: str, progresso: int) -> None:
+        if self._is_cancel_requested(job.job_id):
+            return
         job.status = "running"
         job.etapa = msg
         job.progresso = progresso
@@ -1609,6 +1904,9 @@ Site gerado automaticamente pela Kemy para: {pedido}
         return classify_request_mode(message, current_mode, session_data)
 
     async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:
+        if self._is_cancel_requested(job.job_id):
+            await self._mark_job_canceled(job, "Execucao cancelada pelo usuario.")
+            return
         result = dict(result or {})
         result.setdefault("mode", job.modo)
         if job.github_repo and not result.get("github_repo"):

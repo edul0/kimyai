@@ -34,8 +34,8 @@
   --shadow-strong: 0 22px 58px rgba(7, 21, 15, 0.13);
   --shadow-lg: 0 24px 68px rgba(7, 21, 15, 0.12);
   --nav-height: 72px;
-  --font-main: "Inter", system-ui, -apple-system, sans-serif;
-  --font-display: "Sora", "Inter", system-ui, -apple-system, sans-serif;
+  --font-main: "SF Pro Text", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "SF Pro Display", "Sora", "Inter", system-ui, -apple-system, sans-serif;
 }
 
 [data-theme="dark"] {
@@ -80,8 +80,8 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(82% 64% at 10% -16%, rgba(18, 163, 122, 0.16), transparent 66%),
-    radial-gradient(76% 58% at 100% 0%, rgba(13, 123, 92, 0.11), transparent 70%),
+    radial-gradient(76% 58% at 10% -12%, rgba(18, 163, 122, 0.1), transparent 68%),
+    radial-gradient(66% 52% at 100% -2%, rgba(13, 123, 92, 0.07), transparent 74%),
     linear-gradient(180deg, var(--bg-elevated), var(--bg));
   color: var(--ink);
   font-family: var(--font-main);
@@ -96,10 +96,10 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(8, 28, 21, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(8, 28, 21, 0.028) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.85), transparent 72%);
+    linear-gradient(rgba(8, 28, 21, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 28, 21, 0.015) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent 80%);
 }
 
 :root[data-theme="dark"] body::before {
@@ -698,14 +698,14 @@ svg {
   display: grid;
   grid-template-columns: 316px minmax(0, 1fr);
   background: transparent;
-  gap: 14px;
+  gap: 12px;
   padding: 12px 14px 0;
   transition: grid-template-columns 220ms ease, gap 220ms ease;
 }
 
 .chat-view.has-preview {
   grid-template-columns: 316px minmax(0, 1fr) minmax(420px, 40vw);
-  gap: 14px;
+  gap: 12px;
   padding-right: 14px;
 }
 
@@ -713,11 +713,9 @@ svg {
   min-height: 0;
   padding: 20px 16px;
   overflow-y: auto;
-  border: 1px solid color-mix(in srgb, var(--line-strong), transparent 18%);
+  border: 1px solid color-mix(in srgb, var(--line-strong), transparent 12%);
   border-radius: 24px;
-  background:
-    linear-gradient(160deg, rgba(var(--surface-rgb), 0.8), rgba(var(--surface-rgb), 0.58)),
-    radial-gradient(circle at 10% 0%, rgba(18, 163, 122, 0.15), transparent 58%);
+  background: linear-gradient(160deg, rgba(var(--surface-rgb), 0.88), rgba(var(--surface-rgb), 0.74));
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(18px) saturate(1.14);
   -webkit-backdrop-filter: blur(18px) saturate(1.14);
@@ -867,9 +865,7 @@ svg {
   scroll-behavior: smooth;
   border: 1px solid color-mix(in srgb, var(--line-strong), transparent 24%);
   border-radius: 30px;
-  background:
-    linear-gradient(180deg, rgba(var(--surface-rgb), 0.62), rgba(var(--surface-rgb), 0.42)),
-    radial-gradient(95% 65% at 100% 0%, rgba(99, 229, 195, 0.14), transparent 70%);
+  background: linear-gradient(180deg, rgba(var(--surface-rgb), 0.78), rgba(var(--surface-rgb), 0.6));
   box-shadow: var(--shadow-soft);
 }
 
@@ -879,11 +875,12 @@ svg {
   inset: 0;
   pointer-events: none;
   border-radius: 30px;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0.26), transparent 28%, transparent 72%, rgba(18, 163, 122, 0.08));
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.18), transparent 34%, transparent 76%, rgba(18, 163, 122, 0.035));
 }
 
 .conversation-head,
 .agent-progress,
+.reasoning-stream,
 .messages {
   width: min(920px, 100%);
   margin-left: auto;
@@ -908,10 +905,14 @@ svg {
   margin: 6px 0 0;
   color: var(--ink-strong);
   font-family: var(--font-display);
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(22px, 3.2vw, 34px);
   line-height: 1.08;
   letter-spacing: -0.035em;
   text-wrap: balance;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .conversation-actions {
@@ -990,6 +991,63 @@ svg {
 }
 
 .timeline p {
+  margin: 0;
+}
+
+.reasoning-stream {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--line-strong), transparent 40%);
+}
+
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.reasoning-head strong {
+  color: var(--ink-strong);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#reasoningBadge {
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.reasoning-trace {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.reasoning-trace li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reasoning-trace li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent), #ffffff 20%);
+}
+
+.reasoning-trace p {
   margin: 0;
 }
 
@@ -1330,6 +1388,19 @@ svg {
   padding: 0 20px;
 }
 
+#cancelRunBtn {
+  min-height: 42px;
+  padding: 0 18px;
+  border-color: rgba(217, 77, 63, 0.35);
+  color: color-mix(in srgb, var(--danger), var(--ink-strong) 20%);
+  background: color-mix(in srgb, var(--danger), transparent 88%);
+}
+
+#cancelRunBtn:hover {
+  border-color: rgba(217, 77, 63, 0.55);
+  background: color-mix(in srgb, var(--danger), transparent 82%);
+}
+
 
 .preview-panel {
   display: flex;
@@ -1520,6 +1591,12 @@ svg {
   font-size: 12px;
 }
 
+.workspace-code-actions-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 #workspaceCurrentFile {
   color: var(--ink-strong);
   font-weight: 700;
@@ -1542,6 +1619,41 @@ svg {
 
 #workspaceCode code {
   white-space: pre;
+}
+
+.workspace-code-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: #0a1713;
+  color: #e2fff3;
+  padding: 14px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: none;
+  outline: none;
+}
+
+.workspace-code-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(var(--surface-rgb), 0.92);
+}
+
+#workspaceApplyCodeBtn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), var(--mint));
+  color: #03140f;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .workspace-edit-bar {

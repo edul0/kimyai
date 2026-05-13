@@ -1406,6 +1406,29 @@ async def job_status(job_id: str):
     return job.model_dump()
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    job = await _load_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job nao encontrado.")
+    session = await _load_session_for_owner(job.session_id, owner)
+    if not session:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if session.get("owner") and session.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    updated = jobs.cancel(job_id, requested_by=owner or "user")
+    if not updated:
+        raise HTTPException(404, "Job nao encontrado.")
+    await jobs.supabase.insert_job(updated.model_dump())
+    return {
+        "status": "ok",
+        "job_id": job_id,
+        "job_status": updated.status,
+        "message": "Cancelamento solicitado.",
+    }
+
+
 @app.get("/api/artefatos/{job_id}/{filename}")
 async def baixar_artefato(job_id: str, filename: str, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)

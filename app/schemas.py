@@ -55,7 +55,7 @@ class NovoAgente(BaseModel):
 class JobState(BaseModel):
     job_id: str
     session_id: str
-    status: Literal["queued", "running", "done", "error"]
+    status: Literal["queued", "running", "done", "error", "canceled"]
     etapa: str
     progresso: int = Field(ge=0, le=100)
     pedido: str
