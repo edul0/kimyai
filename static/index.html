@@ -167,11 +167,39 @@
           <div class="preview-head">
             <strong>Live preview</strong>
             <div class="preview-head-actions">
+              <button id="previewTabLive" class="secondary-btn" type="button" title="Visualização do projeto">Preview</button>
+              <button id="previewTabCode" class="secondary-btn" type="button" title="Arquivos e código em tempo real">Coding Studio</button>
               <button id="previewFullscreenBtn" class="secondary-btn" type="button" title="Tela cheia do preview">Tela cheia</button>
               <button id="closePreviewBtn" class="secondary-btn" type="button">Fechar</button>
             </div>
           </div>
           <iframe id="previewFrame" title="Preview do site gerado"></iframe>
+          <section id="workspacePanel" class="workspace-panel hidden">
+            <div class="workspace-head">
+              <div>
+                <strong id="workspaceTitle">Coding Studio</strong>
+                <p id="workspaceMeta">Aguardando arquivos do projeto...</p>
+              </div>
+              <button id="workspaceRefreshBtn" class="secondary-btn compact-btn" type="button">Atualizar</button>
+            </div>
+            <div class="workspace-body">
+              <aside id="workspaceFiles" class="workspace-files"></aside>
+              <article class="workspace-code">
+                <div class="workspace-code-head">
+                  <span id="workspaceCurrentFile">Selecione um arquivo</span>
+                  <a id="workspaceDownloadFile" class="secondary-btn compact-btn hidden" target="_blank" rel="noreferrer">Baixar arquivo</a>
+                </div>
+                <pre id="workspaceCode"><code>// O código aparecerá aqui em tempo real.</code></pre>
+              </article>
+            </div>
+            <form id="workspaceEditForm" class="workspace-edit-bar">
+              <label for="workspacePrompt">Edite o código deste projeto em tempo real</label>
+              <div class="workspace-edit-row">
+                <textarea id="workspacePrompt" spellcheck="true" placeholder="Ex.: adicione autenticação, mude a paleta, crie rota /admin, conecte no Supabase..."></textarea>
+                <button id="workspaceApplyBtn" type="submit">Aplicar no código</button>
+              </div>
+            </form>
+          </section>
           <form id="previewEditForm" class="preview-edit-bar">
             <label for="previewPrompt">Edite este projeto em tempo real</label>
             <div class="preview-edit-row">

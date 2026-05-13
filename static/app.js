@@ -4,11 +4,16 @@ const state = {
   lastOutput: "",
   lastResultMode: "coding",
   previewFullscreen: false,
+  previewTab: "live",
   authMode: "login",
   sessions: [],
   renderedJobs: new Set(),
   attachments: [],
   currentUser: null,
+  workspaceSnapshot: null,
+  workspaceFiles: [],
+  workspaceSelectedPath: "",
+  workspacePoll: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -93,10 +98,13 @@ function showChat() {
 
 function showPreview(html) {
   if (!html) return;
+  const normalized = normalizePreviewHtml(html) || String(html);
   $("previewFrame").removeAttribute("src");
-  $("previewFrame").srcdoc = html;
+  $("previewFrame").srcdoc = normalized;
   $("previewPanel").classList.remove("hidden");
   $("chatView").classList.add("has-preview");
+  setPreviewTab("live");
+  startWorkspacePolling();
   updatePreviewFullscreenUI();
 }
 
@@ -106,16 +114,21 @@ function showPreviewUrl(url) {
   $("previewFrame").src = url;
   $("previewPanel").classList.remove("hidden");
   $("chatView").classList.add("has-preview");
+  setPreviewTab("live");
+  startWorkspacePolling();
   updatePreviewFullscreenUI();
 }
 
 function hidePreview() {
   setPreviewFullscreen(false);
+  stopWorkspacePolling();
   $("previewFrame").srcdoc = "";
   $("previewFrame").removeAttribute("src");
   $("previewPanel").classList.add("hidden");
   $("chatView").classList.remove("has-preview");
   $("previewPrompt").value = "";
+  $("workspacePrompt").value = "";
+  clearWorkspaceStudio();
   updatePreviewFullscreenUI();
 }
 
@@ -133,6 +146,21 @@ function setPreviewFullscreen(active) {
 
 function togglePreviewFullscreen() {
   setPreviewFullscreen(!state.previewFullscreen);
+}
+
+function setPreviewTab(tab) {
+  const effective = tab === "code" ? "code" : "live";
+  state.previewTab = effective;
+  const isCode = effective === "code";
+  $("previewFrame").classList.toggle("hidden", isCode);
+  $("previewEditForm").classList.toggle("hidden", isCode);
+  $("workspacePanel").classList.toggle("hidden", !isCode);
+  $("previewTabLive").classList.toggle("preview-tab-active", !isCode);
+  $("previewTabCode").classList.toggle("preview-tab-active", isCode);
+  if (isCode) {
+    refreshWorkspaceStudio().catch(console.error);
+    startWorkspacePolling();
+  }
 }
 
 function setAuthMode(mode) {
@@ -194,6 +222,8 @@ async function submitAuth(event) {
 
 async function logout() {
   await api("/api/auth/logout", { method: "POST", body: "{}" });
+  stopWorkspacePolling();
+  clearWorkspaceStudio();
   clearPersistedSessionId();
   $("chatLog").innerHTML = "";
   showHome();
@@ -238,6 +268,168 @@ async function loadSessions() {
   const data = await api("/api/sessao/listar");
   state.sessions = data.sessions || [];
   renderSessions();
+}
+
+function clearWorkspaceStudio() {
+  state.workspaceSnapshot = null;
+  state.workspaceFiles = [];
+  state.workspaceSelectedPath = "";
+  $("workspaceTitle").textContent = "Coding Studio";
+  $("workspaceMeta").textContent = "Aguardando arquivos do projeto...";
+  $("workspaceFiles").innerHTML = "";
+  $("workspaceCurrentFile").textContent = "Selecione um arquivo";
+  $("workspaceCode").innerHTML = "<code>// O código aparecerá aqui em tempo real.</code>";
+  $("workspaceDownloadFile").classList.add("hidden");
+  $("workspaceDownloadFile").removeAttribute("href");
+}
+
+function startWorkspacePolling() {
+  if (state.workspacePoll) clearInterval(state.workspacePoll);
+  if (!state.sessionId) return;
+  refreshWorkspaceStudio().catch(console.error);
+  state.workspacePoll = setInterval(() => {
+    if (!state.sessionId) return;
+    if ($("chatView").classList.contains("hidden")) return;
+    refreshWorkspaceStudio().catch(console.error);
+  }, 3200);
+}
+
+function stopWorkspacePolling() {
+  if (state.workspacePoll) {
+    clearInterval(state.workspacePoll);
+    state.workspacePoll = null;
+  }
+}
+
+function workspaceFileRank(file) {
+  const path = String(file.path || "").toLowerCase();
+  const priority = [
+    "preview.html",
+    "index.html",
+    "src/main.tsx",
+    "src/app.tsx",
+    "src/styles.css",
+    "src/index.css",
+    "app.py",
+    "main.py",
+    "readme.md",
+    "package.json",
+  ];
+  for (let i = 0; i < priority.length; i += 1) {
+    if (path === priority[i]) return i;
+  }
+  return priority.length + 1;
+}
+
+function pickWorkspaceFile(files) {
+  if (!files.length) return null;
+  if (state.workspaceSelectedPath) {
+    const selected = files.find((item) => item.path === state.workspaceSelectedPath);
+    if (selected) return selected;
+  }
+  const withContent = files
+    .filter((item) => item.content)
+    .sort((a, b) => workspaceFileRank(a) - workspaceFileRank(b));
+  return withContent[0] || files.sort((a, b) => workspaceFileRank(a) - workspaceFileRank(b))[0];
+}
+
+function renderWorkspaceFiles(files) {
+  const container = $("workspaceFiles");
+  if (!files.length) {
+    container.innerHTML = `<p style="margin: 4px; color: var(--muted); font-size: 12px;">Ainda não há arquivos textuais para mostrar.</p>`;
+    return;
+  }
+  container.innerHTML = files
+    .map((file) => `
+      <button type="button" class="workspace-file ${file.path === state.workspaceSelectedPath ? "active" : ""}" data-workspace-file="${escapeHtml(file.path)}">
+        <span class="workspace-file-path">${escapeHtml(file.path)}</span>
+        <span class="workspace-file-meta">${escapeHtml(file.language || inferLanguage(file.name || file.path || ""))}</span>
+      </button>
+    `)
+    .join("");
+  container.querySelectorAll("[data-workspace-file]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const path = button.dataset.workspaceFile || "";
+      selectWorkspaceFile(path).catch(console.error);
+    });
+  });
+}
+
+async function selectWorkspaceFile(path) {
+  const current = state.workspaceFiles.find((file) => file.path === path);
+  if (!current) return;
+  state.workspaceSelectedPath = path;
+  renderWorkspaceFiles(state.workspaceFiles);
+  let content = String(current.content || "");
+  if (!content && current.download_url && String(current.mime_type || "").toLowerCase().startsWith("text/")) {
+    try {
+      const resp = await fetch(current.download_url, { credentials: "same-origin" });
+      if (resp.ok) {
+        content = await resp.text();
+        current.content = content;
+      }
+    } catch {
+      content = "";
+    }
+  }
+  $("workspaceCurrentFile").textContent = current.path;
+  if (current.download_url) {
+    const downloadLink = $("workspaceDownloadFile");
+    downloadLink.href = current.download_url;
+    downloadLink.classList.remove("hidden");
+  } else {
+    $("workspaceDownloadFile").classList.add("hidden");
+    $("workspaceDownloadFile").removeAttribute("href");
+  }
+  $("workspaceCode").innerHTML = `<code>${escapeHtml(content || "// Arquivo sem conteúdo textual disponível neste momento.")}</code>`;
+}
+
+function renderWorkspaceStudio(snapshot) {
+  state.workspaceSnapshot = snapshot || null;
+  const files = [...(snapshot?.files || [])].sort((a, b) => {
+    const rankDiff = workspaceFileRank(a) - workspaceFileRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return String(a.path || "").localeCompare(String(b.path || ""));
+  });
+  state.workspaceFiles = files;
+  $("workspaceTitle").textContent = snapshot?.artifact_title || "Coding Studio";
+  const mode = snapshot?.mode || "coding";
+  const count = snapshot?.file_count_total ?? files.length;
+  const contextSummary = snapshot?.context_summary ? ` | ${snapshot.context_summary}` : "";
+  $("workspaceMeta").textContent = `${mode} | ${count} arquivo(s)${contextSummary}`.trim();
+  if (!files.length) {
+    state.workspaceSelectedPath = "";
+    renderWorkspaceFiles([]);
+    $("workspaceCurrentFile").textContent = "Selecione um arquivo";
+    $("workspaceCode").innerHTML = "<code>// Ainda não há código disponível para esta tarefa.</code>";
+    $("workspaceDownloadFile").classList.add("hidden");
+    $("workspaceDownloadFile").removeAttribute("href");
+    return;
+  }
+  const selected = pickWorkspaceFile(files);
+  if (!selected) return;
+  state.workspaceSelectedPath = selected.path;
+  renderWorkspaceFiles(files);
+  $("workspaceCurrentFile").textContent = selected.path;
+  if (selected.download_url) {
+    $("workspaceDownloadFile").href = selected.download_url;
+    $("workspaceDownloadFile").classList.remove("hidden");
+  } else {
+    $("workspaceDownloadFile").classList.add("hidden");
+    $("workspaceDownloadFile").removeAttribute("href");
+  }
+  $("workspaceCode").innerHTML = `<code>${escapeHtml(String(selected.content || "// Arquivo sem conteúdo textual disponível neste momento."))}</code>`;
+}
+
+async function refreshWorkspaceStudio() {
+  if (!state.sessionId) return null;
+  const snapshot = await api(`/api/sessao/${state.sessionId}/workspace`);
+  if (!snapshot?.ready) {
+    renderWorkspaceStudio(snapshot || { files: [] });
+    return snapshot || null;
+  }
+  renderWorkspaceStudio(snapshot);
+  return snapshot;
 }
 
 function renderSessions() {
@@ -341,9 +533,27 @@ async function openSession(sessionId, options = {}) {
   });
   const previewHtml = lastAssistantWithPreview ? extractPreviewHtml(lastAssistantWithPreview.result || lastAssistantWithPreview, lastAssistantWithPreview.content || "") : "";
   const previewUrl = lastAssistantWithPreview ? extractPreviewUrl(lastAssistantWithPreview.result || lastAssistantWithPreview) : "";
-  if (previewHtml) showPreview(previewHtml);
-  else if (previewUrl) showPreviewUrl(previewUrl);
-  else hidePreview();
+  if (previewHtml) {
+    showPreview(previewHtml);
+  } else if (previewUrl) {
+    showPreviewUrl(previewUrl);
+  } else {
+    const workspace = await api(`/api/sessao/${sessionId}/workspace`).catch(() => null);
+    if (workspace?.ready) {
+      renderWorkspaceStudio(workspace);
+      if (workspace.preview_url) {
+        showPreviewUrl(workspace.preview_url);
+        setPreviewTab("code");
+      } else {
+        $("previewPanel").classList.remove("hidden");
+        $("chatView").classList.add("has-preview");
+        setPreviewTab("code");
+        startWorkspacePolling();
+      }
+    } else {
+      hidePreview();
+    }
+  }
   resetProgress("Conversa carregada. Pronta para continuar.");
   renderSessions();
   if (!options.stayHome) showChat();
@@ -391,8 +601,27 @@ function renderJob(job) {
     }
     const previewHtml = extractPreviewHtml(job.resultado, state.lastOutput);
     const previewUrl = extractPreviewUrl(job.resultado);
-    if (previewHtml) showPreview(previewHtml);
-    else if (previewUrl) showPreviewUrl(previewUrl);
+    if (previewHtml) {
+      showPreview(previewHtml);
+    } else if (previewUrl) {
+      showPreviewUrl(previewUrl);
+    } else {
+      refreshWorkspaceStudio()
+        .then((snapshot) => {
+          if (snapshot?.ready) {
+            if (snapshot.preview_url) {
+              showPreviewUrl(snapshot.preview_url);
+              setPreviewTab("code");
+            } else {
+              $("previewPanel").classList.remove("hidden");
+              $("chatView").classList.add("has-preview");
+              setPreviewTab("code");
+              startWorkspacePolling();
+            }
+          }
+        })
+        .catch(() => {});
+    }
   }
   if (job.erro) {
     appendMessage("assistant", `**Erro na execução:** ${job.erro}`);
@@ -578,6 +807,31 @@ async function applyPreviewEdit() {
     $("previewPrompt").value = "";
   } finally {
     $("previewApplyBtn").disabled = false;
+  }
+}
+
+async function applyWorkspaceEdit() {
+  const raw = ($("workspacePrompt").value || "").trim();
+  if (!raw) return;
+  if (!state.sessionId) {
+    appendMessage("assistant", "Abra uma tarefa para aplicar mudanças no código.");
+    return;
+  }
+  const modeHint = (state.workspaceSnapshot?.mode === "site" || state.lastResultMode === "site") ? "site" : "coding";
+  const scopedPrompt = `No workspace de código ativo desta conversa, aplique esta alteração preservando o que já funciona: ${raw}`;
+  $("workspaceApplyBtn").disabled = true;
+  try {
+    await runAgents(scopedPrompt, "chat", {
+      forcedMode: modeHint,
+      displayText: raw,
+      keepPromptInput: true,
+      keepAttachments: false,
+    });
+    $("workspacePrompt").value = "";
+    setPreviewTab("code");
+    await refreshWorkspaceStudio();
+  } finally {
+    $("workspaceApplyBtn").disabled = false;
   }
 }
 
@@ -947,11 +1201,31 @@ function decodeHtmlEntities(value = "") {
 
 function normalizePreviewHtml(value = "") {
   let html = decodeHtmlEntities(String(value || "").trim());
+  if (/<kemy_artifact\b/i.test(html)) {
+    const files = extractArtifactFiles(html);
+    const artifactHtml = files.find((file) => file.path.toLowerCase().endsWith("preview.html"))
+      || files.find((file) => file.path.toLowerCase().endsWith("index.html"))
+      || files.find((file) => file.path.toLowerCase().endsWith(".html"));
+    if (artifactHtml?.content) {
+      html = decodeHtmlEntities(String(artifactHtml.content || "").trim());
+    }
+  }
+  const fenced = html.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    html = fenced[1].trim();
+  }
   if (html.startsWith("```")) {
-    html = html.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "").trim();
+    html = html.replace(/^```[a-zA-Z]*\s*/i, "").replace(/\s*```+$/i, "").trim();
   }
   if (html.toLowerCase().startsWith("html")) {
     html = html.slice(4).trim();
+  }
+  const loweredBeforeCut = html.toLowerCase();
+  const doctypeIndex = loweredBeforeCut.indexOf("<!doctype html");
+  const htmlIndex = loweredBeforeCut.indexOf("<html");
+  const startIndex = doctypeIndex >= 0 ? doctypeIndex : htmlIndex;
+  if (startIndex > 0) {
+    html = html.slice(startIndex).trim();
   }
   const lower = html.toLowerCase();
   if (!lower.includes("<html") && !lower.includes("<!doctype html")) return "";
@@ -1121,9 +1395,16 @@ on("homeAttachBtn", "click", () => $("homeFileInput")?.click());
 on("voiceBtn", "click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS precisa ser conectada ao WebSocket primeiro."));
 on("closePreviewBtn", "click", hidePreview);
 on("previewFullscreenBtn", "click", togglePreviewFullscreen);
+on("previewTabLive", "click", () => setPreviewTab("live"));
+on("previewTabCode", "click", () => setPreviewTab("code"));
+on("workspaceRefreshBtn", "click", () => refreshWorkspaceStudio().catch(showRunError));
 on("previewEditForm", "submit", (event) => {
   event.preventDefault();
   applyPreviewEdit().catch(showRunError);
+});
+on("workspaceEditForm", "submit", (event) => {
+  event.preventDefault();
+  applyWorkspaceEdit().catch(showRunError);
 });
 on("homeFileInput", "change", (event) => handleFileSelection(event.target.files));
 on("chatFileInput", "change", (event) => handleFileSelection(event.target.files));
@@ -1153,6 +1434,13 @@ on("previewPrompt", "keydown", (event) => {
   }
 });
 
+on("workspacePrompt", "keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    applyWorkspaceEdit().catch(showRunError);
+  }
+});
+
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.previewFullscreen) {
     setPreviewFullscreen(false);
@@ -1162,6 +1450,8 @@ window.addEventListener("keydown", (event) => {
 setTheme(localStorage.getItem("kemy.theme") || "light");
 setAuthMode("login");
 updatePreviewFullscreenUI();
+setPreviewTab("live");
+clearWorkspaceStudio();
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
   $("appView").classList.add("hidden");

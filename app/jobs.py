@@ -162,6 +162,17 @@ class JobManager:
                         "Regra obrigatoria: evolua o mesmo projeto ja existente no contexto acima.\n"
                         "Aplique somente as mudancas pedidas nesta mensagem e preserve o que ja funciona.\n"
                     )
+            workspace_context = ""
+            if job.modo == "coding" and self._is_workspace_edit_request(job.pedido, session_data):
+                workspace_context = self._build_workspace_edit_context(job, session_data)
+                if workspace_context:
+                    prompt = (
+                        f"{prompt}\n\n"
+                        "[WORKSPACE ATUAL - EDICAO INCREMENTAL]\n"
+                        f"{workspace_context}\n\n"
+                        "Regra obrigatoria: atualize o mesmo workspace de codigo do contexto acima.\n"
+                        "Preserve o que funciona e aplique somente o pedido atual.\n"
+                    )
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
             execution_plan_data = execution_plan.as_dict()
@@ -170,7 +181,7 @@ class JobManager:
                 execution_plan_data,
                 compact_context,
                 attachment_context["items"],
-                site_context=site_context,
+                site_context=f"{site_context}\n{workspace_context}".strip(),
             )
             cached_response = self._get_cached_response(cache_key) if self.settings.response_cache_enabled else None
 
@@ -552,6 +563,274 @@ class JobManager:
         title = str(result.get("artifact_title") or result.get("document_title") or result.get("summary") or "Projeto Kemy")
         summary = str(result.get("summary") or "")[:220]
         return {"title": title[:90], "summary": summary, "files": files}
+
+    def _is_workspace_text_file(self, path: str, mime_type: str = "") -> bool:
+        lowered = str(path or "").lower()
+        if lowered.endswith(
+            (
+                ".py",
+                ".js",
+                ".ts",
+                ".tsx",
+                ".jsx",
+                ".html",
+                ".css",
+                ".json",
+                ".md",
+                ".yml",
+                ".yaml",
+                ".sql",
+                ".sh",
+                ".env",
+                ".toml",
+                ".ini",
+            )
+        ):
+            return True
+        mime = str(mime_type or "").lower()
+        return mime.startswith("text/") or mime in {
+            "application/json",
+            "application/javascript",
+            "application/xml",
+            "image/svg+xml",
+        }
+
+    def _workspace_file_rank(self, path: str) -> tuple[int, str]:
+        lowered = str(path or "").lower()
+        priority = [
+            "preview.html",
+            "index.html",
+            "src/main.tsx",
+            "src/app.tsx",
+            "src/styles.css",
+            "src/index.css",
+            "app.py",
+            "main.py",
+            "readme.md",
+            "package.json",
+        ]
+        for idx, key in enumerate(priority):
+            if lowered == key:
+                return idx, lowered
+        return len(priority) + 1, lowered
+
+    def _extract_workspace_files_from_history_item(self, item: dict[str, Any]) -> list[dict[str, str]]:
+        direct_snapshot = item.get("workspace_snapshot") or {}
+        if isinstance(direct_snapshot, dict):
+            snapshot_files = direct_snapshot.get("files")
+            if isinstance(snapshot_files, list) and snapshot_files:
+                normalized_direct: list[dict[str, str]] = []
+                for file_item in snapshot_files[:14]:
+                    if not isinstance(file_item, dict):
+                        continue
+                    path = str(file_item.get("path") or file_item.get("relative_path") or file_item.get("name") or "").replace("\\", "/").strip().lstrip("/")
+                    content = str(file_item.get("content") or "")
+                    if not path or not content.strip():
+                        continue
+                    cleaned = self._clean_artifact_content(path, content).strip()
+                    if not cleaned:
+                        continue
+                    normalized_direct.append({"path": path, "content": cleaned[:9000]})
+                if normalized_direct:
+                    normalized_direct.sort(key=lambda row: self._workspace_file_rank(str(row.get("path") or "")))
+                    return normalized_direct
+
+        result = item.get("result") or {}
+        candidates: list[list[dict[str, Any]]] = []
+        site_snapshot = item.get("site_snapshot") or result.get("site_snapshot") or {}
+        if isinstance(site_snapshot, dict):
+            site_files = site_snapshot.get("files")
+            if isinstance(site_files, list):
+                candidates.append(
+                    [
+                        {
+                            "relative_path": row.get("path"),
+                            "content": row.get("content"),
+                            "mime_type": "text/html" if str(row.get("path") or "").lower().endswith(".html") else "text/plain",
+                        }
+                        for row in site_files
+                        if isinstance(row, dict)
+                    ]
+                )
+        for key in ("files",):
+            values = item.get(key)
+            if isinstance(values, list):
+                candidates.append(values)
+            result_values = result.get(key)
+            if isinstance(result_values, list):
+                candidates.append(result_values)
+
+        merged: dict[str, dict[str, str]] = {}
+        budget = 44000
+        for file_list in candidates:
+            for file_item in file_list:
+                if not isinstance(file_item, dict):
+                    continue
+                path = str(file_item.get("relative_path") or file_item.get("path") or file_item.get("name") or "").replace("\\", "/").strip().lstrip("/")
+                if not path:
+                    continue
+                mime_type = str(file_item.get("mime_type") or "")
+                if not self._is_workspace_text_file(path, mime_type):
+                    continue
+                content = str(file_item.get("content") or "")
+                if not content.strip():
+                    continue
+                cleaned = self._clean_artifact_content(path, content).strip()
+                if not cleaned:
+                    continue
+                per_file_limit = 12000 if path.lower().endswith(".html") else 8000
+                clipped = cleaned[: min(per_file_limit, budget)]
+                if not clipped:
+                    continue
+                merged[path] = {"path": path, "content": clipped}
+                budget -= len(clipped)
+                if budget <= 2400:
+                    break
+            if budget <= 2400:
+                break
+        if not merged:
+            return []
+        ordered = sorted(merged.values(), key=lambda row: self._workspace_file_rank(str(row.get("path") or "")))
+        return ordered[:14]
+
+    def _workspace_snapshot_from_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        files_raw = result.get("files")
+        if not isinstance(files_raw, list):
+            return None
+        history_like = {
+            "files": files_raw,
+            "result": {"files": files_raw, "site_snapshot": result.get("site_snapshot")},
+        }
+        files = self._extract_workspace_files_from_history_item(history_like)
+        if not files:
+            return None
+        title = str(result.get("artifact_title") or result.get("document_title") or result.get("summary") or "Workspace Kemy")
+        summary = str(result.get("summary") or "")[:220]
+        return {"title": title[:90], "summary": summary, "files": files}
+
+    def _latest_workspace_snapshot(self, session_data: dict[str, Any]) -> dict[str, Any] | None:
+        history = (session_data or {}).get("historico") or []
+        for item in reversed(history[-24:]):
+            if item.get("role") != "assistant":
+                continue
+            candidate = item.get("workspace_snapshot")
+            if isinstance(candidate, dict) and candidate.get("files"):
+                return candidate
+            result = item.get("result") or {}
+            result_candidate = result.get("workspace_snapshot")
+            if isinstance(result_candidate, dict) and result_candidate.get("files"):
+                return result_candidate
+            files = self._extract_workspace_files_from_history_item(item)
+            if files:
+                title = (
+                    str(result.get("artifact_title") or "")
+                    or str(result.get("document_title") or "")
+                    or str(result.get("summary") or "")
+                    or "Workspace Kemy"
+                )
+                return {"title": title[:90], "summary": str(item.get("content") or "")[:220], "files": files}
+        return None
+
+    def _build_workspace_edit_context(self, job: JobState, session_data: dict[str, Any]) -> str:
+        snapshot = self._latest_workspace_snapshot(session_data)
+        if not snapshot:
+            return ""
+        files = snapshot.get("files") or []
+        if not files:
+            return ""
+        budget = 42000
+        blocks: list[str] = []
+        for file_item in files[:12]:
+            path = str(file_item.get("path") or "").replace("\\", "/").strip()
+            content = str(file_item.get("content") or "")
+            if not path or not content:
+                continue
+            cleaned = self._clean_artifact_content(path, content).strip()
+            if not cleaned:
+                continue
+            limit = 11000 if path.lower().endswith(".html") else 7600
+            clipped = cleaned[: min(limit, budget)]
+            if not clipped:
+                continue
+            language = self._artifact_language(path)
+            blocks.append(
+                f"<file path=\"{path}\">\n"
+                f"```{language}\n"
+                f"{clipped}\n"
+                "```\n"
+                "</file>"
+            )
+            budget -= len(clipped)
+            if budget <= 2000:
+                break
+        if not blocks:
+            return ""
+        title = str(snapshot.get("title") or "Workspace Kemy").strip()
+        summary = str(snapshot.get("summary") or "").strip()
+        summary_line = f"Resumo atual: {summary}\n" if summary else ""
+        return (
+            f"Workspace atual: {title}\n"
+            f"{summary_line}"
+            "Contexto: existe um projeto de codigo em andamento nesta sessao.\n"
+            "A tarefa atual deve continuar no mesmo projeto, preservando o que funciona.\n"
+            "Edite os arquivos necessarios sem reiniciar do zero.\n\n"
+            "\n\n".join(blocks)
+        )
+
+    def _is_workspace_edit_request(self, pedido: str, session_data: dict[str, Any]) -> bool:
+        text = " ".join((pedido or "").split()).lower()
+        if not text:
+            return False
+        new_project_signals = [
+            "novo projeto",
+            "do zero",
+            "from scratch",
+            "reiniciar",
+            "recomecar",
+            "comecar do zero",
+            "crie um novo projeto",
+            "gere um novo projeto",
+            "novo app",
+            "novo site",
+            "iniciar outro projeto",
+        ]
+        if any(sig in text for sig in new_project_signals):
+            return False
+        edit_signals = [
+            "muda",
+            "mude",
+            "altera",
+            "altere",
+            "ajusta",
+            "ajuste",
+            "corrige",
+            "corrija",
+            "refatora",
+            "refatore",
+            "melhora",
+            "melhore",
+            "adiciona",
+            "adicione",
+            "implemente",
+            "otimiza",
+            "otimize",
+            "nesse codigo",
+            "neste codigo",
+            "nesse projeto",
+            "neste projeto",
+            "continue",
+            "continua",
+            "atualize",
+        ]
+        if any(sig in text for sig in edit_signals):
+            return True
+        has_workspace = bool(self._latest_workspace_snapshot(session_data))
+        if not has_workspace:
+            return False
+        if len(text.split()) <= 28:
+            return True
+        contextual_refs = ["isso", "aqui", "desse jeito", "dessa forma", "mesmo estilo"]
+        return any(sig in text for sig in contextual_refs)
 
     def _response_cache_key(
         self,
@@ -1136,8 +1415,22 @@ Site gerado automaticamente pela Kemy para: {pedido}
         raw = str(result.get("raw") or "").strip()
         return raw or summary or "Concluido."
 
+    def _infer_preview_url_from_files(self, files: list[dict[str, Any]]) -> str:
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            download = str(item.get("download_url") or "")
+            if not download:
+                continue
+            path = str(item.get("relative_path") or item.get("path") or item.get("name") or "").lower()
+            mime_type = str(item.get("mime_type") or "").lower()
+            if path.endswith(".html") or mime_type == "text/html":
+                return download
+        return ""
+
     def _compact_result_metadata(self, result: dict[str, Any], mode: str | None = None) -> dict[str, Any]:
         files = self._compact_files(result.get("files") or [])
+        preview_url = str(result.get("preview_url") or self._infer_preview_url_from_files(result.get("files") or []))
         metadata = {
             "summary": result.get("summary"),
             "document_title": result.get("document_title"),
@@ -1145,7 +1438,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "provider": result.get("provider"),
             "model": result.get("model"),
             "tools_used": list(result.get("tools_used") or []),
-            "preview_url": result.get("preview_url"),
+            "preview_url": preview_url,
             "project_archive_url": result.get("project_archive_url"),
             "image_url": result.get("image_url"),
             "files": files,
@@ -1168,6 +1461,11 @@ Site gerado automaticamente pela Kemy para: {pedido}
                 "orchestrator_mode": pipeline.get("orchestrator_mode"),
                 "system": pipeline.get("system"),
             }
+        workspace_snapshot = result.get("workspace_snapshot")
+        if not isinstance(workspace_snapshot, dict):
+            workspace_snapshot = self._workspace_snapshot_from_result(result)
+        if isinstance(workspace_snapshot, dict) and workspace_snapshot.get("files"):
+            metadata["workspace_snapshot"] = workspace_snapshot
         return metadata
 
     def _safe_image_data_url(self, value: Any, max_chars: int = 180_000) -> str:
@@ -1215,6 +1513,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
         if not data.get("title") or data.get("title") == "Nova conversa":
             data["title"] = " ".join(pedido.split())[:58] or "Nova conversa"
         site_snapshot = self._site_snapshot_from_result(result)
+        workspace_snapshot = self._workspace_snapshot_from_result(result)
         public_files = self._compact_files(result.get("files") or [])
         result_metadata = self._compact_result_metadata(result, mode=mode)
         assistant_entry = {
@@ -1228,12 +1527,15 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "image_url": result.get("image_url"),
             "image_data_url": self._safe_image_data_url(result.get("image_data_url")),
             "files": public_files,
-            "preview_url": result.get("preview_url"),
+            "preview_url": result.get("preview_url") or self._infer_preview_url_from_files(result.get("files") or []),
             "result": result_metadata,
         }
         if site_snapshot:
             assistant_entry["site_snapshot"] = site_snapshot
             assistant_entry["result"]["site_snapshot"] = site_snapshot
+        if workspace_snapshot:
+            assistant_entry["workspace_snapshot"] = workspace_snapshot
+            assistant_entry["result"]["workspace_snapshot"] = workspace_snapshot
         history.append(assistant_entry)
         memory = data.setdefault("memoria", [])
         fact = self._memory_fact(pedido)
@@ -1304,6 +1606,8 @@ Site gerado automaticamente pela Kemy para: {pedido}
         assistant_metadata["context_snapshot"] = assistant_message.get("context_snapshot", {})
         if assistant_message.get("site_snapshot"):
             assistant_metadata["site_snapshot"] = assistant_message.get("site_snapshot")
+        if assistant_message.get("workspace_snapshot"):
+            assistant_metadata["workspace_snapshot"] = assistant_message.get("workspace_snapshot")
         await self.supabase.insert_message(
             job.session_id,
             "assistant",

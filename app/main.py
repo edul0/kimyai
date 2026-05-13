@@ -310,6 +310,113 @@ def _safe_artifact_name(path_value: str) -> str:
     return str(path_value or "").replace("\\", "/").strip().lstrip("/").replace("/", "__")
 
 
+def _is_textual_mime(mime_type: str) -> bool:
+    lowered = (mime_type or "").lower()
+    return lowered.startswith("text/") or lowered in {
+        "application/json",
+        "application/javascript",
+        "application/xml",
+        "image/svg+xml",
+    }
+
+
+def _workspace_language(path_value: str) -> str:
+    suffix = Path(path_value or "").suffix.lower().lstrip(".")
+    mapping = {
+        "py": "python",
+        "js": "javascript",
+        "ts": "typescript",
+        "jsx": "jsx",
+        "tsx": "tsx",
+        "html": "html",
+        "css": "css",
+        "json": "json",
+        "md": "markdown",
+        "yml": "yaml",
+        "yaml": "yaml",
+        "sql": "sql",
+        "sh": "bash",
+    }
+    return mapping.get(suffix, suffix or "text")
+
+
+def _extract_text_from_file_row(row: dict, max_chars: int = 140000) -> str:
+    mime_type = row.get("mime_type") or ""
+    if not _is_textual_mime(mime_type):
+        return ""
+    content = row.get("content")
+    if content is not None:
+        return str(content)[:max_chars]
+    encoded = row.get("content_base64")
+    if not encoded:
+        return ""
+    try:
+        decoded = base64.b64decode(encoded)
+    except Exception:
+        return ""
+    return decoded.decode("utf-8", errors="replace")[:max_chars]
+
+
+def _workspace_file_payload(
+    file_item: dict,
+    default_job_id: str = "",
+    include_content: bool = True,
+    max_chars: int = 140000,
+) -> dict | None:
+    path_value = str(file_item.get("relative_path") or file_item.get("path") or file_item.get("name") or "").replace("\\", "/").strip().lstrip("/")
+    if not path_value:
+        return None
+    name = str(file_item.get("name") or Path(path_value).name)
+    mime_type = str(file_item.get("mime_type") or guess_type(name)[0] or "text/plain")
+    download_url = str(file_item.get("download_url") or "")
+    job_id = default_job_id
+    if download_url.startswith("/api/artefatos/"):
+        parts = [part for part in download_url.split("/") if part]
+        if len(parts) >= 3:
+            job_id = parts[2]
+    payload = {
+        "path": path_value,
+        "name": name,
+        "mime_type": mime_type,
+        "language": str(file_item.get("language") or _workspace_language(path_value)),
+        "download_url": download_url,
+        "job_id": job_id,
+    }
+    size_value = file_item.get("size_bytes")
+    if size_value is not None:
+        payload["size_bytes"] = size_value
+    if include_content and _is_textual_mime(mime_type):
+        text = str(file_item.get("content") or "")[:max_chars]
+        if text:
+            payload["content"] = text
+    return payload
+
+
+def _latest_workspace_candidate(session_data: dict) -> dict | None:
+    history = session_data.get("historico") or []
+    for item in reversed(history):
+        if item.get("role") != "assistant":
+            continue
+        result = item.get("result") or {}
+        files = item.get("files") or result.get("files") or []
+        site_snapshot = item.get("site_snapshot") or result.get("site_snapshot")
+        workspace_snapshot = item.get("workspace_snapshot") or result.get("workspace_snapshot")
+        preview_url = result.get("preview_url") or item.get("preview_url")
+        if files or site_snapshot or workspace_snapshot or preview_url:
+            return {
+                "mode": item.get("mode") or result.get("mode") or session_data.get("last_mode") or "coding",
+                "summary": result.get("summary") or item.get("content") or "",
+                "artifact_title": result.get("artifact_title") or result.get("document_title") or "",
+                "preview_url": preview_url or "",
+                "project_archive_url": result.get("project_archive_url") or "",
+                "files": files if isinstance(files, list) else [],
+                "site_snapshot": site_snapshot if isinstance(site_snapshot, dict) else None,
+                "workspace_snapshot": workspace_snapshot if isinstance(workspace_snapshot, dict) else None,
+                "updated_at": item.get("ts") or session_data.get("updated_at"),
+            }
+    return None
+
+
 def _match_remote_artifact(rows: list[dict], filename: str) -> dict | None:
     for row in reversed(rows):
         candidates = {
@@ -501,6 +608,179 @@ async def contexto_sessao(sid: str, request: Request):
     }
 
 
+@app.get("/api/sessao/{sid}/workspace")
+async def workspace_sessao(sid: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    data = await _load_session_for_owner(sid, owner)
+    if not data:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if data.get("owner") and data.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+
+    candidate = _latest_workspace_candidate(data) or {}
+    files_by_path: dict[str, dict] = {}
+    source_job_id = ""
+
+    def add_files(items: list[dict], default_job_id: str = "", include_content: bool = True) -> None:
+        for raw_item in items or []:
+            if not isinstance(raw_item, dict):
+                continue
+            payload = _workspace_file_payload(
+                raw_item,
+                default_job_id=default_job_id,
+                include_content=include_content,
+            )
+            if not payload:
+                continue
+            path_key = payload["path"].lower()
+            existing = files_by_path.get(path_key)
+            if not existing:
+                files_by_path[path_key] = payload
+                continue
+            if not existing.get("download_url") and payload.get("download_url"):
+                existing["download_url"] = payload["download_url"]
+            if not existing.get("job_id") and payload.get("job_id"):
+                existing["job_id"] = payload["job_id"]
+            if not existing.get("content") and payload.get("content"):
+                existing["content"] = payload["content"]
+
+    add_files(candidate.get("files") or [], include_content=True)
+
+    workspace_snapshot = candidate.get("workspace_snapshot") if isinstance(candidate.get("workspace_snapshot"), dict) else {}
+    for item in workspace_snapshot.get("files") or []:
+        if not isinstance(item, dict):
+            continue
+        add_files(
+            [
+                {
+                    "relative_path": item.get("path") or item.get("relative_path") or item.get("name"),
+                    "name": Path(str(item.get("path") or item.get("relative_path") or item.get("name") or "")).name,
+                    "mime_type": guess_type(str(item.get("path") or item.get("relative_path") or item.get("name") or ""))[0] or "text/plain",
+                    "language": _workspace_language(str(item.get("path") or item.get("relative_path") or item.get("name") or "")),
+                    "content": item.get("content"),
+                }
+            ],
+            include_content=True,
+        )
+
+    site_snapshot = candidate.get("site_snapshot") if isinstance(candidate.get("site_snapshot"), dict) else {}
+    for item in site_snapshot.get("files") or []:
+        if not isinstance(item, dict):
+            continue
+        add_files(
+            [
+                {
+                    "relative_path": item.get("path"),
+                    "name": Path(str(item.get("path") or "")).name,
+                    "mime_type": guess_type(str(item.get("path") or ""))[0] or "text/plain",
+                    "language": _workspace_language(str(item.get("path") or "")),
+                    "content": item.get("content"),
+                }
+            ],
+            include_content=True,
+        )
+
+    jobs_for_session = await _session_jobs(sid)
+    for job in reversed(jobs_for_session):
+        result = job.get("resultado") or {}
+        files = result.get("files") or []
+        if not isinstance(files, list) or not files:
+            continue
+        source_job_id = str(job.get("job_id") or source_job_id or "")
+        add_files(files, default_job_id=source_job_id, include_content=True)
+        if not candidate.get("preview_url"):
+            candidate["preview_url"] = result.get("preview_url") or ""
+        if not candidate.get("project_archive_url"):
+            candidate["project_archive_url"] = result.get("project_archive_url") or ""
+        if not candidate.get("summary"):
+            candidate["summary"] = result.get("summary") or ""
+        if not candidate.get("artifact_title"):
+            candidate["artifact_title"] = result.get("artifact_title") or result.get("document_title") or ""
+        if not candidate.get("mode"):
+            candidate["mode"] = job.get("modo") or "coding"
+        break
+
+    remote_cache: dict[str, list[dict]] = {}
+
+    async def load_remote_rows(job_id: str) -> list[dict]:
+        if not job_id:
+            return []
+        if job_id not in remote_cache:
+            remote_cache[job_id] = await jobs.supabase.list_generated_files(job_id)
+        return remote_cache[job_id]
+
+    for payload in files_by_path.values():
+        if payload.get("content"):
+            continue
+        if not _is_textual_mime(payload.get("mime_type") or ""):
+            continue
+        job_id = str(payload.get("job_id") or source_job_id or "")
+        if not job_id:
+            continue
+        rows = await load_remote_rows(job_id)
+        row = _match_remote_artifact(rows, str(payload.get("name") or ""))
+        if not row:
+            row = _match_remote_artifact(rows, _safe_artifact_name(str(payload.get("path") or "")))
+        if not row:
+            continue
+        text = _extract_text_from_file_row(row)
+        if text:
+            payload["content"] = text
+            if not payload.get("download_url"):
+                payload["download_url"] = str(row.get("download_url") or "")
+
+    priority_names = [
+        "preview.html",
+        "index.html",
+        "src/main.tsx",
+        "src/app.tsx",
+        "src/styles.css",
+        "src/index.css",
+        "app.py",
+        "main.py",
+        "readme.md",
+        "package.json",
+    ]
+
+    def rank_file(item: dict) -> tuple[int, str]:
+        lowered = str(item.get("path") or "").lower()
+        for index, key in enumerate(priority_names):
+            if lowered == key:
+                return index, lowered
+        return len(priority_names) + 1, lowered
+
+    ordered = sorted(files_by_path.values(), key=rank_file)
+    content_budget = 420_000
+    returned_files: list[dict] = []
+    for item in ordered[:40]:
+        copied = dict(item)
+        content = str(copied.get("content") or "")
+        if content:
+            allowed = min(140_000, content_budget)
+            if allowed <= 0:
+                copied["content"] = ""
+            else:
+                copied["content"] = content[:allowed]
+                content_budget -= len(copied["content"])
+        returned_files.append(copied)
+
+    return {
+        "session_id": sid,
+        "ready": bool(returned_files),
+        "mode": candidate.get("mode") or data.get("last_mode") or "coding",
+        "summary": candidate.get("summary") or "",
+        "artifact_title": candidate.get("artifact_title") or "",
+        "preview_url": candidate.get("preview_url") or "",
+        "project_archive_url": candidate.get("project_archive_url") or "",
+        "context_summary": (data.get("contexto_compacto") or {}).get("summary") or "",
+        "source_job_id": source_job_id,
+        "updated_at": candidate.get("updated_at") or data.get("updated_at") or "",
+        "files": returned_files,
+        "file_count": len(returned_files),
+        "file_count_total": len(files_by_path),
+    }
+
+
 @app.get("/api/sessao/listar")
 async def listar_sessoes(request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
@@ -534,10 +814,13 @@ async def listar_sessoes(request: Request):
             remote_messages = await supabase_auth.list_messages(session_id)
             remote_history = []
             compact_context = {}
+            last_mode = ""
             for item in remote_messages:
                 metadata = item.get("metadata") or {}
                 files = metadata.get("files", [])
                 compact_context = metadata.get("context_snapshot") or compact_context
+                if metadata.get("mode"):
+                    last_mode = str(metadata.get("mode"))
                 remote_history.append(
                     {
                         "ts": item.get("created_at") or utcnow(),
@@ -554,6 +837,7 @@ async def listar_sessoes(request: Request):
                         "preview_url": metadata.get("preview_url"),
                         "mode": metadata.get("mode"),
                         "site_snapshot": metadata.get("site_snapshot"),
+                        "workspace_snapshot": metadata.get("workspace_snapshot"),
                         "result": {
                             "summary": metadata.get("summary"),
                             "image_url": metadata.get("image_url"),
@@ -565,6 +849,7 @@ async def listar_sessoes(request: Request):
                             "preview_url": metadata.get("preview_url"),
                             "mode": metadata.get("mode"),
                             "site_snapshot": metadata.get("site_snapshot"),
+                            "workspace_snapshot": metadata.get("workspace_snapshot"),
                         },
                     }
                 )
@@ -576,6 +861,7 @@ async def listar_sessoes(request: Request):
                     "title": session.get("title") or "Nova conversa",
                     "historico": remote_history,
                     "contexto_compacto": compact_context,
+                    "last_mode": last_mode or existing.get("last_mode"),
                     "created_at": session.get("created_at"),
                     "updated_at": session.get("updated_at"),
                 }
