@@ -79,6 +79,8 @@ def _cache_session_payload(payload: dict) -> dict:
         "historico": payload.get("historico", []),
         "memoria": payload.get("memoria", []),
         "contexto_compacto": payload.get("contexto_compacto") or {},
+        "last_mode": payload.get("last_mode"),
+        "last_github_repo": payload.get("last_github_repo"),
         "created_at": payload.get("created_at") or utcnow(),
         "updated_at": payload.get("updated_at") or payload.get("created_at") or utcnow(),
     }
@@ -217,10 +219,16 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
     messages = await supabase_auth.list_messages(session_id)
     historico = []
     compact_context = {}
+    last_mode = ""
+    last_github_repo = ""
     for item in messages:
         metadata = item.get("metadata") or {}
         files = metadata.get("files", [])
         compact_context = metadata.get("context_snapshot") or compact_context
+        if metadata.get("mode"):
+            last_mode = str(metadata.get("mode"))
+        if metadata.get("github_repo"):
+            last_github_repo = str(metadata.get("github_repo"))
         historico.append(
             {
                 "ts": item.get("created_at") or utcnow(),
@@ -237,6 +245,8 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                 "preview_url": metadata.get("preview_url"),
                 "mode": metadata.get("mode"),
                 "site_snapshot": metadata.get("site_snapshot"),
+                "workspace_snapshot": metadata.get("workspace_snapshot"),
+                "github_repo": metadata.get("github_repo"),
                 "result": {
                     "summary": metadata.get("summary"),
                     "image_url": metadata.get("image_url"),
@@ -248,6 +258,8 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
                     "preview_url": metadata.get("preview_url"),
                     "mode": metadata.get("mode"),
                     "site_snapshot": metadata.get("site_snapshot"),
+                    "workspace_snapshot": metadata.get("workspace_snapshot"),
+                    "github_repo": metadata.get("github_repo"),
                 },
             }
         )
@@ -258,6 +270,8 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
             "title": session.get("title") or "Nova conversa",
             "historico": historico,
             "contexto_compacto": compact_context,
+            "last_mode": last_mode,
+            "last_github_repo": last_github_repo,
             "created_at": session.get("created_at"),
             "updated_at": session.get("updated_at"),
         }
@@ -414,7 +428,19 @@ def _latest_workspace_candidate(session_data: dict) -> dict | None:
                 "workspace_snapshot": workspace_snapshot if isinstance(workspace_snapshot, dict) else None,
                 "updated_at": item.get("ts") or session_data.get("updated_at"),
             }
+        # Nao recuar para respostas antigas com preview quando a ultima resposta
+        # ja nao trouxe artifact/workspace; evita abrir template fora de contexto.
+        return None
     return None
+
+
+def _assistant_has_workspace_signal(item: dict) -> bool:
+    result = item.get("result") or {}
+    files = item.get("files") or result.get("files") or []
+    site_snapshot = item.get("site_snapshot") or result.get("site_snapshot")
+    workspace_snapshot = item.get("workspace_snapshot") or result.get("workspace_snapshot")
+    preview_url = item.get("preview_url") or result.get("preview_url")
+    return bool(files or site_snapshot or workspace_snapshot or preview_url)
 
 
 def _match_remote_artifact(rows: list[dict], filename: str) -> dict | None:
@@ -680,25 +706,30 @@ async def workspace_sessao(sid: str, request: Request):
             include_content=True,
         )
 
-    jobs_for_session = await _session_jobs(sid)
-    for job in reversed(jobs_for_session):
-        result = job.get("resultado") or {}
-        files = result.get("files") or []
-        if not isinstance(files, list) or not files:
-            continue
-        source_job_id = str(job.get("job_id") or source_job_id or "")
-        add_files(files, default_job_id=source_job_id, include_content=True)
-        if not candidate.get("preview_url"):
-            candidate["preview_url"] = result.get("preview_url") or ""
-        if not candidate.get("project_archive_url"):
-            candidate["project_archive_url"] = result.get("project_archive_url") or ""
-        if not candidate.get("summary"):
-            candidate["summary"] = result.get("summary") or ""
-        if not candidate.get("artifact_title"):
-            candidate["artifact_title"] = result.get("artifact_title") or result.get("document_title") or ""
-        if not candidate.get("mode"):
-            candidate["mode"] = job.get("modo") or "coding"
-        break
+    history = data.get("historico") or []
+    latest_assistant = next((item for item in reversed(history) if item.get("role") == "assistant"), None)
+    allow_job_backfill = latest_assistant is None or _assistant_has_workspace_signal(latest_assistant)
+
+    if allow_job_backfill:
+        jobs_for_session = await _session_jobs(sid)
+        for job in reversed(jobs_for_session):
+            result = job.get("resultado") or {}
+            files = result.get("files") or []
+            if not isinstance(files, list) or not files:
+                continue
+            source_job_id = str(job.get("job_id") or source_job_id or "")
+            add_files(files, default_job_id=source_job_id, include_content=True)
+            if not candidate.get("preview_url"):
+                candidate["preview_url"] = result.get("preview_url") or ""
+            if not candidate.get("project_archive_url"):
+                candidate["project_archive_url"] = result.get("project_archive_url") or ""
+            if not candidate.get("summary"):
+                candidate["summary"] = result.get("summary") or ""
+            if not candidate.get("artifact_title"):
+                candidate["artifact_title"] = result.get("artifact_title") or result.get("document_title") or ""
+            if not candidate.get("mode"):
+                candidate["mode"] = job.get("modo") or "coding"
+            break
 
     remote_cache: dict[str, list[dict]] = {}
 
@@ -815,12 +846,15 @@ async def listar_sessoes(request: Request):
             remote_history = []
             compact_context = {}
             last_mode = ""
+            last_github_repo = ""
             for item in remote_messages:
                 metadata = item.get("metadata") or {}
                 files = metadata.get("files", [])
                 compact_context = metadata.get("context_snapshot") or compact_context
                 if metadata.get("mode"):
                     last_mode = str(metadata.get("mode"))
+                if metadata.get("github_repo"):
+                    last_github_repo = str(metadata.get("github_repo"))
                 remote_history.append(
                     {
                         "ts": item.get("created_at") or utcnow(),
@@ -838,6 +872,7 @@ async def listar_sessoes(request: Request):
                         "mode": metadata.get("mode"),
                         "site_snapshot": metadata.get("site_snapshot"),
                         "workspace_snapshot": metadata.get("workspace_snapshot"),
+                        "github_repo": metadata.get("github_repo"),
                         "result": {
                             "summary": metadata.get("summary"),
                             "image_url": metadata.get("image_url"),
@@ -850,6 +885,7 @@ async def listar_sessoes(request: Request):
                             "mode": metadata.get("mode"),
                             "site_snapshot": metadata.get("site_snapshot"),
                             "workspace_snapshot": metadata.get("workspace_snapshot"),
+                            "github_repo": metadata.get("github_repo"),
                         },
                     }
                 )
@@ -862,6 +898,7 @@ async def listar_sessoes(request: Request):
                     "historico": remote_history,
                     "contexto_compacto": compact_context,
                     "last_mode": last_mode or existing.get("last_mode"),
+                    "last_github_repo": last_github_repo or existing.get("last_github_repo"),
                     "created_at": session.get("created_at"),
                     "updated_at": session.get("updated_at"),
                 }
@@ -932,7 +969,8 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
     else:
         if data.get("owner") and data.get("owner") != owner:
             raise HTTPException(403, "Sessao de outro usuario.")
-    session_snapshot = jobs.register_user_turn(sid, cmd.mensagem, owner=owner)
+    selected_repo = (cmd.github_repo or (data or {}).get("last_github_repo") or "").strip() or None
+    session_snapshot = jobs.register_user_turn(sid, cmd.mensagem, owner=owner, github_repo=selected_repo)
     last_user = (session_snapshot.get("historico") or [])[-1] if session_snapshot.get("historico") else {}
     await jobs.supabase.insert_session(
         sid,
@@ -949,6 +987,7 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
             "request_parts": last_user.get("request_parts", []),
             "context_snapshot": last_user.get("context_snapshot", {}),
             "modo": cmd.modo,
+            "github_repo": selected_repo,
             "queued_at": utcnow(),
         },
     )
@@ -957,7 +996,7 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
         cmd.mensagem,
         cmd.modo,
         attachments=[item.model_dump() for item in cmd.anexos],
-        github_repo=cmd.github_repo,
+        github_repo=selected_repo,
     )
     background_tasks.add_task(jobs.run, job.job_id)
     return {

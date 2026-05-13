@@ -49,6 +49,37 @@ SITE_MARKERS = [
     "saas",
     "crud",
 ]
+REPO_MARKERS = [
+    "git",
+    "github",
+    "repositorio",
+    "repository",
+    "repo",
+    "branch",
+    "commit",
+    "pull request",
+    "pr",
+    "merge",
+    "deploy",
+]
+MAINTENANCE_MARKERS = [
+    "arrume",
+    "arrumar",
+    "corrija",
+    "corrigir",
+    "conserte",
+    "consertar",
+    "ajuste",
+    "ajustar",
+    "refatore",
+    "refatorar",
+    "debug",
+    "fix",
+    "melhore",
+    "melhorar",
+    "atualize",
+    "atualizar",
+]
 CODE_MARKERS = [
     "codigo",
     "api",
@@ -217,6 +248,12 @@ def classify_request_mode(message: str, current_mode: str = "coding", session_da
     explicit = _explicit_mode_from_text(text)
     if explicit:
         return explicit
+    linked_repo = str((session_data or {}).get("last_github_repo") or "").strip()
+    repo_bound_maintenance = bool(linked_repo) and _has_any(text, MAINTENANCE_MARKERS) and (
+        _has_any(text, CODE_MARKERS + SITE_MARKERS) or len(text.split()) <= 20
+    )
+    if repo_bound_maintenance:
+        return "coding"
     if _is_followup(text, session_data):
         previous = _previous_mode(session_data)
         if previous:
@@ -267,6 +304,10 @@ def _explicit_mode_from_text(text: str) -> str | None:
         return "documento"
     if _has_any(text, DOCUMENT_MARKERS):
         return "documento"
+    repo_maintenance = _has_any(text, REPO_MARKERS) and _has_any(text, MAINTENANCE_MARKERS)
+    mixed_site_code_fix = _has_any(text, SITE_MARKERS) and _has_any(text, CODE_MARKERS) and _has_any(text, MAINTENANCE_MARKERS)
+    if repo_maintenance or mixed_site_code_fix:
+        return "coding"
     if _has_any(text, SITE_MARKERS):
         return "site"
     if _has_any(text, CODE_MARKERS):

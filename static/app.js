@@ -525,14 +525,10 @@ async function openSession(sessionId, options = {}) {
       if (item.resumo) appendMessage("assistant", item.resumo);
     });
   }
-  const lastAssistantWithPreview = [...history].reverse().find((item) => {
-    if (item.role !== "assistant") return false;
-    const target = item.result || item;
-    if (!hasPreviewSignal(target, item.content || "")) return false;
-    return Boolean(extractPreviewHtml(target, item.content || "") || extractPreviewUrl(target));
-  });
-  const previewHtml = lastAssistantWithPreview ? extractPreviewHtml(lastAssistantWithPreview.result || lastAssistantWithPreview, lastAssistantWithPreview.content || "") : "";
-  const previewUrl = lastAssistantWithPreview ? extractPreviewUrl(lastAssistantWithPreview.result || lastAssistantWithPreview) : "";
+  const latestAssistant = [...history].reverse().find((item) => item.role === "assistant");
+  const latestTarget = latestAssistant ? (latestAssistant.result || latestAssistant) : null;
+  const previewHtml = latestTarget ? extractPreviewHtml(latestTarget, latestAssistant?.content || "") : "";
+  const previewUrl = latestTarget ? extractPreviewUrl(latestTarget) : "";
   if (previewHtml) {
     showPreview(previewHtml);
   } else if (previewUrl) {
@@ -695,7 +691,7 @@ async function ensureSession(options = {}) {
   }
 }
 
-function resolveRequestedMode(text) {
+function resolveRequestedModeLegacy(text) {
   const selectedMode = $("mode").value;
   if (selectedMode !== "coding") return selectedMode;
   const lowered = String(text || "").toLowerCase();
@@ -707,6 +703,33 @@ function resolveRequestedMode(text) {
   if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
   if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
   if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
+  const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
+  if (state.lastResultMode === "site" && hasSiteFollowupSignal) return "site";
+  return selectedMode;
+}
+
+function resolveRequestedMode(text) {
+  const selectedMode = $("mode").value;
+  if (selectedMode !== "coding") return selectedMode;
+  const lowered = String(text || "").toLowerCase();
+  const repoSelected = Boolean(($("gitRepo")?.value || "").trim());
+  const imageMarkers = ["gere uma imagem", "gera uma imagem", "crie uma imagem", "desenhe", "ilustre", "imagem de", "foto de", "logo de", "banner de"];
+  const slideMarkers = ["slide", "slides", "deck", "ppt", "pptx", "powerpoint", "apresentacao", "apresentação"];
+  const documentMarkers = [".docx", "docx", "docxs", ".pdf", "pdf", ".md", "markdown", "documento", "abnt", "relatorio", "relatório", "proposta", "contrato"];
+  const siteMarkers = ["site", "landing page", "dashboard", "frontend", "pagina", "página", "app web", "web app", "html", "tailwind", "saas", "crud"];
+  const codeMarkers = ["codigo", "código", "code", "bug", "erro", "api", "backend", "fastapi", "react", "vite", "typescript", "github", "git", "supabase", "sql", "commit", "branch", "pull request", "pr"];
+  const repoMarkers = ["git", "github", "repositorio", "repositório", "repo", "branch", "commit", "pull request", "pr", "merge", "deploy"];
+  const maintenanceMarkers = ["arrume", "arrumar", "corrija", "corrigir", "conserte", "consertar", "ajuste", "ajustar", "refatore", "refatorar", "fix", "debug", "melhore", "melhorar", "atualize", "atualizar"];
+  const siteFollowupMarkers = ["mude", "altere", "ajuste", "refaca", "refaça", "melhore", "evolua", "troque", "adicione", "implemente", "deixe", "aplique"];
+  const repoMaintenance = (repoSelected || repoMarkers.some((marker) => lowered.includes(marker)))
+    && maintenanceMarkers.some((marker) => lowered.includes(marker));
+  if (imageMarkers.some((marker) => lowered.includes(marker))) return "imagem";
+  if (slideMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (documentMarkers.some((marker) => lowered.includes(marker))) return "documento";
+  if (repoMaintenance && (codeMarkers.some((marker) => lowered.includes(marker)) || siteMarkers.some((marker) => lowered.includes(marker)))) {
+    return "coding";
+  }
   if (siteMarkers.some((marker) => lowered.includes(marker))) return "site";
   const hasSiteFollowupSignal = siteFollowupMarkers.some((marker) => lowered.includes(marker)) || lowered.split(/\s+/).length <= 18;
   if (state.lastResultMode === "site" && hasSiteFollowupSignal) return "site";
@@ -1077,7 +1100,12 @@ function inferLanguage(name) {
   return map[suffix] || suffix;
 }
 
+function resultModeHint(result = {}) {
+  return String(result?.mode || result?.pipeline?.orchestrator_mode || result?.execution_plan?.mode || "").toLowerCase();
+}
+
 function hasPreviewSignal(result, fallbackText = "") {
+  const modeHint = resultModeHint(result);
   const files = result?.files || [];
   const hasHtmlFile = files.some((file) => {
     const name = String(file.relative_path || file.name || file.path || "").toLowerCase();
@@ -1089,19 +1117,15 @@ function hasPreviewSignal(result, fallbackText = "") {
   const hasArtifactTitle = Boolean(result?.artifact_title);
   const rawSource = decodeHtmlEntities([result?.raw, result?.summary].filter(Boolean).join("\n"));
   const hasArtifactTag = /<kemy_artifact\b/i.test(rawSource);
-  const hasHtmlDocument = /<!doctype html|<html\b/i.test(rawSource);
-  const fallbackSource = decodeHtmlEntities(String(fallbackText || ""));
-  const fallbackHasArtifact = /<kemy_artifact\b/i.test(fallbackSource);
-  const fallbackHasCompleteHtml = /<!doctype html|<html\b/i.test(fallbackSource);
+  if (modeHint && modeHint !== "site") {
+    return Boolean(hasHtmlFile || hasPreviewUrl || hasArchive || hasArtifactTitle);
+  }
   return Boolean(
     hasHtmlFile ||
     hasPreviewUrl ||
     hasArchive ||
     hasArtifactTitle ||
-    hasArtifactTag ||
-    hasHtmlDocument ||
-    fallbackHasArtifact ||
-    fallbackHasCompleteHtml
+    hasArtifactTag
   );
 }
 
@@ -1159,7 +1183,7 @@ function extractPreviewHtml(result, fallbackText = "") {
   fromArtifact = normalizePreviewHtml(artifactHtml?.content || "");
   if (fromArtifact && !looksLikeViteShellHtml(fromArtifact)) return fromArtifact;
 
-  const shouldUseFence = previewSignalFound || /<kemy_artifact\b/i.test(String(fallbackText || ""));
+  const shouldUseFence = previewSignalFound;
   if (shouldUseFence) {
     const match = String(fallbackText || "").match(/```html\s*([\s\S]*?)```/i);
     if (match) {

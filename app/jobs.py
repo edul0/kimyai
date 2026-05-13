@@ -66,18 +66,28 @@ class JobManager:
             pedido=pedido,
             modo=effective_mode,
             anexos=normalized,
+            github_repo=(github_repo or "").strip() or None,
             created_at=now,
             updated_at=now,
         )
         self.save(job)
         return job
 
-    def register_user_turn(self, session_id: str, pedido: str, owner: str | None = None) -> dict[str, Any]:
+    def register_user_turn(
+        self,
+        session_id: str,
+        pedido: str,
+        owner: str | None = None,
+        github_repo: str | None = None,
+    ) -> dict[str, Any]:
         key = f"session:{session_id}"
         now = utcnow()
         data = self.storage.get_json(key, {"session_id": session_id, "historico": [], "created_at": now})
         if owner and not data.get("owner"):
             data["owner"] = owner
+        repo_value = (github_repo or "").strip()
+        if repo_value:
+            data["last_github_repo"] = repo_value
         compact_context = build_context_snapshot(data.get("contexto_compacto") or {}, pedido)
         request_parts = split_request_parts(pedido)
         history = data.setdefault("historico", [])
@@ -151,6 +161,16 @@ class JobManager:
                 refined_prompt=refined_prompt,
                 execution_plan=execution_plan.as_prompt(),
             )
+            if job.github_repo:
+                repo_hint = self._repo_display_name(job.github_repo)
+                prompt = (
+                    f"{prompt}\n\n"
+                    "[REPOSITORIO ALVO]\n"
+                    f"- URL: {job.github_repo}\n"
+                    f"- Nome: {repo_hint}\n"
+                    "- Regra obrigatoria: trabalhar neste repositorio/alvo e evitar gerar template generico fora do contexto.\n"
+                    "- Se o pedido for de correcao/manutencao, priorize patch de codigo (modo coding) em vez de criar um site novo.\n"
+                )
             site_context = ""
             if job.modo == "site" and self._is_site_edit_request(job.pedido, session_data):
                 site_context = self._build_site_edit_context(job, session_data)
@@ -251,6 +271,8 @@ class JobManager:
                 "system": "router-runtime",
                 "execution_plan": execution_plan_data,
             }
+            if job.github_repo:
+                result["github_repo"] = job.github_repo
             result["execution_plan"] = execution_plan_data
             tools_used = list(dict.fromkeys((result.get("tools_used") or []) + (tool_context.get("used") or [])))
             if cached_response:
@@ -797,6 +819,10 @@ class JobManager:
         if any(sig in text for sig in new_project_signals):
             return False
         edit_signals = [
+            "arruma",
+            "arrume",
+            "conserta",
+            "conserte",
             "muda",
             "mude",
             "altera",
@@ -1353,6 +1379,16 @@ Site gerado automaticamente pela Kemy para: {pedido}
             return "Mesa Reservada"
         return (text[:48].strip() or "Site Kemy").title()
 
+    def _repo_display_name(self, repo_url: str) -> str:
+        value = str(repo_url or "").strip().rstrip("/")
+        if not value:
+            return "repositorio"
+        if value.endswith(".git"):
+            value = value[:-4]
+        if "github.com/" in value:
+            return value.split("github.com/", 1)[1]
+        return value.split("/")[-1] or value
+
     def _artifact_language(self, path: str) -> str:
         suffix = Path(path).suffix.lower().lstrip(".")
         mapping = {
@@ -1441,6 +1477,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "preview_url": preview_url,
             "project_archive_url": result.get("project_archive_url"),
             "image_url": result.get("image_url"),
+            "github_repo": result.get("github_repo"),
             "files": files,
         }
         if mode:
@@ -1526,6 +1563,7 @@ Site gerado automaticamente pela Kemy para: {pedido}
             "tools_used": result.get("tools_used", []),
             "image_url": result.get("image_url"),
             "image_data_url": self._safe_image_data_url(result.get("image_data_url")),
+            "github_repo": result.get("github_repo"),
             "files": public_files,
             "preview_url": result.get("preview_url") or self._infer_preview_url_from_files(result.get("files") or []),
             "result": result_metadata,
@@ -1571,6 +1609,10 @@ Site gerado automaticamente pela Kemy para: {pedido}
         return classify_request_mode(message, current_mode, session_data)
 
     async def _finish_job(self, job: JobState, result: dict[str, Any]) -> None:
+        result = dict(result or {})
+        result.setdefault("mode", job.modo)
+        if job.github_repo and not result.get("github_repo"):
+            result["github_repo"] = job.github_repo
         self._event(job, "Kemy", "Finalizando mensagem.", 92)
         job.status = "done"
         job.etapa = "Concluido"
