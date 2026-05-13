@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 import textwrap
@@ -120,39 +121,47 @@ class LLMRouter:
         attempts = []
         for provider in route:
             current = ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
-            started = time.perf_counter()
-            try:
-                if provider == "groq":
-                    result = await self._groq(prompt, current, mode)
-                elif provider == "gemini":
-                    result = await self._gemini(prompt, current, mode, visual_items=visual_items)
-                elif provider == "cerebras":
-                    result = await self._cerebras(prompt, current, mode)
-                elif provider == "openrouter":
-                    result = await self._openrouter(prompt, current, mode)
-                elif provider == "openai":
-                    result = await self._openai(prompt, current, mode)
-                else:
-                    continue
-                latency_ms = (time.perf_counter() - started) * 1000
-                self._record_success(mode, provider, latency_ms)
-                result = self._apply_provider_notice(result, provider)
-                result["fallback_chain"] = attempts + [{"provider": provider, "status": "ok"}]
-                result["route_debug"] = self.route_debug(mode)
-                return result
-            except Exception as exc:
-                latency_ms = (time.perf_counter() - started) * 1000
-                self._record_failure(mode, provider, latency_ms, exc)
-                self._track_provider_failure(provider, exc)
-                attempts.append(
-                    {
-                        "provider": provider,
-                        "status": "failed",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:240],
-                    }
-                )
-                continue
+            max_attempts = max(1, int(self.settings.llm_retry_attempts or 1))
+            for attempt_idx in range(max_attempts):
+                started = time.perf_counter()
+                try:
+                    if provider == "groq":
+                        result = await self._groq(prompt, current, mode)
+                    elif provider == "gemini":
+                        result = await self._gemini(prompt, current, mode, visual_items=visual_items)
+                    elif provider == "cerebras":
+                        result = await self._cerebras(prompt, current, mode)
+                    elif provider == "openrouter":
+                        result = await self._openrouter(prompt, current, mode)
+                    elif provider == "openai":
+                        result = await self._openai(prompt, current, mode)
+                    else:
+                        continue
+                    result = self._normalize_provider_result(result)
+                    latency_ms = (time.perf_counter() - started) * 1000
+                    self._record_success(mode, provider, latency_ms)
+                    result = self._apply_provider_notice(result, provider)
+                    result["fallback_chain"] = attempts + [{"provider": provider, "status": "ok", "attempt": attempt_idx + 1}]
+                    result["route_debug"] = self.route_debug(mode)
+                    return result
+                except Exception as exc:
+                    latency_ms = (time.perf_counter() - started) * 1000
+                    self._record_failure(mode, provider, latency_ms, exc)
+                    self._track_provider_failure(provider, exc)
+                    retryable = self._is_retryable_error(exc)
+                    attempts.append(
+                        {
+                            "provider": provider,
+                            "status": "retry" if retryable and attempt_idx < (max_attempts - 1) else "failed",
+                            "attempt": attempt_idx + 1,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:240],
+                        }
+                    )
+                    if retryable and attempt_idx < (max_attempts - 1):
+                        await asyncio.sleep(min(0.35 * (attempt_idx + 1), 0.9))
+                        continue
+                    break
 
         offline = self._mock_response(prompt, mode, ProviderChoice("mock", "local-planner", "free providers exhausted"), has_visual=has_visual)
         offline = self._apply_provider_notice(offline, "mock")
@@ -356,7 +365,7 @@ class LLMRouter:
             ],
             "temperature": 0.1,
         }
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=self._http_timeout()) as client:
             response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
@@ -382,7 +391,14 @@ class LLMRouter:
                 if item.get("data") and item.get("mime_type")
             )
         try:
-            response = client.models.generate_content(model=self.settings.gemini_primary_model, contents=contents)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=self.settings.gemini_primary_model,
+                    contents=contents,
+                ),
+                timeout=max(8, int(self.settings.llm_request_timeout_seconds or 45)),
+            )
             self.gemini_state = {
                 "active_model": self.settings.gemini_primary_model,
                 "fallback_model": self.settings.gemini_fallback_model,
@@ -396,7 +412,14 @@ class LLMRouter:
             blocked = any(marker in error_text for marker in ["not found", "permission", "quota", "unsupported", "access"])
             if not blocked:
                 raise
-            response = client.models.generate_content(model=self.settings.gemini_fallback_model, contents=contents)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=self.settings.gemini_fallback_model,
+                    contents=contents,
+                ),
+                timeout=max(8, int(self.settings.llm_request_timeout_seconds or 45)),
+            )
             self.gemini_state = {
                 "active_model": self.settings.gemini_fallback_model,
                 "fallback_model": self.settings.gemini_fallback_model,
@@ -420,7 +443,7 @@ class LLMRouter:
             ],
             "temperature": 0.1,
         }
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=self._http_timeout()) as client:
             response = await client.post("https://api.cerebras.ai/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
@@ -438,7 +461,7 @@ class LLMRouter:
             ],
             "temperature": 0.1,
         }
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=self._http_timeout()) as client:
             response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
@@ -456,7 +479,7 @@ class LLMRouter:
             ],
             "temperature": 0.1,
         }
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=self._http_timeout()) as client:
             response = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
@@ -577,6 +600,36 @@ class LLMRouter:
             503: "Aviso de sistema: o OpenRouter gratuito ficou indisponivel agora. A Kemy continua com os outros provedores gratuitos.",
         }
         return messages.get(status_code, "Aviso de sistema: o OpenRouter gratuito ficou indisponivel temporariamente.")
+
+    def _http_timeout(self) -> float:
+        return float(max(8, int(self.settings.llm_request_timeout_seconds or 45)))
+
+    def _normalize_provider_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(result or {})
+        raw = str(payload.get("raw") or "").strip()
+        if not raw:
+            raise ValueError("provider returned empty response")
+        payload.setdefault("files", [])
+        payload.setdefault("diff", raw)
+        return payload
+
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+            return True
+        markers = [
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "connection reset",
+            "connect error",
+            "read error",
+            "server disconnected",
+            "429",
+            "503",
+        ]
+        return any(marker in message for marker in markers)
 
     def _extract_user_request(self, prompt: str) -> str:
         marker = "Pedido do usuario:"
