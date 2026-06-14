@@ -1,0 +1,49 @@
+name: Build Kemy Desktop (.exe)
+
+# Gera o executavel Windows do assistente de voz local.
+# Roda no runner windows-latest (PyInstaller nao faz cross-compile a partir do Linux).
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - claude/happy-sagan-kqbec4
+    paths:
+      - "local_app/**"
+      - "app/**"
+      - "static/**"
+      - ".github/workflows/build-exe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install -r requirements-cloud.txt
+          python -m pip install -r local_app/requirements.txt
+
+      - name: Build .exe
+        shell: pwsh
+        run: .\local_app\build_exe.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KemyDesktop-windows
+          path: dist/KemyDesktop
+          if-no-files-found: error
+          retention-days: 30

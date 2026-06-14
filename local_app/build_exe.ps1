@@ -9,6 +9,7 @@ Set-Location (Join-Path $PSScriptRoot "..")
 Write-Host "[Kemy] Gerando .exe local (assistente de voz)..." -ForegroundColor Cyan
 
 & $Python -m pip install --upgrade pip pyinstaller
+& $Python -m pip install -r requirements-cloud.txt
 & $Python -m pip install -r local_app\requirements.txt
 
 & $Python -m PyInstaller `
@@ -16,9 +17,14 @@ Write-Host "[Kemy] Gerando .exe local (assistente de voz)..." -ForegroundColor C
   --clean `
   --name "KemyDesktop" `
   --windowed `
+  --paths "." `
   --add-data "static;static" `
-  --add-data "app;app" `
+  --add-data "conhecimento;conhecimento" `
   --add-data ".env.example;." `
+  --collect-submodules "app" `
+  --collect-submodules "uvicorn" `
+  --collect-submodules "anyio" `
+  --hidden-import "agencia_kemy" `
   --hidden-import "pyttsx3.drivers" `
   --hidden-import "pyttsx3.drivers.sapi5" `
   --hidden-import "comtypes" `

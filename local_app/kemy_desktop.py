@@ -32,7 +32,11 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+if getattr(sys, "frozen", False):
+    # Dentro do .exe (PyInstaller): os dados ficam em _MEIPASS.
+    ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+else:
+    ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_USER = os.environ.get("KEMY_AUTH_USER", "admin")
@@ -94,7 +98,13 @@ def run_server(host: str, port: int) -> None:
     os.chdir(ROOT_DIR)
     import uvicorn
 
-    uvicorn.run("agencia_kemy:app", host=host, port=port, reload=False, log_level="info")
+    if getattr(sys, "frozen", False):
+        # No .exe importamos o objeto direto (sem depender de arquivo no disco).
+        from app.main import app as fastapi_app
+
+        uvicorn.run(fastapi_app, host=host, port=port, log_level="info")
+    else:
+        uvicorn.run("agencia_kemy:app", host=host, port=port, reload=False, log_level="info")
 
 
 def _healthcheck(url: str, timeout_seconds: float = 1.8) -> bool:
