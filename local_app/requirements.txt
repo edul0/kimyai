@@ -1,0 +1,15 @@
+# Dependencias do app desktop de voz (Kemy Local).
+# O backend ja vem das dependencias da raiz (requirements.txt).
+
+# Sintese de voz (offline, usa SAPI5 no Windows).
+pyttsx3>=2.90
+
+# Reconhecimento de fala (microfone).
+SpeechRecognition>=3.10.0
+
+# Backend do microfone para o SpeechRecognition.
+# No Windows o pip instala o wheel pronto; no Linux pode exigir portaudio.
+PyAudio>=0.2.13
+
+# Empacotamento do .exe.
+pyinstaller>=6.0
