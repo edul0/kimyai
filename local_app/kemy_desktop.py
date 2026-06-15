@@ -659,6 +659,7 @@ class KemyVoiceApp:
         # Memoria persistente: mesma sessao entre aberturas + log local.
         self.session_file = config_dir() / "session.txt"
         self.memory_file = config_dir() / "memory.log"
+        self.project_file = config_dir() / "active_project.txt"
         self._avatar_photo = None  # mantem referencia da imagem
 
         self.speaker = Speaker()
@@ -718,7 +719,8 @@ class KemyVoiceApp:
         # barra de ferramentas (config / pasta / atualizar)
         tools = tk.Frame(self.root, bg=COLORS["bg"])
         tools.pack(fill="x", padx=24)
-        for txt, cmd in (("⚙ Configurar IA (.env)", self._import_env),
+        for txt, cmd in (("🆕 Nova conversa", self._new_conversation),
+                         ("⚙ Configurar IA (.env)", self._import_env),
                          ("🎨 Gerar avatar IA", self._generate_avatar),
                          ("📁 Abrir pasta", self._open_workspace),
                          ("⬆ Atualizar", self._check_update)):
@@ -921,7 +923,7 @@ class KemyVoiceApp:
             files = extract_code_files(text)
         if not files:
             return None
-        base = self.workspace_root / ("projeto-" + time.strftime("%Y%m%d-%H%M%S"))
+        base = self._active_project_dir()  # mesma conversa = mesmo projeto
         saved = 0
         index_path: Path | None = None
         for item in files:
@@ -942,6 +944,41 @@ class KemyVoiceApp:
             self.last_saved_dir = base
             return base, saved, index_path
         return None
+
+    def _active_project_dir(self) -> Path:
+        """Pasta do projeto da conversa atual. Reusa a mesma para updates;
+        so muda quando o usuario inicia uma nova conversa."""
+        try:
+            if self.project_file.is_file():
+                stored = self.project_file.read_text(encoding="utf-8").strip()
+                if stored:
+                    return Path(stored)
+        except Exception:
+            pass
+        base = self.workspace_root / ("projeto-" + time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            self.project_file.write_text(str(base), encoding="utf-8")
+        except Exception:
+            pass
+        return base
+
+    def _new_conversation(self) -> None:
+        try:
+            self.project_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        self.last_saved_dir = None
+
+        def _worker() -> None:
+            try:
+                sid = self.api.new_session()
+                self.session_file.write_text(sid, encoding="utf-8")
+                self.root.after(0, lambda: self._log(
+                    "Nova conversa iniciada. O proximo projeto vai para uma pasta nova.", "sys"))
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self._log(f"Falha ao criar conversa: {e}", "sys"))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _open_path(self, path: Path) -> None:
         try:
@@ -1096,7 +1133,12 @@ class KemyVoiceApp:
 
     def _run_command(self, text: str) -> None:
         try:
-            queued = self.api.send_command(text + CAPABILITY_NOTE, modo="coding")
+            note = CAPABILITY_NOTE
+            if self.project_file.is_file():
+                note += ("\n[Esta conversa ja tem um projeto em andamento. Atualize/edite os "
+                         "MESMOS arquivos do projeto atual; nao comece um site/projeto novo a "
+                         "menos que eu peca explicitamente. Reenvie os arquivos alterados completos.]")
+            queued = self.api.send_command(text + note, modo="coding")
             job_id = queued.get("job_id")
             if not job_id:
                 raise RuntimeError("Backend nao retornou job_id.")
