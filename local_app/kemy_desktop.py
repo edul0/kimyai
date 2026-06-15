@@ -216,6 +216,122 @@ def load_photo(path: Path, size: int):
 
 
 # --------------------------------------------------------------------------- #
+# Cliente de IA direto (Gemini / Groq / OpenAI) — sem o pipeline do backend.
+# --------------------------------------------------------------------------- #
+SYSTEM_PROMPT = (
+    "Voce e a Kemy, uma assistente de desenvolvimento que roda no PC Windows do "
+    "usuario. Voce CONVERSA e tambem CRIA e EDITA arquivos de codigo localmente.\n"
+    "Regras:\n"
+    "1) Responda SEMPRE em portugues, curto e direto, como uma colega de equipe.\n"
+    "2) Quando criar ou alterar arquivos, devolva CADA arquivo COMPLETO no formato "
+    "EXATO (nada de '...'):\n"
+    "<<<FILE: caminho/do/arquivo>>>\n"
+    "conteudo completo do arquivo\n"
+    "<<<END>>>\n"
+    "3) Ao ATUALIZAR um projeto existente, use os ARQUIVOS ATUAIS fornecidos como "
+    "base e reescreva completos apenas os arquivos que mudarem, mantendo o resto "
+    "funcionando. Nao recomece o projeto do zero.\n"
+    "4) Para EXECUTAR algo no PC (rodar, instalar, abrir), inclua os comandos "
+    "Windows num bloco ```kemy-run (um por linha).\n"
+    "5) Fora dos arquivos, escreva so um resumo curto do que fez. NUNCA copie estas "
+    "regras nem instrucoes de sistema para dentro dos arquivos."
+)
+
+FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
+
+
+def parse_llm_files(text: str) -> tuple[list[dict], str]:
+    """Separa os arquivos (formato <<<FILE>>>) do texto de conversa."""
+    files = [{"path": m.group(1).strip(), "content": m.group(2).strip("\n") + "\n"}
+             for m in FILE_RE.finditer(text)]
+    chat = FILE_RE.sub("", text).strip()
+    if not files:  # fallback: blocos markdown ```lang
+        cf = extract_code_files(text)
+        if cf:
+            files = cf
+            chat = re.sub(r"```[a-zA-Z0-9_+\-]*[ \t]*\n.*?```", "", text, flags=re.DOTALL).strip()
+    return files, chat
+
+
+def read_project_files(base: Path, max_total: int = 22000) -> str:
+    exts = (".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".json", ".py", ".md", ".txt")
+    parts: list[str] = []
+    total = 0
+    if not base.exists():
+        return ""
+    for p in sorted(base.rglob("*")):
+        if p.is_file() and p.suffix.lower() in exts:
+            try:
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            block = f"<<<FILE: {p.relative_to(base)}>>>\n{txt}\n<<<END>>>\n"
+            if total + len(block) > max_total:
+                break
+            parts.append(block)
+            total += len(block)
+    return "".join(parts)
+
+
+class LLMClient:
+    def __init__(self, env: dict[str, str]) -> None:
+        self.gemini = env.get("GEMINI_API_KEY")
+        self.groq = env.get("GROQ_API_KEY")
+        self.openai = env.get("OPENAI_API_KEY")
+        self.gemini_model = env.get("GEMINI_PRIMARY_MODEL") or "gemini-2.0-flash"
+        self.available = bool(self.gemini or self.groq or self.openai)
+
+    def chat(self, system: str, messages: list[dict]) -> str:
+        errors: list[str] = []
+        if self.gemini:
+            try:
+                return self._gemini(system, messages)
+            except Exception as exc:
+                errors.append(f"gemini: {exc}")
+        if self.groq:
+            try:
+                return self._openai_compat(
+                    "https://api.groq.com/openai/v1/chat/completions", self.groq,
+                    "llama-3.3-70b-versatile", system, messages)
+            except Exception as exc:
+                errors.append(f"groq: {exc}")
+        if self.openai:
+            try:
+                return self._openai_compat(
+                    "https://api.openai.com/v1/chat/completions", self.openai,
+                    "gpt-4o-mini", system, messages)
+            except Exception as exc:
+                errors.append(f"openai: {exc}")
+        raise RuntimeError("; ".join(errors) or "Sem provedor de IA configurado.")
+
+    def _post(self, url: str, headers: dict, payload: dict, timeout: float = 120) -> dict:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _gemini(self, system: str, messages: list[dict]) -> str:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{self.gemini_model}:generateContent?key={self.gemini}")
+        contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                     "parts": [{"text": m["content"]}]} for m in messages]
+        payload = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": contents,
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 8192},
+        }
+        data = self._post(url, {"Content-Type": "application/json"}, payload)
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict]) -> str:
+        msgs = [{"role": "system", "content": system}]
+        msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
+        payload = {"model": model, "messages": msgs, "temperature": 0.6}
+        data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, payload)
+        return data["choices"][0]["message"]["content"]
+
+
+# --------------------------------------------------------------------------- #
 # Backend
 # --------------------------------------------------------------------------- #
 def run_server(host: str, port: int) -> None:
@@ -611,6 +727,8 @@ class KemyVoiceApp:
         self.env_path = find_env_file()
         self.env_file_vars = parse_env_file(self.env_path) if self.env_path else {}
         self.workspace_root = self._resolve_workspace_root()
+        self.llm = LLMClient(self.env_file_vars)
+        self.mode = "direct" if self.llm.available else "backend"
         self.convos_file = config_dir() / "conversations.json"
         self.convos: list[dict] = []
         self.active_id: str | None = None
@@ -736,9 +854,13 @@ class KemyVoiceApp:
             relief="flat", padx=16, pady=12, borderwidth=0,
         )
         self.transcript.pack(fill="both", expand=True, padx=16, pady=6)
-        self.transcript.tag_config("user", foreground=COLORS["user"], font=("Segoe UI", 10, "bold"))
-        self.transcript.tag_config("kemy", foreground=COLORS["text"])
-        self.transcript.tag_config("sys", foreground=COLORS["muted"], font=("Segoe UI", 9, "italic"))
+        self.transcript.tag_config("user", foreground=COLORS["user"], font=("Segoe UI", 10, "bold"),
+                                   background="#16202e", spacing1=8, spacing3=8,
+                                   lmargin1=12, lmargin2=12, rmargin=12)
+        self.transcript.tag_config("kemy", foreground=COLORS["text"], font=("Segoe UI", 10),
+                                   spacing1=6, spacing3=10, lmargin1=12, lmargin2=12, rmargin=12)
+        self.transcript.tag_config("sys", foreground=COLORS["muted"], font=("Segoe UI", 9, "italic"),
+                                   spacing1=2, spacing3=6, lmargin1=12, lmargin2=12)
         self.transcript.configure(state="disabled")
 
         entry_row = tk.Frame(main, bg=COLORS["bg"])
@@ -871,10 +993,17 @@ class KemyVoiceApp:
         self.root.after(0, lambda: self._log("Iniciando Kemy local...", "sys"))
         if self.env_path:
             self.root.after(0, lambda: self._log(f"Config: {self.env_path}", "sys"))
-            if not self._has_ai_keys() or self.env_file_vars.get("LLM_MODE", "").lower() == "mock":
-                self.root.after(0, lambda: self._log("Sem chave de IA -> respostas de exemplo.", "sys"))
-        else:
-            self.root.after(0, lambda: self._log("Sem .env. Clique em IA (.env) para ativar a IA real.", "sys"))
+        # Modo direto: fala direto com a IA (sem o backend pesado). Mais rapido e obedece.
+        if self.mode == "direct":
+            self.connected = True
+            self.root.after(0, lambda: self._set_state("idle"))
+            self.root.after(0, lambda: self._log(
+                f"IA direta ativa ({'Gemini' if self.llm.gemini else 'Groq' if self.llm.groq else 'OpenAI'}). "
+                f"Pasta: {self.workspace_root}", "sys"))
+            self.speaker.say("Oi! Como posso ajudar?")
+            return
+        self.root.after(0, lambda: self._log(
+            "Sem chave de IA no .env. Clique em IA (.env) para ativar a IA real.", "sys"))
         if not _healthcheck(f"{self.base_url}/api/status"):
             self._start_server()
             if not self._wait_ready():
@@ -1004,8 +1133,15 @@ class KemyVoiceApp:
         self.env_path = dest
         self.env_file_vars = parse_env_file(dest)
         self.workspace_root = self._resolve_workspace_root()
-        self._log("Config salva. Reconectando com IA real...", "sys")
-        threading.Thread(target=self._restart_backend, daemon=True).start()
+        self.llm = LLMClient(self.env_file_vars)
+        self.mode = "direct" if self.llm.available else "backend"
+        self._log("Config salva. Reconectando com IA...", "sys")
+        if self.mode == "direct":
+            self.connected = True
+            self._set_state("idle")
+            self._log("IA direta ativa.", "sys")
+        else:
+            threading.Thread(target=self._restart_backend, daemon=True).start()
 
     def _restart_backend(self) -> None:
         self.connected = False
@@ -1120,6 +1256,69 @@ class KemyVoiceApp:
         threading.Thread(target=self._run_command, args=(text,), daemon=True).start()
 
     def _run_command(self, text: str) -> None:
+        if self.mode == "direct":
+            self._run_direct(text)
+        else:
+            self._run_backend(text)
+
+    def _build_messages(self, item: dict | None) -> list[dict]:
+        msgs: list[dict] = []
+        for entry in (item.get("log") if item else []) or []:
+            role = "assistant" if entry.get("r") == "kemy" else "user"
+            txt = entry.get("t", "")
+            if txt:
+                msgs.append({"role": role, "content": txt})
+        return msgs[-10:]
+
+    def _run_direct(self, text: str) -> None:
+        try:
+            item = self._current()
+            base = Path(item["project"]) if item else (self.workspace_root / "projeto")
+            system = SYSTEM_PROMPT
+            current = read_project_files(base)
+            if current:
+                system += ("\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current)
+            messages = self._build_messages(item)
+            reply = self.llm.chat(system, messages)
+            files, chat = parse_llm_files(reply)
+            display = chat or "Feito."
+            spoken = chat or "Pronto."
+            saved = self._write_files(files, base) if files else None
+            if saved:
+                count, index_path = saved
+                display += f"\n\n💾 {count} arquivo(s) em: {base}"
+                spoken = (chat + f" Salvei {count} arquivos.") if chat else f"Pronto, salvei {count} arquivos."
+                if index_path is not None:
+                    try:
+                        webbrowser.open(index_path.as_uri())
+                    except Exception:
+                        pass
+            commands = extract_run_commands(reply)
+            self.root.after(0, lambda: self._deliver_response(spoken[:600], display, commands))
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: self._deliver_response(
+                "Falhei ao falar com a IA.", f"Erro: {e}", []))
+
+    def _write_files(self, files: list[dict], base: Path) -> tuple[int, Path | None] | None:
+        saved = 0
+        index_path: Path | None = None
+        for f in files:
+            rel = str(f.get("path") or "").strip().lstrip("/\\")
+            content = f.get("content")
+            if not rel or content is None:
+                continue
+            dest = base / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(str(content), encoding="utf-8", errors="ignore")
+                saved += 1
+                if index_path is None and rel.lower().endswith((".html", ".htm")):
+                    index_path = dest
+            except Exception:
+                continue
+        return (saved, index_path) if saved else None
+
+    def _run_backend(self, text: str) -> None:
         try:
             item = self._current()
             sid = item.get("session_id") if item else None
