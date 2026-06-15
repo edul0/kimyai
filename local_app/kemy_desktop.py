@@ -252,10 +252,30 @@ SYSTEM_PROMPT = (
     "nome de css/js.\n"
     "8) Ao alterar QUALQUER coisa de um site, reenvie SEMPRE os 3 arquivos completos "
     "(index.html, styles.css, script.js) e consistentes entre si, para nada quebrar.\n"
-    "9) Entregue design MODERNO e PROFISSIONAL: tipografia boa (Google Fonts ou "
-    "system-ui), paleta coerente, bom espacamento, layout responsivo (flex/grid), "
-    "cantos arredondados, sombras suaves, estados hover e secao hero. NUNCA entregue "
-    "uma pagina 'crua' sem estilo."
+    "9) DESIGN nivel profissional (OBRIGATORIO, capriche muito):\n"
+    "   - Importe um Google Font moderno no <head> (ex.: Poppins, Inter, Plus Jakarta Sans, Sora).\n"
+    "   - Defina paleta em :root com variaveis CSS, coerente com o tema do negocio "
+    "(ex.: barbearia = grafite #111 + dourado #d4af37; pet = tons quentes; etc.).\n"
+    "   - Container central: max-width ~1120px, margin auto, padding lateral 24px. "
+    "Secoes empilhadas com MUITO respiro (padding vertical 72-96px).\n"
+    "   - HERO ocupando ~85vh: conteudo CENTRALIZADO e EMPILHADO em coluna -> eyebrow "
+    "pequeno, depois H1 GRANDE (clamp 40-72px, peso 800, line-height 1.05), depois "
+    "subtitulo (max 60ch), e SO ENTAO os botoes numa linha ABAIXO. NUNCA titulo, texto "
+    "e botao na mesma linha. Fundo do hero com gradiente rico ou imagem com overlay escuro.\n"
+    "   - Secoes obrigatorias: header fixo translucido (backdrop-filter blur) com nav; "
+    "hero; servicos em GRID de cards (repeat(auto-fit,minmax(240px,1fr)) com gap 24px); "
+    "uma secao sobre/galeria; depoimentos; CTA final; e footer.\n"
+    "   - Cards e botoes: border-radius 14-18px, sombra suave, transition 0.2s e hover "
+    "que eleva (translateY -4px) ou aumenta brilho. Botao primario preenchido + secundario "
+    "contornado.\n"
+    "   - Tipografia: titulos grandes e fortes, corpo com line-height 1.6, cores de texto "
+    "com bom contraste (nao use cinza fraco em fundo cinza).\n"
+    "   - RESPONSIVO: mobile-first com @media (max-width: 768px) ajustando grid e fontes.\n"
+    "   - PROIBIDO: layout cru, fundo cinza chapado sem graca, textos colados, tudo numa "
+    "linha so, ou pagina sem hierarquia visual. Entregue algo que pareca feito por um "
+    "designer senior.\n"
+    "10) Combine cores, icones (emojis ok), imagens (use https://picsum.photos ou "
+    "https://source.unsplash.com/...) e a copy ao tema exato do pedido."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -271,6 +291,8 @@ def parse_llm_files(text: str) -> tuple[list[dict], str]:
         if cf:
             files = cf
             chat = re.sub(r"```[a-zA-Z0-9_+\-]*[ \t]*\n.*?```", "", text, flags=re.DOTALL).strip()
+    # nao mostrar os blocos de comando crus no chat
+    chat = re.sub(r"```(?:kemy-run|run)\s*\n.*?```", "", chat, flags=re.DOTALL | re.IGNORECASE).strip()
     return files, chat
 
 
@@ -893,13 +915,14 @@ class KemyVoiceApp:
     # ----- UI ----- #
     def _build_ui(self) -> None:
         self.root.title("Kemy - Assistente de Voz")
-        self.root.geometry("960x700")
-        self.root.minsize(840, 600)
+        self.root.geometry("1060x760")
+        self.root.minsize(900, 640)
         self.root.configure(bg=COLORS["bg"])
 
         # Top bar
-        top = tk.Frame(self.root, bg=COLORS["panel"], height=56)
+        top = tk.Frame(self.root, bg=COLORS["panel"], height=60)
         top.pack(fill="x", side="top")
+        tk.Frame(self.root, bg=COLORS["line"], height=1).pack(fill="x", side="top")
         tk.Label(top, text="  Kemy", font=("Segoe UI", 17, "bold"),
                  fg=COLORS["text"], bg=COLORS["panel"]).pack(side="left", pady=12)
         tk.Label(top, text="  assistente local", font=("Segoe UI", 10),
@@ -999,6 +1022,9 @@ class KemyVoiceApp:
             active = item["id"] == self.active_id
             row = tk.Frame(self.convo_list, bg=COLORS["panel"] if active else COLORS["sidebar"])
             row.pack(fill="x", pady=2)
+            # barra de destaque na conversa ativa
+            tk.Frame(row, bg=COLORS["accent"] if active else (COLORS["panel"] if active else COLORS["sidebar"]),
+                     width=3).pack(side="left", fill="y")
             label = item.get("title") or "Nova conversa"
             btn = tk.Button(row, text=label[:26], anchor="w",
                             command=lambda i=item["id"]: self._select_convo(i),
