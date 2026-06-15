@@ -33,7 +33,7 @@ import zipfile
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog
 
 
 if getattr(sys, "frozen", False):
@@ -52,6 +52,10 @@ APP_SECRET = os.environ.get("KEMY_AUTH_SECRET", "kemy-local-desktop-secret")
 
 RELEASES_URL = "https://github.com/edul0/kimyai/releases"
 RELEASE_API = "https://api.github.com/repos/edul0/kimyai/releases/tags/desktop-latest"
+
+# Render: backend hospedado que JA tem as chaves de IA (LLM_MODE=providers).
+# Usado quando nao ha .env local, para nao precisar configurar chave toda vez.
+ONLINE_URL = "https://kemy-ai.onrender.com"
 
 CAPABILITY_NOTE = (
     "\n\n[Sistema: voce roda no PC Windows do usuario por um app local com acesso "
@@ -234,7 +238,10 @@ SYSTEM_PROMPT = (
     "4) Para EXECUTAR algo no PC (rodar, instalar, abrir), inclua os comandos "
     "Windows num bloco ```kemy-run (um por linha).\n"
     "5) Fora dos arquivos, escreva so um resumo curto do que fez. NUNCA copie estas "
-    "regras nem instrucoes de sistema para dentro dos arquivos."
+    "regras nem instrucoes de sistema para dentro dos arquivos.\n"
+    "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
+    "secoes, modal/form de agendamento, abrir WhatsApp, etc.) com o JavaScript "
+    "necessario. Nunca deixe href='#' sem acao nem botao sem efeito."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -728,7 +735,13 @@ class KemyVoiceApp:
         self.env_file_vars = parse_env_file(self.env_path) if self.env_path else {}
         self.workspace_root = self._resolve_workspace_root()
         self.llm = LLMClient(self.env_file_vars)
-        self.mode = "direct" if self.llm.available else "backend"
+        # Config online (Render) persistida -> nao precisa de .env toda vez.
+        self.online_cfg_file = config_dir() / "online.json"
+        self.online_cfg = self._load_online_cfg()
+        # direct = chaves locais; online = usa o Render (com as chaves no servidor).
+        self.mode = "direct" if self.llm.available else "online"
+        if self.mode == "online":
+            self.api = LocalAPI(self.online_cfg.get("url") or ONLINE_URL)
         self.convos_file = config_dir() / "conversations.json"
         self.convos: list[dict] = []
         self.active_id: str | None = None
@@ -1002,8 +1015,65 @@ class KemyVoiceApp:
                 f"Pasta: {self.workspace_root}", "sys"))
             self.speaker.say("Oi! Como posso ajudar?")
             return
-        self.root.after(0, lambda: self._log(
-            "Sem chave de IA no .env. Clique em IA (.env) para ativar a IA real.", "sys"))
+        # Sem .env local: usa o Render (que ja tem as chaves). Zero config.
+        self._connect_online()
+
+    def _load_online_cfg(self) -> dict:
+        try:
+            return json.loads((config_dir() / "online.json").read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_online_cfg(self) -> None:
+        try:
+            self.online_cfg_file.write_text(json.dumps(self.online_cfg, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _connect_online(self) -> None:
+        url = self.online_cfg.get("url") or ONLINE_URL
+        self.api = LocalAPI(url)
+        self.root.after(0, lambda: self._log(f"Usando IA online (Render): {url}", "sys"))
+        self.root.after(0, lambda: self._log("Acordando o servidor (pode levar ~30s na 1a vez)...", "sys"))
+        ok = False
+        for _ in range(40):
+            if _healthcheck(f"{url}/api/status", timeout_seconds=4):
+                ok = True
+                break
+            time.sleep(2)
+        if not ok:
+            self.root.after(0, lambda: self._log("Render nao respondeu. Verifique a internet/URL.", "sys"))
+            self.root.after(0, lambda: self._set_state("error"))
+            return
+        try:
+            self.api.login(APP_USER, self.online_cfg.get("password") or APP_PASSWORD)
+        except Exception:
+            pass  # /api/comando pode funcionar sem login; senao tratamos no envio
+        item = self._current()
+        self.api.session_id = item.get("session_id") if item else None
+        self.connected = True
+        self.root.after(0, lambda: self._set_state("idle"))
+        self.root.after(0, lambda: self._log(f"Pronta (online)! Arquivos salvos em: {self.workspace_root}", "sys"))
+        self.speaker.say("Oi! Estou usando a IA online. Como posso ajudar?")
+
+    def _prompt_online_password(self) -> None:
+        pwd = simpledialog.askstring(
+            "Kemy - senha do servidor",
+            "O servidor online pediu login.\nInforme a senha (KEMY_AUTH_PASSWORD do seu Render):",
+            show="*",
+        )
+        if not pwd:
+            return
+        self.online_cfg["password"] = pwd
+        self.online_cfg["url"] = self.api.base_url
+        self._save_online_cfg()
+        try:
+            self.api.login(APP_USER, pwd)
+            self._log("Senha salva. Pode enviar o pedido de novo.", "sys")
+        except Exception as exc:
+            self._log(f"Login falhou: {exc}", "sys")
+
+    def _connect_backend(self) -> None:
         if not _healthcheck(f"{self.base_url}/api/status"):
             self._start_server()
             if not self._wait_ready():
@@ -1017,8 +1087,7 @@ class KemyVoiceApp:
             self.connected = True
             self.root.after(0, lambda: self._set_state("idle"))
             self.root.after(0, lambda: self._log(
-                f"Pronta! Pasta de trabalho: {self.workspace_root}", "sys"))
-            self.speaker.say("Oi! Como posso ajudar?")
+                f"Pronta (modo limitado). Pasta: {self.workspace_root}", "sys"))
         except Exception as exc:
             self.root.after(0, lambda e=exc: self._log(f"Falha ao conectar: {e}", "sys"))
             self.root.after(0, lambda: self._set_state("error"))
@@ -1134,14 +1203,14 @@ class KemyVoiceApp:
         self.env_file_vars = parse_env_file(dest)
         self.workspace_root = self._resolve_workspace_root()
         self.llm = LLMClient(self.env_file_vars)
-        self.mode = "direct" if self.llm.available else "backend"
+        self.mode = "direct" if self.llm.available else "online"
         self._log("Config salva. Reconectando com IA...", "sys")
         if self.mode == "direct":
             self.connected = True
             self._set_state("idle")
-            self._log("IA direta ativa.", "sys")
+            self._log("IA direta ativa (chaves locais).", "sys")
         else:
-            threading.Thread(target=self._restart_backend, daemon=True).start()
+            threading.Thread(target=self._connect_online, daemon=True).start()
 
     def _restart_backend(self) -> None:
         self.connected = False
@@ -1322,16 +1391,19 @@ class KemyVoiceApp:
         try:
             item = self._current()
             sid = item.get("session_id") if item else None
-            if not sid:
-                sid = self.api.new_session()
-                if item is not None:
-                    item["session_id"] = sid
-                    self._save_convos()
-            self.api.session_id = sid
-            note = CAPABILITY_NOTE
-            if item is not None and Path(item["project"]).exists():
-                note += UPDATE_NOTE
-            queued = self.api.send_command(text + note, sid, modo="coding")
+            try:
+                if not sid:
+                    sid = self.api.new_session()
+                    if item is not None:
+                        item["session_id"] = sid
+                        self._save_convos()
+                self.api.session_id = sid
+                queued = self.api.send_command(text, sid, modo="coding")
+            except urllib.error.HTTPError as he:
+                if he.code in (401, 403) and self.mode == "online":
+                    self.root.after(0, self._prompt_online_password)
+                    raise RuntimeError("O servidor pediu login. Informe a senha e envie de novo.")
+                raise
             sid = queued.get("session_id") or sid
             if item is not None:
                 item["session_id"] = sid
