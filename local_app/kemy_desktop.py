@@ -76,6 +76,56 @@ def extract_run_commands(text: str) -> list[str]:
                 cmds.append(line)
     return cmds
 
+
+# Mapeia a linguagem do bloco de codigo para um nome de arquivo padrao.
+LANG_EXT = {
+    "html": "index.html", "css": "styles.css", "javascript": "script.js",
+    "js": "script.js", "typescript": "app.ts", "ts": "app.ts",
+    "tsx": "App.tsx", "jsx": "App.jsx", "python": "main.py", "py": "main.py",
+    "json": "data.json", "sql": "schema.sql", "bash": "script.sh",
+    "sh": "script.sh", "yaml": "config.yaml", "yml": "config.yaml",
+    "md": "README.md", "markdown": "README.md",
+}
+
+
+def extract_code_files(text: str) -> list[dict]:
+    """Quando a IA devolve o codigo dentro do texto (markdown), transforma cada
+    bloco ```lang em um arquivo salvavel."""
+    files: list[dict] = []
+    if not text:
+        return files
+    used: dict[str, int] = {}
+    idx = 0
+    for match in re.finditer(r"```([a-zA-Z0-9_+\-]*)[ \t]*\n(.*?)```", text, re.DOTALL):
+        lang = (match.group(1) or "").lower().strip()
+        if lang in ("kemy-run", "run"):
+            continue
+        code = match.group(2)
+        if not code.strip():
+            continue
+        idx += 1
+        name = LANG_EXT.get(lang, f"arquivo{idx}.txt")
+        if name in used:
+            used[name] += 1
+            stem, _, ext = name.rpartition(".")
+            name = f"{stem}_{used[name]}.{ext}" if ext else f"{name}_{used[name]}"
+        else:
+            used[name] = 1
+        files.append({"path": name, "content": code.rstrip() + "\n"})
+    return files
+
+
+def load_photo(path: Path, size: int):
+    """Carrega uma imagem para o avatar (usa Pillow se houver; senao PNG nativo)."""
+    try:
+        from PIL import Image, ImageTk
+
+        im = Image.open(path).convert("RGBA")
+        im = im.resize((size, size))
+        return ImageTk.PhotoImage(im)
+    except Exception:
+        return tk.PhotoImage(file=str(path))
+
 COLORS = {
     "bg": "#0a0f16",
     "panel": "#121a26",
@@ -275,8 +325,20 @@ class Avatar:
         self.state = "idle"
         self.t = 0.0
         self.mouth_provider = None  # callable -> 0..1 (nivel da boca em tempo real)
+        self.photo = None          # imagem anime opcional
+        self.image_mode = False
         self._build()
+        self.img_id = self.canvas.create_image(0, 0, state="hidden")
         self._animate()
+
+    def set_image(self, photo) -> None:
+        """Ativa o modo anime com uma imagem (PNG/JPG carregada por load_photo)."""
+        self.photo = photo
+        self.image_mode = photo is not None
+        self.canvas.itemconfig(self.img_id, image=photo if photo else "",
+                               state="normal" if photo else "hidden")
+        for item in self._vector_items:
+            self.canvas.itemconfig(item, state="hidden" if self.image_mode else "normal")
 
     def _build(self) -> None:
         c = self.canvas
@@ -302,6 +364,13 @@ class Avatar:
         self.hi_r = c.create_oval(0, 0, 0, 0, fill="#ffffff", outline="")
         self.mouth = c.create_oval(0, 0, 0, 0, fill=COLORS["mouth"], outline="")
         self.dots = [c.create_oval(0, 0, 0, 0, fill=COLORS["thinking"], outline="") for _ in range(3)]
+        # Itens do rosto vetorial (escondidos quando uma imagem anime esta ativa).
+        self._vector_items = [
+            self.back_hair, self.ear_l, self.ear_r, self.cup_l, self.cup_r, self.head,
+            self.band, self.bangs, self.tuft, self.blush_l, self.blush_r, self.brow_l,
+            self.brow_r, self.eye_l, self.eye_r, self.iris_l, self.iris_r, self.hi_l,
+            self.hi_r, self.mouth, *self.dots,
+        ]
 
     def set_state(self, state: str) -> None:
         self.state = state if state in COLORS else "idle"
@@ -330,6 +399,18 @@ class Avatar:
         self._ov(c, self.glow, cx, cy, gr, gr)
         c.itemconfig(self.glow, outline=accent,
                      width=3 if self.state in ("listening", "speaking", "thinking") else 1)
+
+        # Modo anime (imagem): mostra a imagem com balanco e a aura por estado.
+        if self.image_mode:
+            speak = 0.0
+            if self.state == "speaking" and self.mouth_provider:
+                try:
+                    speak = float(self.mouth_provider())
+                except Exception:
+                    speak = 0.0
+            self.canvas.coords(self.img_id, cx, cy + speak * 4)
+            c.after(40, self._animate)
+            return
 
         bw, bh = rx * 1.45, ry * 1.5
         c.coords(self.back_hair,
@@ -575,6 +656,10 @@ class KemyVoiceApp:
         self.env_path = find_env_file()
         self.env_file_vars = parse_env_file(self.env_path) if self.env_path else {}
         self.workspace_root = self._resolve_workspace_root()
+        # Memoria persistente: mesma sessao entre aberturas + log local.
+        self.session_file = config_dir() / "session.txt"
+        self.memory_file = config_dir() / "memory.log"
+        self._avatar_photo = None  # mantem referencia da imagem
 
         self.speaker = Speaker()
         self.speaker.on_start = lambda: self.root.after(0, lambda: self._set_state("speaking"))
@@ -583,9 +668,21 @@ class KemyVoiceApp:
 
         self._build_ui()
         self.avatar.mouth_provider = self.speaker.mouth_level  # lip-sync em tempo real
+        self._autoload_avatar()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self._set_state("offline")
         threading.Thread(target=self._bootstrap, daemon=True).start()
+
+    def _autoload_avatar(self) -> None:
+        for cand in (EXE_DIR / "avatar.png", config_dir() / "avatar.png",
+                     EXE_DIR / "avatar.gif", config_dir() / "avatar.gif"):
+            try:
+                if cand.is_file():
+                    self._avatar_photo = load_photo(cand, 280)
+                    self.avatar.set_image(self._avatar_photo)
+                    return
+            except Exception:
+                continue
 
     def _resolve_workspace_root(self) -> Path:
         raw = self.env_file_vars.get("KEMY_LOCAL_WORKSPACE_ROOT", "").strip()
@@ -622,6 +719,7 @@ class KemyVoiceApp:
         tools = tk.Frame(self.root, bg=COLORS["bg"])
         tools.pack(fill="x", padx=24)
         for txt, cmd in (("⚙ Configurar IA (.env)", self._import_env),
+                         ("🎨 Gerar avatar IA", self._generate_avatar),
                          ("📁 Abrir pasta", self._open_workspace),
                          ("⬆ Atualizar", self._check_update)):
             tk.Button(tools, text=txt, command=cmd, bg=COLORS["panel"], fg=COLORS["muted"],
@@ -718,15 +816,71 @@ class KemyVoiceApp:
                 return
         try:
             self.api.login(APP_USER, APP_PASSWORD)
-            self.api.new_session()
+            resuming = self.session_file.exists()
+            self._load_or_create_session()
             self.connected = True
             self.root.after(0, lambda: self._set_state("idle"))
             self.root.after(0, lambda: self._log(
                 f"Tudo pronto! Arquivos serao salvos em: {self.workspace_root}", "sys"))
-            self.speaker.say("Oi! Eu sou a Kemy. Como posso te ajudar?")
+            self.speaker.say("Oi de novo! Continuo de onde paramos."
+                             if resuming else "Oi! Eu sou a Kemy. Como posso te ajudar?")
         except Exception as exc:
             self.root.after(0, lambda e=exc: self._log(f"Falha ao conectar: {e}", "sys"))
             self.root.after(0, lambda: self._set_state("error"))
+
+    def _load_or_create_session(self) -> str:
+        try:
+            if self.session_file.is_file():
+                sid = self.session_file.read_text(encoding="utf-8").strip()
+                if sid:
+                    self.api.session_id = sid
+                    return sid
+        except Exception:
+            pass
+        sid = self.api.new_session()
+        try:
+            self.session_file.write_text(sid, encoding="utf-8")
+        except Exception:
+            pass
+        return sid
+
+    def _remember(self, role: str, text: str) -> None:
+        try:
+            with self.memory_file.open("a", encoding="utf-8") as fh:
+                fh.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {role}: {text}\n")
+        except Exception:
+            pass
+
+    def _generate_avatar(self) -> None:
+        self._log("Gerando avatar anime com IA (pode demorar)...", "sys")
+        threading.Thread(target=self._do_generate_avatar, daemon=True).start()
+
+    def _do_generate_avatar(self) -> None:
+        import urllib.parse
+
+        prompt = ("anime vtuber girl portrait, cute, big expressive eyes, teal and purple "
+                  "hair, headphones, soft studio lighting, centered face, high quality, clean background")
+        size = 300
+        url = (f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}"
+               f"?width={size}&height={size}&nologo=true&model=flux")
+        headers = {"User-Agent": "KemyDesktop"}
+        key = self.env_file_vars.get("POLLINATIONS_API_KEY")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        dest = config_dir() / "avatar.png"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            data = urllib.request.urlopen(req, timeout=120).read()
+            dest.write_bytes(data)
+            photo = load_photo(dest, 280)
+            self.root.after(0, lambda: self._apply_avatar(photo))
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: self._log(f"Falha ao gerar avatar: {e}", "sys"))
+
+    def _apply_avatar(self, photo) -> None:
+        self._avatar_photo = photo
+        self.avatar.set_image(photo)
+        self._log("Avatar anime atualizado! (salvo em avatar.png)", "sys")
 
     def _backend_env(self) -> dict:
         env = dict(os.environ)
@@ -759,12 +913,17 @@ class KemyVoiceApp:
         return False
 
     # ----- acoes locais ----- #
-    def _save_files_local(self, resultado: dict | None) -> tuple[Path, int] | None:
+    def _save_files_local(self, resultado: dict | None) -> tuple[Path, int, Path | None] | None:
         files = (resultado or {}).get("files") or []
+        if not files:
+            # A IA devolveu o codigo dentro do texto -> extrai e salva mesmo assim.
+            text = str((resultado or {}).get("raw") or (resultado or {}).get("summary") or "")
+            files = extract_code_files(text)
         if not files:
             return None
         base = self.workspace_root / ("projeto-" + time.strftime("%Y%m%d-%H%M%S"))
         saved = 0
+        index_path: Path | None = None
         for item in files:
             rel = str(item.get("path") or "").strip().lstrip("/\\")
             content = item.get("content")
@@ -775,11 +934,13 @@ class KemyVoiceApp:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(str(content), encoding="utf-8", errors="ignore")
                 saved += 1
+                if index_path is None and rel.lower().endswith((".html", ".htm")):
+                    index_path = dest
             except Exception:
                 continue
         if saved:
             self.last_saved_dir = base
-            return base, saved
+            return base, saved, index_path
         return None
 
     def _open_path(self, path: Path) -> None:
@@ -925,6 +1086,7 @@ class KemyVoiceApp:
             self._set_state("idle")
             return
         self._log(text, "user")
+        self._remember("user", text)
         if not self.connected:
             self._log("Ainda nao estou conectada ao backend local.", "sys")
             return
@@ -952,9 +1114,14 @@ class KemyVoiceApp:
             spoken, display = result_to_speech(resultado, erro)
             saved = self._save_files_local(resultado) if not erro else None
             if saved:
-                base, count = saved
+                base, count, index_path = saved
                 display += f"\n\n💾 Salvei {count} arquivo(s) em: {base}"
                 spoken = f"Pronto! Criei {count} arquivos e salvei na sua pasta. " + spoken
+                if index_path is not None:
+                    try:
+                        webbrowser.open(index_path.as_uri())
+                    except Exception:
+                        pass
             commands = extract_run_commands(display) if not erro else []
             self.root.after(0, lambda: self._deliver_response(spoken, display, commands))
         except Exception as exc:
@@ -965,6 +1132,7 @@ class KemyVoiceApp:
     def _deliver_response(self, spoken: str, display: str, commands: list[str] | None = None) -> None:
         self.busy = False
         self._log(display, "kemy")
+        self._remember("kemy", display)
         if self.speaker.available:
             self.speaker.say(spoken)
             self._set_state("speaking")

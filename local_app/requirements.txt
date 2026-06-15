@@ -11,5 +11,8 @@ SpeechRecognition>=3.10.0
 # No Windows o pip instala o wheel pronto; no Linux pode exigir portaudio.
 PyAudio>=0.2.13
 
+# Avatar anime (carregar/redimensionar imagem; JPG e PNG).
+Pillow>=10.0
+
 # Empacotamento do .exe.
 pyinstaller>=6.0

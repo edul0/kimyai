@@ -30,6 +30,8 @@ Write-Host "[Kemy] Gerando .exe local (assistente de voz)..." -ForegroundColor C
   --hidden-import "comtypes" `
   --hidden-import "speech_recognition" `
   --hidden-import "pyaudio" `
+  --hidden-import "PIL" `
+  --hidden-import "PIL._tkinter_finder" `
   local_app\kemy_desktop.py
 
 Write-Host ""
