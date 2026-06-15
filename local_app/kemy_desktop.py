@@ -19,15 +19,18 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import webbrowser
 import http.cookiejar
+import zipfile
 from pathlib import Path
 
 import tkinter as tk
@@ -50,6 +53,28 @@ APP_SECRET = os.environ.get("KEMY_AUTH_SECRET", "kemy-local-desktop-secret")
 
 # Link fixo para a ultima versao publicada (GitHub Release).
 RELEASES_URL = "https://github.com/edul0/kimyai/releases"
+RELEASE_API = "https://api.github.com/repos/edul0/kimyai/releases/tags/desktop-latest"
+
+# Instrucao anexada ao pedido: a IA so emite comandos quando o pedido exigir.
+CAPABILITY_NOTE = (
+    "\n\n[Sistema: voce roda no PC Windows do usuario por um app local com acesso "
+    "ao sistema. SE E SOMENTE SE o pedido exigir executar, abrir ou instalar algo "
+    "no PC, inclua os comandos (Windows, um por linha) num bloco ```kemy-run. "
+    "Para gerar codigo ou arquivos, responda normalmente como sempre.]"
+)
+
+
+def extract_run_commands(text: str) -> list[str]:
+    """Extrai comandos marcados pela IA em blocos ```kemy-run / ```run."""
+    cmds: list[str] = []
+    if not text:
+        return cmds
+    for match in re.finditer(r"```(?:kemy-run|run)\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        for line in match.group(1).splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                cmds.append(line)
+    return cmds
 
 COLORS = {
     "bg": "#0a0f16",
@@ -639,11 +664,17 @@ class KemyVoiceApp:
                                   cursor="hand2")
         self.talk_btn.pack(side="left")
         self.continuous_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(controls, text="Modo conversa (escuta continua)",
+        tk.Checkbutton(controls, text="Modo conversa",
                        variable=self.continuous_var, command=self._toggle_continuous,
                        bg=COLORS["bg"], fg=COLORS["muted"], selectcolor=COLORS["panel"],
                        activebackground=COLORS["bg"], activeforeground=COLORS["text"],
-                       font=("Segoe UI", 9)).pack(side="left", padx=14)
+                       font=("Segoe UI", 9)).pack(side="left", padx=(14, 4))
+        self.autonomous_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(controls, text="Rodar comandos sem confirmar",
+                       variable=self.autonomous_var,
+                       bg=COLORS["bg"], fg=COLORS["muted"], selectcolor=COLORS["panel"],
+                       activebackground=COLORS["bg"], activeforeground=COLORS["text"],
+                       font=("Segoe UI", 9)).pack(side="left", padx=4)
         tk.Button(controls, text="Silenciar", command=self.speaker.stop,
                   bg=COLORS["panel"], fg=COLORS["text"], font=("Segoe UI", 10),
                   relief="flat", padx=14, pady=9, cursor="hand2").pack(side="right")
@@ -806,11 +837,63 @@ class KemyVoiceApp:
         self._bootstrap()
 
     def _check_update(self) -> None:
-        self._log("Abrindo a pagina de versoes mais recentes...", "sys")
+        threading.Thread(target=self._do_update, daemon=True).start()
+
+    def _do_update(self) -> None:
+        self.root.after(0, lambda: self._log("Procurando atualizacao...", "sys"))
         try:
-            webbrowser.open(RELEASES_URL)
-        except Exception:
-            pass
+            req = urllib.request.Request(
+                RELEASE_API,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "KemyDesktop"},
+            )
+            data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+            url = None
+            for asset in (data.get("assets") or []):
+                if str(asset.get("name", "")).lower().endswith(".zip"):
+                    url = asset.get("browser_download_url")
+                    break
+            if not url:
+                raise RuntimeError("Release sem arquivo .zip.")
+            if not getattr(sys, "frozen", False):
+                self.root.after(0, lambda: self._log(
+                    "Update automatico so funciona no .exe. Abrindo Releases...", "sys"))
+                webbrowser.open(RELEASES_URL)
+                return
+            self.root.after(0, lambda: self._log("Baixando nova versao (pode demorar)...", "sys"))
+            tmp = Path(tempfile.mkdtemp(prefix="kemy_upd_"))
+            zip_path = tmp / "update.zip"
+            urllib.request.urlretrieve(url, zip_path)
+            extract = tmp / "new"
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(extract)
+            self.root.after(0, lambda: self._apply_update_and_restart(extract))
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: self._log(
+                f"Falha no update: {e}. Abrindo Releases...", "sys"))
+            try:
+                webbrowser.open(RELEASES_URL)
+            except Exception:
+                pass
+
+    def _apply_update_and_restart(self, extract: Path) -> None:
+        # Um .bat espera o app fechar, copia os novos arquivos por cima e reabre.
+        bat = Path(tempfile.gettempdir()) / "kemy_update.bat"
+        target = str(EXE_DIR)
+        exe = str(EXE_DIR / "KemyDesktop.exe")
+        bat.write_text(
+            "@echo off\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
+            f'robocopy "{extract}" "{target}" /E /IS /IT /NFL /NDL /NJH /NJS >nul\r\n'
+            f'start "" "{exe}"\r\n'
+            f'rmdir /s /q "{extract.parent}"\r\n',
+            encoding="utf-8",
+        )
+        self._log("Atualizando e reiniciando...", "sys")
+        try:
+            subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x00000008)  # DETACHED_PROCESS
+            self.root.after(500, self.on_close)
+        except Exception as exc:
+            self._log(f"Nao consegui aplicar o update: {exc}", "sys")
 
     # ----- interacao ----- #
     def _on_talk(self) -> None:
@@ -851,7 +934,7 @@ class KemyVoiceApp:
 
     def _run_command(self, text: str) -> None:
         try:
-            queued = self.api.send_command(text, modo="coding")
+            queued = self.api.send_command(text + CAPABILITY_NOTE, modo="coding")
             job_id = queued.get("job_id")
             if not job_id:
                 raise RuntimeError("Backend nao retornou job_id.")
@@ -872,13 +955,14 @@ class KemyVoiceApp:
                 base, count = saved
                 display += f"\n\n💾 Salvei {count} arquivo(s) em: {base}"
                 spoken = f"Pronto! Criei {count} arquivos e salvei na sua pasta. " + spoken
-            self.root.after(0, lambda: self._deliver_response(spoken, display))
+            commands = extract_run_commands(display) if not erro else []
+            self.root.after(0, lambda: self._deliver_response(spoken, display, commands))
         except Exception as exc:
             self.root.after(0, lambda e=exc: self._deliver_response(
-                "Tive um problema ao falar com o backend.", f"Erro: {e}"
+                "Tive um problema ao falar com o backend.", f"Erro: {e}", []
             ))
 
-    def _deliver_response(self, spoken: str, display: str) -> None:
+    def _deliver_response(self, spoken: str, display: str, commands: list[str] | None = None) -> None:
         self.busy = False
         self._log(display, "kemy")
         if self.speaker.available:
@@ -888,6 +972,46 @@ class KemyVoiceApp:
             self._set_state("idle")
             if self.continuous and self.connected:
                 self.root.after(700, self._on_talk)
+        if commands:
+            self.root.after(300, lambda: self._handle_actions(commands))
+
+    # ----- execucao de comandos no PC ----- #
+    def _handle_actions(self, commands: list[str]) -> None:
+        autonomous = self.autonomous_var.get()
+        to_run: list[str] = []
+        for cmd in commands:
+            if autonomous:
+                to_run.append(cmd)
+            else:
+                ok = messagebox.askyesno(
+                    "Kemy quer executar um comando no seu PC",
+                    f"Posso rodar este comando?\n\n{cmd}",
+                )
+                if ok:
+                    to_run.append(cmd)
+        if to_run:
+            threading.Thread(target=self._exec_commands, args=(to_run,), daemon=True).start()
+
+    def _exec_commands(self, commands: list[str]) -> None:
+        try:
+            self.workspace_root.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        for cmd in commands:
+            self.root.after(0, lambda c=cmd: self._log(f"$ {c}", "sys"))
+            try:
+                proc = subprocess.run(
+                    cmd, shell=True, cwd=str(self.workspace_root),
+                    capture_output=True, text=True, timeout=180,
+                )
+                out = (proc.stdout or "") + (proc.stderr or "")
+                out = out.strip() or f"(sem saida, codigo {proc.returncode})"
+                if len(out) > 1200:
+                    out = out[:1200] + "..."
+                self.root.after(0, lambda o=out: self._log(o, "sys"))
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self._log(f"Falha ao executar: {e}", "sys"))
+        self.speaker.say("Comando executado.")
 
     def _on_speech_done(self) -> None:
         self._set_state("idle" if self.connected else "offline")
