@@ -2,13 +2,14 @@
 
 Executavel que transforma a Kemy num companheiro local que:
   - sobe o backend FastAPI no seu PC (sem depender de Render);
+  - usa SUAS chaves de IA (carregadas de um .env local) -> respostas reais;
   - ouve voce pelo microfone (speech-to-text);
-  - responde falando em voz alta (text-to-speech);
+  - responde falando, com a boca sincronizada em tempo real (text-to-speech);
   - mostra um personagem animado (estilo VTuber) que pisca, fala e reage;
-  - executa o pedido usando os agentes locais e mostra o resultado em tempo real.
+  - SALVA os arquivos gerados direto numa pasta do seu PC (acao local real);
+  - checa atualizacoes e aponta para a ultima versao publicada.
 
-As bibliotecas de voz (SpeechRecognition / pyttsx3 / pyaudio) sao opcionais:
-sem elas o app funciona por texto e avisa como habilitar a voz.
+As bibliotecas de voz (SpeechRecognition / pyttsx3 / pyaudio) sao opcionais.
 """
 
 from __future__ import annotations
@@ -18,34 +19,38 @@ import json
 import math
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 import http.cookiejar
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext
 
 
 if getattr(sys, "frozen", False):
     ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    EXE_DIR = Path(sys.executable).resolve().parent
 else:
     ROOT_DIR = Path(__file__).resolve().parents[1]
+    EXE_DIR = ROOT_DIR
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
-# Credenciais locais: o app injeta estas variaveis no backend que ele sobe,
-# entao cliente e servidor sempre concordam (env var > .env no pydantic-settings).
 APP_USER = os.environ.get("KEMY_AUTH_USER", "admin")
 APP_PASSWORD = os.environ.get("KEMY_AUTH_PASSWORD", "kemy-ai")
 APP_SECRET = os.environ.get("KEMY_AUTH_SECRET", "kemy-local-desktop-secret")
 
-# Paleta (dark, com acentos vivos por estado).
+# Link fixo para a ultima versao publicada (GitHub Release).
+RELEASES_URL = "https://github.com/edul0/kimyai/releases"
+
 COLORS = {
     "bg": "#0a0f16",
     "panel": "#121a26",
@@ -60,9 +65,7 @@ COLORS = {
     "offline": "#6b7b96",
     "error": "#f87171",
     "user": "#9fe7d2",
-    # Cores do personagem.
     "skin": "#ffe2d2",
-    "skin_shadow": "#f7c9b6",
     "hair": "#8b6fe6",
     "hair_dark": "#6f56c4",
     "eye_white": "#ffffff",
@@ -82,8 +85,55 @@ STATE_LABELS = {
 
 
 # --------------------------------------------------------------------------- #
-# Dependencias opcionais de voz
+# Config local (.env) e pasta de trabalho
 # --------------------------------------------------------------------------- #
+def config_dir() -> Path:
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home())
+        d = Path(base) / "Kemy"
+    else:
+        d = Path.home() / ".config" / "kemy"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def find_env_file() -> Path | None:
+    candidates = [
+        EXE_DIR / ".env",
+        config_dir() / ".env",
+        ROOT_DIR / ".env",
+        Path.cwd() / ".env",
+    ]
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return data
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and not key.startswith("#"):
+            data[key] = value
+    return data
+
+
 def _detect_voice_support() -> dict[str, bool]:
     support = {"tts": False, "stt": False}
     try:
@@ -105,7 +155,7 @@ VOICE_SUPPORT = _detect_voice_support()
 
 
 # --------------------------------------------------------------------------- #
-# Backend FastAPI (modo --serve)
+# Backend FastAPI
 # --------------------------------------------------------------------------- #
 def run_server(host: str, port: int) -> None:
     os.chdir(ROOT_DIR)
@@ -190,7 +240,7 @@ def result_to_speech(resultado: dict | None, erro: str | None) -> tuple[str, str
 
 
 # --------------------------------------------------------------------------- #
-# Avatar VTuber animado (Canvas com personagem)
+# Avatar VTuber animado
 # --------------------------------------------------------------------------- #
 class Avatar:
     def __init__(self, parent: tk.Widget, size: int = 300) -> None:
@@ -199,11 +249,10 @@ class Avatar:
                                 highlightthickness=0)
         self.state = "idle"
         self.t = 0.0
-        self._blink_t = 0.0
+        self.mouth_provider = None  # callable -> 0..1 (nivel da boca em tempo real)
         self._build()
         self._animate()
 
-    # cria todos os itens uma vez (atualizamos coords no loop -> sem flicker)
     def _build(self) -> None:
         c = self.canvas
         self.glow = c.create_oval(0, 0, 0, 0, outline=COLORS["idle"], width=3)
@@ -246,35 +295,25 @@ class Avatar:
         accent = self._accent()
         S = self.size
         cx = S / 2
-        # balanco suave (idle); mais "alerta" quando ouvindo
         sway = math.sin(t * 1.1) * (5 if self.state in ("idle", "speaking") else 2)
         bob = math.sin(t * 0.9) * 4
         cy = S * 0.52 + bob
         cx += sway
+        rx, ry = S * 0.24, S * 0.26
 
-        rx, ry = S * 0.24, S * 0.26  # cabeca
-
-        # aura/glow externo
         gr = rx + 34 + (6 * (0.5 + 0.5 * math.sin(t * 2)) if self.state in ("listening", "speaking") else 0)
         self._ov(c, self.glow, cx, cy, gr, gr)
         c.itemconfig(self.glow, outline=accent,
                      width=3 if self.state in ("listening", "speaking", "thinking") else 1)
 
-        # cabelo de tras
         bw, bh = rx * 1.45, ry * 1.5
         c.coords(self.back_hair,
-                 cx - bw, cy - bh * 0.5,
-                 cx - bw * 0.7, cy + bh,
-                 cx, cy + bh * 1.15,
-                 cx + bw * 0.7, cy + bh,
-                 cx + bw, cy - bh * 0.5,
-                 cx + bw * 0.4, cy - bh,
-                 cx - bw * 0.4, cy - bh)
+                 cx - bw, cy - bh * 0.5, cx - bw * 0.7, cy + bh, cx, cy + bh * 1.15,
+                 cx + bw * 0.7, cy + bh, cx + bw, cy - bh * 0.5,
+                 cx + bw * 0.4, cy - bh, cx - bw * 0.4, cy - bh)
 
-        # cabeca
         self._ov(c, self.head, cx, cy, rx, ry)
 
-        # orelhas/fones
         ear_y = cy + ry * 0.1
         ex = rx * 1.02
         self._ov(c, self.ear_l, cx - ex, ear_y, S * 0.045, S * 0.055)
@@ -285,31 +324,16 @@ class Avatar:
         c.itemconfig(self.cup_l, fill=accent)
         c.itemconfig(self.cup_r, fill=accent)
 
-        # arco do headphone por cima
-        c.coords(self.band, cx - ex - S * 0.02, cy - ry - S * 0.05,
-                 cx + ex + S * 0.02, cy + ry * 0.2)
+        c.coords(self.band, cx - ex - S * 0.02, cy - ry - S * 0.05, cx + ex + S * 0.02, cy + ry * 0.2)
         c.itemconfig(self.band, outline=accent, start=10, extent=160)
 
-        # franja
         fy = cy - ry * 0.55
         c.coords(self.bangs,
-                 cx - rx, cy - ry * 0.2,
-                 cx - rx * 0.95, fy - ry * 0.4,
-                 cx - rx * 0.3, cy - ry,
-                 cx, fy,
-                 cx + rx * 0.3, cy - ry,
-                 cx + rx * 0.95, fy - ry * 0.4,
-                 cx + rx, cy - ry * 0.2,
-                 cx + rx * 0.5, cy - ry * 0.35,
-                 cx, cy - ry * 0.15,
-                 cx - rx * 0.5, cy - ry * 0.35)
-        # mecha central (aho)
-        c.coords(self.tuft,
-                 cx - 6, cy - ry * 0.98,
-                 cx + 2, cy - ry * 1.28,
-                 cx + 10, cy - ry * 0.98)
+                 cx - rx, cy - ry * 0.2, cx - rx * 0.95, fy - ry * 0.4, cx - rx * 0.3, cy - ry,
+                 cx, fy, cx + rx * 0.3, cy - ry, cx + rx * 0.95, fy - ry * 0.4, cx + rx, cy - ry * 0.2,
+                 cx + rx * 0.5, cy - ry * 0.35, cx, cy - ry * 0.15, cx - rx * 0.5, cy - ry * 0.35)
+        c.coords(self.tuft, cx - 6, cy - ry * 0.98, cx + 2, cy - ry * 1.28, cx + 10, cy - ry * 0.98)
 
-        # olhos (com piscar)
         blink = self._blink_factor(t)
         eye_y = cy + ry * 0.05
         eye_dx = rx * 0.46
@@ -317,7 +341,6 @@ class Avatar:
         self._ov(c, self.eye_l, cx - eye_dx, eye_y, ew, max(eh, 1))
         self._ov(c, self.eye_r, cx + eye_dx, eye_y, ew, max(eh, 1))
 
-        # iris: olha pra cima quando "pensando"
         look_y = -S * 0.018 if self.state == "thinking" else 0
         ir = S * 0.034 * (1 if blink > 0.4 else 0.2)
         self._ov(c, self.iris_l, cx - eye_dx, eye_y + look_y, ir, ir)
@@ -331,24 +354,32 @@ class Avatar:
         for it in (self.iris_l, self.iris_r, self.hi_l, self.hi_r):
             c.itemconfig(it, state=vis)
 
-        # sobrancelhas
         by = eye_y - eh - S * 0.03
         c.coords(self.brow_l, cx - eye_dx - ew, by + 2, cx - eye_dx + ew, by)
         c.coords(self.brow_r, cx + eye_dx - ew, by, cx + eye_dx + ew, by + 2)
 
-        # blush
         self._ov(c, self.blush_l, cx - eye_dx - S * 0.01, eye_y + S * 0.07, S * 0.03, S * 0.018)
         self._ov(c, self.blush_r, cx + eye_dx + S * 0.01, eye_y + S * 0.07, S * 0.03, S * 0.018)
 
-        # boca: anima abrindo quando falando
+        # boca: tempo real via mouth_provider (eventos de palavra do TTS)
         my = cy + ry * 0.5
         if self.state == "speaking":
-            open_amt = (0.5 + 0.5 * math.sin(t * 16)) * S * 0.03 + S * 0.006
+            level = 0.5
+            if self.mouth_provider:
+                try:
+                    level = float(self.mouth_provider())
+                except Exception:
+                    level = 0.5
+            else:
+                level = 0.5 + 0.5 * math.sin(t * 16)
+            flutter = (math.sin(t * 24) * S * 0.004) if level > 0.3 else 0
+            open_amt = level * S * 0.04 + S * 0.006 + flutter
+            mw = S * 0.028 + level * S * 0.006
         else:
             open_amt = S * 0.006
-        self._ov(c, self.mouth, cx, my, S * 0.028, open_amt)
+            mw = S * 0.028
+        self._ov(c, self.mouth, cx, my, mw, max(open_amt, S * 0.005))
 
-        # pontinhos de "pensando"
         show = self.state == "thinking"
         for i, d in enumerate(self.dots):
             if not show:
@@ -361,7 +392,6 @@ class Avatar:
         c.after(40, self._animate)
 
     def _blink_factor(self, t: float) -> float:
-        # pisca rapido a cada ~3.2s
         cycle = t % 3.2
         if cycle < 0.14:
             return max(0.05, abs(math.cos(cycle / 0.14 * math.pi)))
@@ -369,7 +399,7 @@ class Avatar:
 
 
 # --------------------------------------------------------------------------- #
-# Voz: TTS + STT
+# Voz: TTS com lip-sync por palavra + STT
 # --------------------------------------------------------------------------- #
 class Speaker:
     def __init__(self) -> None:
@@ -378,8 +408,24 @@ class Speaker:
         self.on_done = None
         self._queue: "queue.Queue[str | None]" = queue.Queue()
         self._engine = None
+        self._speaking = False
+        self._last_word = 0.0
         if self.available:
             threading.Thread(target=self._loop, daemon=True).start()
+
+    def _on_word(self, *_args, **_kwargs) -> None:
+        # Disparado a cada palavra falada -> alimenta o lip-sync em tempo real.
+        self._last_word = time.time()
+
+    def mouth_level(self) -> float:
+        if not self._speaking:
+            return 0.0
+        dt = time.time() - self._last_word
+        if dt < 0.13:
+            return 1.0
+        if dt < 0.26:
+            return 0.55
+        return 0.18
 
     def _loop(self) -> None:
         try:
@@ -387,6 +433,10 @@ class Speaker:
 
             engine = pyttsx3.init()
             self._engine = engine
+            try:
+                engine.connect("started-word", self._on_word)
+            except Exception:
+                pass
             try:
                 for voice in engine.getProperty("voices"):
                     blob = f"{voice.id} {getattr(voice, 'name', '')} {getattr(voice, 'languages', '')}".lower()
@@ -404,6 +454,8 @@ class Speaker:
             text = self._queue.get()
             if not text:
                 continue
+            self._speaking = True
+            self._last_word = time.time()
             if self.on_start:
                 self.on_start()
             try:
@@ -411,6 +463,7 @@ class Speaker:
                 engine.runAndWait()
             except Exception:
                 pass
+            self._speaking = False
             if self.on_done and self._queue.empty():
                 self.on_done()
 
@@ -426,6 +479,7 @@ class Speaker:
                 self._queue.get_nowait()
         except Exception:
             pass
+        self._speaking = False
         if self._engine is not None:
             try:
                 self._engine.stop()
@@ -490,6 +544,12 @@ class KemyVoiceApp:
         self.connected = False
         self.busy = False
         self.continuous = False
+        self.last_saved_dir: Path | None = None
+
+        # Carrega .env do usuario (chaves de IA, LLM_MODE, workspace...).
+        self.env_path = find_env_file()
+        self.env_file_vars = parse_env_file(self.env_path) if self.env_path else {}
+        self.workspace_root = self._resolve_workspace_root()
 
         self.speaker = Speaker()
         self.speaker.on_start = lambda: self.root.after(0, lambda: self._set_state("speaking"))
@@ -497,18 +557,33 @@ class KemyVoiceApp:
         self.listener = Listener()
 
         self._build_ui()
+        self.avatar.mouth_provider = self.speaker.mouth_level  # lip-sync em tempo real
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self._set_state("offline")
         threading.Thread(target=self._bootstrap, daemon=True).start()
 
+    def _resolve_workspace_root(self) -> Path:
+        raw = self.env_file_vars.get("KEMY_LOCAL_WORKSPACE_ROOT", "").strip()
+        if raw:
+            try:
+                return Path(raw)
+            except Exception:
+                pass
+        return Path.home() / "KemyWorkspace"
+
+    def _has_ai_keys(self) -> bool:
+        keys = ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+        return any(self.env_file_vars.get(k) for k in keys)
+
+    # ----- UI ----- #
     def _build_ui(self) -> None:
         self.root.title("Kemy - Assistente de Voz")
-        self.root.geometry("820x680")
-        self.root.minsize(720, 600)
+        self.root.geometry("840x720")
+        self.root.minsize(740, 620)
         self.root.configure(bg=COLORS["bg"])
 
         header = tk.Frame(self.root, bg=COLORS["bg"])
-        header.pack(fill="x", padx=24, pady=(18, 4))
+        header.pack(fill="x", padx=24, pady=(16, 4))
         tk.Label(header, text="Kemy", font=("Segoe UI", 22, "bold"),
                  fg=COLORS["text"], bg=COLORS["bg"]).pack(side="left")
         tk.Label(header, text="  sua VTuber assistente local", font=("Segoe UI", 10),
@@ -518,7 +593,17 @@ class KemyVoiceApp:
                                     fg=COLORS["muted"], bg=COLORS["bg"])
         self.state_label.pack(side="right", pady=(8, 0))
 
-        self.avatar = Avatar(self.root, size=300)
+        # barra de ferramentas (config / pasta / atualizar)
+        tools = tk.Frame(self.root, bg=COLORS["bg"])
+        tools.pack(fill="x", padx=24)
+        for txt, cmd in (("⚙ Configurar IA (.env)", self._import_env),
+                         ("📁 Abrir pasta", self._open_workspace),
+                         ("⬆ Atualizar", self._check_update)):
+            tk.Button(tools, text=txt, command=cmd, bg=COLORS["panel"], fg=COLORS["muted"],
+                      font=("Segoe UI", 9), relief="flat", padx=10, pady=4,
+                      cursor="hand2").pack(side="left", padx=(0, 8))
+
+        self.avatar = Avatar(self.root, size=290)
         self.avatar.canvas.pack(pady=(4, 6))
 
         self.transcript = scrolledtext.ScrolledText(
@@ -546,7 +631,7 @@ class KemyVoiceApp:
                   cursor="hand2").pack(side="left")
 
         controls = tk.Frame(self.root, bg=COLORS["bg"])
-        controls.pack(fill="x", padx=24, pady=(2, 18))
+        controls.pack(fill="x", padx=24, pady=(2, 16))
         self.talk_btn = tk.Button(controls, text="🎙  Falar com a Kemy", command=self._on_talk,
                                   bg=COLORS["listening"], fg=COLORS["bg"],
                                   font=("Segoe UI", 11, "bold"), relief="flat",
@@ -584,6 +669,16 @@ class KemyVoiceApp:
     # ----- conexao ----- #
     def _bootstrap(self) -> None:
         self.root.after(0, lambda: self._log("Iniciando Kemy local...", "sys"))
+        if self.env_path:
+            self.root.after(0, lambda: self._log(f"Config carregada de: {self.env_path}", "sys"))
+            if self._has_ai_keys() and self.env_file_vars.get("LLM_MODE", "").lower() != "mock":
+                self.root.after(0, lambda: self._log("IA real ativada com suas chaves.", "sys"))
+            else:
+                self.root.after(0, lambda: self._log("Sem chave de IA -> respostas em modo exemplo.", "sys"))
+        else:
+            self.root.after(0, lambda: self._log(
+                "Nenhum .env encontrado. Clique em 'Configurar IA' para ativar a IA real.", "sys"))
+
         if not _healthcheck(f"{self.base_url}/api/status"):
             self._start_server()
             if not self._wait_ready():
@@ -595,7 +690,8 @@ class KemyVoiceApp:
             self.api.new_session()
             self.connected = True
             self.root.after(0, lambda: self._set_state("idle"))
-            self.root.after(0, lambda: self._log("Tudo pronto! Fale comigo ou escreva um pedido.", "sys"))
+            self.root.after(0, lambda: self._log(
+                f"Tudo pronto! Arquivos serao salvos em: {self.workspace_root}", "sys"))
             self.speaker.say("Oi! Eu sou a Kemy. Como posso te ajudar?")
         except Exception as exc:
             self.root.after(0, lambda e=exc: self._log(f"Falha ao conectar: {e}", "sys"))
@@ -603,6 +699,7 @@ class KemyVoiceApp:
 
     def _backend_env(self) -> dict:
         env = dict(os.environ)
+        env.update(self.env_file_vars)  # chaves de IA, LLM_MODE etc.
         env["KEMY_AUTH_USER"] = APP_USER
         env["KEMY_AUTH_PASSWORD"] = APP_PASSWORD
         env["KEMY_AUTH_SECRET"] = APP_SECRET
@@ -629,6 +726,91 @@ class KemyVoiceApp:
                 return True
             time.sleep(0.35)
         return False
+
+    # ----- acoes locais ----- #
+    def _save_files_local(self, resultado: dict | None) -> tuple[Path, int] | None:
+        files = (resultado or {}).get("files") or []
+        if not files:
+            return None
+        base = self.workspace_root / ("projeto-" + time.strftime("%Y%m%d-%H%M%S"))
+        saved = 0
+        for item in files:
+            rel = str(item.get("path") or "").strip().lstrip("/\\")
+            content = item.get("content")
+            if not rel or content is None:
+                continue
+            dest = base / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(str(content), encoding="utf-8", errors="ignore")
+                saved += 1
+            except Exception:
+                continue
+        if saved:
+            self.last_saved_dir = base
+            return base, saved
+        return None
+
+    def _open_path(self, path: Path) -> None:
+        try:
+            if os.name == "nt":
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            self._log(f"Nao consegui abrir {path}: {exc}", "sys")
+
+    def _open_workspace(self) -> None:
+        target = self.last_saved_dir or self.workspace_root
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self._open_path(target)
+
+    def _import_env(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Selecione seu arquivo .env (com as chaves de IA)",
+            filetypes=[("Arquivo .env", ".env"), ("Todos", "*.*")],
+        )
+        if not path:
+            return
+        dest = config_dir() / ".env"
+        try:
+            shutil.copyfile(path, dest)
+        except Exception as exc:
+            messagebox.showerror("Kemy", f"Falha ao salvar config: {exc}")
+            return
+        self.env_path = dest
+        self.env_file_vars = parse_env_file(dest)
+        self.workspace_root = self._resolve_workspace_root()
+        self._log("Config salva. Reconectando com IA real...", "sys")
+        threading.Thread(target=self._restart_backend, daemon=True).start()
+
+    def _restart_backend(self) -> None:
+        self.connected = False
+        self.root.after(0, lambda: self._set_state("offline"))
+        if self.process is not None and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=6)
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+        self.process = None
+        time.sleep(1.2)
+        self._bootstrap()
+
+    def _check_update(self) -> None:
+        self._log("Abrindo a pagina de versoes mais recentes...", "sys")
+        try:
+            webbrowser.open(RELEASES_URL)
+        except Exception:
+            pass
 
     # ----- interacao ----- #
     def _on_talk(self) -> None:
@@ -685,6 +867,11 @@ class KemyVoiceApp:
                     break
                 time.sleep(0.5)
             spoken, display = result_to_speech(resultado, erro)
+            saved = self._save_files_local(resultado) if not erro else None
+            if saved:
+                base, count = saved
+                display += f"\n\n💾 Salvei {count} arquivo(s) em: {base}"
+                spoken = f"Pronto! Criei {count} arquivos e salvei na sua pasta. " + spoken
             self.root.after(0, lambda: self._deliver_response(spoken, display))
         except Exception as exc:
             self.root.after(0, lambda e=exc: self._deliver_response(

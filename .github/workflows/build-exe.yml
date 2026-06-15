@@ -15,7 +15,7 @@ on:
       - ".github/workflows/build-exe.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -47,3 +47,18 @@ jobs:
           path: dist/KemyDesktop
           if-no-files-found: error
           retention-days: 30
+
+      - name: Zip build
+        shell: pwsh
+        run: Compress-Archive -Path dist/KemyDesktop/* -DestinationPath KemyDesktop-windows.zip -Force
+
+      - name: Publish Release (link fixo)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-latest
+          name: Kemy Desktop (ultima build)
+          body: |
+            Build automatica do assistente de voz Kemy (Windows).
+            Baixe o KemyDesktop-windows.zip, extraia e rode KemyDesktop.exe.
+          files: KemyDesktop-windows.zip
+          fail_on_unmatched_files: true
