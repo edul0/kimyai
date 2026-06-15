@@ -117,9 +117,10 @@ def config_dir() -> Path:
 
 
 def find_env_file() -> Path | None:
-    for cand in (EXE_DIR / ".env", config_dir() / ".env", ROOT_DIR / ".env", Path.cwd() / ".env"):
+    for cand in (EXE_DIR / ".env", config_dir() / ".env", ROOT_DIR / ".env",
+                 ROOT_DIR / "kemy_bundled.env", Path.cwd() / ".env"):
         try:
-            if cand.is_file():
+            if cand.is_file() and cand.read_text(encoding="utf-8", errors="ignore").strip():
                 return cand
         except Exception:
             continue
