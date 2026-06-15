@@ -42,3 +42,5 @@ if (-not (Test-Path kemy_bundled.env)) { New-Item -ItemType File kemy_bundled.en
 Write-Host ""
 Write-Host "Build concluido." -ForegroundColor Green
 Write-Host "Exe: dist\KemyDesktop\KemyDesktop.exe" -ForegroundColor Yellow
+
+# rebuild trigger: ler KEMY_ENV apos secret cadastrado
