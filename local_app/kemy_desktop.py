@@ -285,32 +285,40 @@ class LLMClient:
     def __init__(self, env: dict[str, str]) -> None:
         self.gemini = env.get("GEMINI_API_KEY")
         self.groq = env.get("GROQ_API_KEY")
-        self.openai = env.get("OPENAI_API_KEY")
+        self.cerebras = env.get("CEREBRAS_API_KEY")
+        self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
+        self.openrouter = env.get("OPENROUTER_API_KEY")
         self.gemini_model = env.get("GEMINI_PRIMARY_MODEL") or "gemini-2.0-flash"
-        self.available = bool(self.gemini or self.groq or self.openai)
+        self.available = bool(self.gemini or self.groq or self.cerebras or self.openai or self.openrouter)
 
     def chat(self, system: str, messages: list[dict]) -> str:
         errors: list[str] = []
-        if self.gemini:
-            try:
-                return self._gemini(system, messages)
-            except Exception as exc:
-                errors.append(f"gemini: {exc}")
+        # Cerebras e Groq primeiro (rapidos e cota generosa); Gemini/OpenAI/OpenRouter como reserva.
+        attempts = []
+        if self.cerebras:
+            attempts.append(("cerebras", lambda: self._openai_compat(
+                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, "llama-3.3-70b", system, messages)))
         if self.groq:
-            try:
-                return self._openai_compat(
-                    "https://api.groq.com/openai/v1/chat/completions", self.groq,
-                    "llama-3.3-70b-versatile", system, messages)
-            except Exception as exc:
-                errors.append(f"groq: {exc}")
+            attempts.append(("groq", lambda: self._openai_compat(
+                "https://api.groq.com/openai/v1/chat/completions", self.groq, "llama-3.3-70b-versatile", system, messages)))
+        if self.gemini:
+            attempts.append(("gemini", lambda: self._gemini(system, messages)))
         if self.openai:
+            attempts.append(("openai", lambda: self._openai_compat(
+                "https://api.openai.com/v1/chat/completions", self.openai, "gpt-4o-mini", system, messages)))
+        if self.openrouter:
+            attempts.append(("openrouter", lambda: self._openai_compat(
+                "https://openrouter.ai/api/v1/chat/completions", self.openrouter,
+                "meta-llama/llama-3.3-70b-instruct", system, messages)))
+        for name, fn in attempts:
             try:
-                return self._openai_compat(
-                    "https://api.openai.com/v1/chat/completions", self.openai,
-                    "gpt-4o-mini", system, messages)
+                return fn()
             except Exception as exc:
-                errors.append(f"openai: {exc}")
-        raise RuntimeError("; ".join(errors) or "Sem provedor de IA configurado.")
+                errors.append(f"{name}: {exc}")
+        raise RuntimeError(
+            ("Todos os provedores falharam (" + "; ".join(errors) + "). "
+             "As chaves podem estar esgotadas ou bloqueadas — gere chaves novas e atualize o KEMY_ENV.")
+            if errors else "Sem provedor de IA configurado.")
 
     def _post(self, url: str, headers: dict, payload: dict, timeout: float = 120) -> dict:
         data = json.dumps(payload).encode("utf-8")
