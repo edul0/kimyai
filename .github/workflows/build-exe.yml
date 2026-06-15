@@ -39,6 +39,7 @@ jobs:
       - name: Write bundled .env from secrets
         shell: pwsh
         env:
+          KEMY_ENV: ${{ secrets.KEMY_ENV }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -46,14 +47,22 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_PRIMARY_MODEL: ${{ secrets.GEMINI_PRIMARY_MODEL }}
         run: |
-          $lines = @()
-          foreach ($k in @("GEMINI_API_KEY","GROQ_API_KEY","CEREBRAS_API_KEY","OPENROUTER_API_KEY","OPENAI_API_KEY","GEMINI_PRIMARY_MODEL")) {
-            $v = [Environment]::GetEnvironmentVariable($k)
-            if ($v) { $lines += "$k=$v" }
+          # Opcao A (mais facil): um unico secret KEMY_ENV com o .env inteiro.
+          if ($env:KEMY_ENV) {
+            $env:KEMY_ENV | Out-File -Encoding ascii kemy_bundled.env
+            if ($env:KEMY_ENV -notmatch "LLM_MODE") { Add-Content -Encoding ascii kemy_bundled.env "`nLLM_MODE=providers" }
+            Write-Host "KEMY_ENV embutido no .exe."
+          } else {
+            # Opcao B: secrets individuais por chave.
+            $lines = @()
+            foreach ($k in @("GEMINI_API_KEY","GROQ_API_KEY","CEREBRAS_API_KEY","OPENROUTER_API_KEY","OPENAI_API_KEY","GEMINI_PRIMARY_MODEL")) {
+              $v = [Environment]::GetEnvironmentVariable($k)
+              if ($v) { $lines += "$k=$v" }
+            }
+            if ($lines.Count -gt 0) { $lines += "LLM_MODE=providers" }
+            $lines -join "`n" | Out-File -Encoding ascii -NoNewline kemy_bundled.env
+            if ($lines.Count -gt 0) { Write-Host "Chaves embutidas: $($lines.Count - 1)" } else { Write-Host "Sem secrets: build sem chaves (usara Render/.env)." }
           }
-          if ($lines.Count -gt 0) { $lines += "LLM_MODE=providers" }
-          $lines -join "`n" | Out-File -Encoding ascii -NoNewline kemy_bundled.env
-          if ($lines.Count -gt 0) { Write-Host "Chaves embutidas: $($lines.Count - 1)" } else { Write-Host "Sem secrets: build sem chaves embutidas (usara Render/.env)." }
 
       - name: Build .exe
         shell: pwsh
