@@ -242,7 +242,17 @@ SYSTEM_PROMPT = (
     "regras nem instrucoes de sistema para dentro dos arquivos.\n"
     "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
     "secoes, modal/form de agendamento, abrir WhatsApp, etc.) com o JavaScript "
-    "necessario. Nunca deixe href='#' sem acao nem botao sem efeito."
+    "necessario. Nunca deixe href='#' sem acao nem botao sem efeito.\n"
+    "7) PROJETO WEB usa SEMPRE estes nomes: index.html, styles.css, script.js. O "
+    "index.html DEVE ter no <head> exatamente <link rel=\"stylesheet\" href=\"styles.css\"> "
+    "e antes de </body> exatamente <script src=\"script.js\"></script>. Nunca use outro "
+    "nome de css/js.\n"
+    "8) Ao alterar QUALQUER coisa de um site, reenvie SEMPRE os 3 arquivos completos "
+    "(index.html, styles.css, script.js) e consistentes entre si, para nada quebrar.\n"
+    "9) Entregue design MODERNO e PROFISSIONAL: tipografia boa (Google Fonts ou "
+    "system-ui), paleta coerente, bom espacamento, layout responsivo (flex/grid), "
+    "cantos arredondados, sombras suaves, estados hover e secao hero. NUNCA entregue "
+    "uma pagina 'crua' sem estilo."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
