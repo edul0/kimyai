@@ -322,9 +322,30 @@ class LLMClient:
 
     def _post(self, url: str, headers: dict, payload: dict, timeout: float = 120) -> dict:
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        last_err: Exception | None = None
+        # Retry com backoff em 429/503 (limites momentaneos sao comuns no free tier).
+        for attempt in range(4):
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                if exc.code in (429, 503) and attempt < 3:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                try:
+                    body = exc.read().decode("utf-8", "ignore")[:180]
+                except Exception:
+                    body = ""
+                raise RuntimeError(f"HTTP {exc.code} {body}".strip()) from exc
+            except Exception as exc:
+                last_err = exc
+                if attempt < 3:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                raise
+        raise last_err or RuntimeError("falha desconhecida")
 
     def _gemini(self, system: str, messages: list[dict]) -> str:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
