@@ -85,13 +85,16 @@ COLORS = {
     "offline": "#6b7b96",
     "error": "#f87171",
     "user": "#9fe7d2",
-    "skin": "#ffe2d2",
-    "hair": "#8b6fe6",
-    "hair_dark": "#6f56c4",
-    "eye_white": "#ffffff",
-    "iris": "#3aa0b8",
-    "blush": "#ff9bb0",
-    "mouth": "#b8455e",
+    "skin": "#ece1f2",
+    "skin_shadow": "#d9c7e6",
+    "hair": "#211433",
+    "hair_dark": "#120a1f",
+    "hair_edge": "#3a2358",
+    "eye_white": "#f3ecff",
+    "iris": "#a78bfa",
+    "blush": "#b06a8f",
+    "lips": "#6e2440",
+    "mouth": "#6e2440",
 }
 
 STATE_LABELS = {
@@ -546,52 +549,86 @@ class Avatar:
             c.after(40, self._animate)
             return
 
-        bw, bh = rx * 1.45, ry * 1.5
+        # cabelo gotico longo (atras do rosto) - sem calvicie
         c.coords(self.back_hair,
-                 cx - bw, cy - bh * 0.5, cx - bw * 0.7, cy + bh, cx, cy + bh * 1.15,
-                 cx + bw * 0.7, cy + bh, cx + bw, cy - bh * 0.5,
-                 cx + bw * 0.4, cy - bh, cx - bw * 0.4, cy - bh)
-        self._ov(c, self.head, cx, cy, rx, ry)
-        ear_y = cy + ry * 0.1
-        ex = rx * 1.02
-        self._ov(c, self.ear_l, cx - ex, ear_y, S * 0.045, S * 0.055)
-        self._ov(c, self.ear_r, cx + ex, ear_y, S * 0.045, S * 0.055)
+                 cx - rx * 1.45, cy - ry * 0.7, cx - rx * 1.5, cy + ry * 1.75,
+                 cx - rx * 0.7, cy + ry * 1.15, cx, cy + ry * 1.3,
+                 cx + rx * 0.7, cy + ry * 1.15, cx + rx * 1.5, cy + ry * 1.75,
+                 cx + rx * 1.45, cy - ry * 0.7, cx + rx * 0.8, cy - ry * 1.3,
+                 cx, cy - ry * 1.52, cx - rx * 0.8, cy - ry * 1.3)
+        c.itemconfig(self.back_hair, fill=COLORS["hair"])
+
+        # rosto palido (mais estreito = elegante)
+        self._ov(c, self.head, cx, cy, rx * 0.9, ry)
+        c.itemconfig(self.head, fill=COLORS["skin"])
+
+        # pods tech laterais com nucleo neon
+        ear_y = cy + ry * 0.05
+        ex = rx * 0.98
         cup_pulse = (3 * (0.5 + 0.5 * math.sin(t * 4))) if self.state == "listening" else 0
-        self._ov(c, self.cup_l, cx - ex, ear_y, S * 0.06 + cup_pulse, S * 0.075 + cup_pulse)
-        self._ov(c, self.cup_r, cx + ex, ear_y, S * 0.06 + cup_pulse, S * 0.075 + cup_pulse)
+        self._ov(c, self.ear_l, cx - ex, ear_y, S * 0.05, S * 0.085)
+        self._ov(c, self.ear_r, cx + ex, ear_y, S * 0.05, S * 0.085)
+        c.itemconfig(self.ear_l, fill=COLORS["hair_dark"])
+        c.itemconfig(self.ear_r, fill=COLORS["hair_dark"])
+        self._ov(c, self.cup_l, cx - ex, ear_y, S * 0.016 + cup_pulse, S * 0.05 + cup_pulse)
+        self._ov(c, self.cup_r, cx + ex, ear_y, S * 0.016 + cup_pulse, S * 0.05 + cup_pulse)
         c.itemconfig(self.cup_l, fill=accent)
         c.itemconfig(self.cup_r, fill=accent)
-        c.coords(self.band, cx - ex - S * 0.02, cy - ry - S * 0.05, cx + ex + S * 0.02, cy + ry * 0.2)
-        c.itemconfig(self.band, outline=accent, start=10, extent=160)
-        fy = cy - ry * 0.55
+
+        # arco neon (gola futurista) sob o queixo
+        c.coords(self.band, cx - rx * 1.15, cy + ry * 0.25, cx + rx * 1.15, cy + ry * 1.55)
+        c.itemconfig(self.band, outline=accent, start=200, extent=140, width=3)
+
+        # franja gotica em V (widow's peak)
         c.coords(self.bangs,
-                 cx - rx, cy - ry * 0.2, cx - rx * 0.95, fy - ry * 0.4, cx - rx * 0.3, cy - ry,
-                 cx, fy, cx + rx * 0.3, cy - ry, cx + rx * 0.95, fy - ry * 0.4, cx + rx, cy - ry * 0.2,
-                 cx + rx * 0.5, cy - ry * 0.35, cx, cy - ry * 0.15, cx - rx * 0.5, cy - ry * 0.35)
-        c.coords(self.tuft, cx - 6, cy - ry * 0.98, cx + 2, cy - ry * 1.28, cx + 10, cy - ry * 0.98)
+                 cx - rx * 0.98, cy - ry * 0.32, cx - rx * 1.02, cy - ry * 1.04,
+                 cx - rx * 0.45, cy - ry * 0.78, cx - rx * 0.5, cy - ry * 1.12,
+                 cx, cy - ry * 0.8, cx + rx * 0.5, cy - ry * 1.12,
+                 cx + rx * 0.45, cy - ry * 0.78, cx + rx * 1.02, cy - ry * 1.04,
+                 cx + rx * 0.98, cy - ry * 0.32, cx + rx * 0.5, cy - ry * 0.52,
+                 cx, cy - ry * 0.1, cx - rx * 0.5, cy - ry * 0.52)
+        c.itemconfig(self.bangs, fill=COLORS["hair"])
+
+        # gema futurista na testa (pulsa)
+        gx, gy = cx, cy - ry * 0.4
+        gs = S * 0.02 + S * 0.006 * (0.5 + 0.5 * math.sin(t * 3))
+        c.coords(self.tuft, gx, gy - gs, gx + gs * 0.7, gy, gx, gy + gs, gx - gs * 0.7, gy)
+        c.itemconfig(self.tuft, fill=accent)
+
+        # olhos neon
         blink = self._blink_factor(t)
-        eye_y = cy + ry * 0.05
-        eye_dx = rx * 0.46
-        ew, eh = S * 0.052, S * 0.066 * blink
+        eye_y = cy + ry * 0.08
+        eye_dx = rx * 0.42
+        ew, eh = S * 0.05, S * 0.05 * blink
         self._ov(c, self.eye_l, cx - eye_dx, eye_y, ew, max(eh, 1))
         self._ov(c, self.eye_r, cx + eye_dx, eye_y, ew, max(eh, 1))
-        look_y = -S * 0.018 if self.state == "thinking" else 0
-        ir = S * 0.034 * (1 if blink > 0.4 else 0.2)
+        c.itemconfig(self.eye_l, fill=COLORS["eye_white"])
+        c.itemconfig(self.eye_r, fill=COLORS["eye_white"])
+        look_y = -S * 0.016 if self.state == "thinking" else 0
+        ir = S * 0.032 * (1 if blink > 0.4 else 0.2)
         self._ov(c, self.iris_l, cx - eye_dx, eye_y + look_y, ir, ir)
         self._ov(c, self.iris_r, cx + eye_dx, eye_y + look_y, ir, ir)
-        c.itemconfig(self.iris_l, fill=accent if self.state != "idle" else COLORS["iris"])
-        c.itemconfig(self.iris_r, fill=accent if self.state != "idle" else COLORS["iris"])
-        hr = ir * 0.4
-        self._ov(c, self.hi_l, cx - eye_dx - ir * 0.4, eye_y + look_y - ir * 0.4, hr, hr)
-        self._ov(c, self.hi_r, cx + eye_dx - ir * 0.4, eye_y + look_y - ir * 0.4, hr, hr)
+        c.itemconfig(self.iris_l, fill=accent)
+        c.itemconfig(self.iris_r, fill=accent)
+        hr = ir * 0.45
+        self._ov(c, self.hi_l, cx - eye_dx + ir * 0.35, eye_y + look_y - ir * 0.35, hr, hr)
+        self._ov(c, self.hi_r, cx + eye_dx + ir * 0.35, eye_y + look_y - ir * 0.35, hr, hr)
         vis = "normal" if blink > 0.4 else "hidden"
         for it in (self.iris_l, self.iris_r, self.hi_l, self.hi_r):
             c.itemconfig(it, state=vis)
-        by = eye_y - eh - S * 0.03
-        c.coords(self.brow_l, cx - eye_dx - ew, by + 2, cx - eye_dx + ew, by)
-        c.coords(self.brow_r, cx + eye_dx - ew, by, cx + eye_dx + ew, by + 2)
-        self._ov(c, self.blush_l, cx - eye_dx - S * 0.01, eye_y + S * 0.07, S * 0.03, S * 0.018)
-        self._ov(c, self.blush_r, cx + eye_dx + S * 0.01, eye_y + S * 0.07, S * 0.03, S * 0.018)
+
+        # delineado angular (edgy)
+        by = eye_y - eh - S * 0.022
+        c.coords(self.brow_l, cx - eye_dx - ew * 1.1, by - 2, cx - eye_dx + ew * 0.8, by + 3)
+        c.coords(self.brow_r, cx + eye_dx - ew * 0.8, by + 3, cx + eye_dx + ew * 1.1, by - 2)
+        c.itemconfig(self.brow_l, fill=COLORS["hair_dark"])
+        c.itemconfig(self.brow_r, fill=COLORS["hair_dark"])
+
+        # blush sutil e frio
+        self._ov(c, self.blush_l, cx - eye_dx, eye_y + S * 0.06, S * 0.022, S * 0.012)
+        self._ov(c, self.blush_r, cx + eye_dx, eye_y + S * 0.06, S * 0.022, S * 0.012)
+        c.itemconfig(self.blush_l, fill=COLORS["blush"])
+        c.itemconfig(self.blush_r, fill=COLORS["blush"])
         my = cy + ry * 0.5
         if self.state == "speaking":
             level = 0.5
