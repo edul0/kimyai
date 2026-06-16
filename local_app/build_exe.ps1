@@ -15,6 +15,7 @@ Write-Host "[Kemy] Gerando .exe local (assistente de voz)..." -ForegroundColor C
 # .env embutido (gerado pelo CI a partir dos GitHub Secrets). Garante que o
 # arquivo exista para o --add-data; vazio = sem chaves embutidas.
 if (-not (Test-Path kemy_bundled.env)) { New-Item -ItemType File kemy_bundled.env | Out-Null }
+if (-not (Test-Path kemy_version.txt)) { New-Item -ItemType File kemy_version.txt | Out-Null }
 
 & $Python -m PyInstaller `
   --noconfirm `
@@ -26,6 +27,7 @@ if (-not (Test-Path kemy_bundled.env)) { New-Item -ItemType File kemy_bundled.en
   --add-data "conhecimento;conhecimento" `
   --add-data ".env.example;." `
   --add-data "kemy_bundled.env;." `
+  --add-data "kemy_version.txt;." `
   --add-data "local_app/ui.html;." `
   --collect-all "webview" `
   --collect-all "clr_loader" `

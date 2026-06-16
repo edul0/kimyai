@@ -47,8 +47,10 @@
   .top .sp{flex:1}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--muted)}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--st);box-shadow:0 0 12px var(--st);transition:.2s}
-  .iconbtn{border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:10px;padding:7px 11px;font-size:12px;cursor:pointer;transition:.15s}
+  .iconbtn{position:relative;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:10px;padding:7px 11px;font-size:12px;cursor:pointer;transition:.15s}
   .iconbtn:hover{background:var(--panel2);color:var(--text);transform:translateY(-1px)}
+  .badge{position:absolute;top:-4px;right:-4px;width:11px;height:11px;border-radius:50%;background:#ff4d4d;
+    box-shadow:0 0 8px #ff4d4d;display:none;animation:pulse 1.2s ease-in-out infinite}
   /* avatar */
   .stage{display:flex;justify-content:center;padding:18px 0 6px}
   .avatar{width:180px;height:180px;position:relative}
@@ -100,16 +102,13 @@
       <button class="newbtn" onclick="api('new_convo')">＋ Nova conversa</button>
       <div class="lbl">CONVERSAS</div>
       <div class="convos" id="convos"></div>
-      <div class="row" style="gap:6px">
-        <button class="iconbtn" style="flex:1" onclick="api('open_folder')">📁 Pasta</button>
-        <button class="iconbtn" style="flex:1" onclick="doUpdate()">⬆ Atualizar</button>
-      </div>
+      <button class="iconbtn" style="width:100%" onclick="api('open_folder')">📁 Abrir pasta</button>
     </aside>
     <section class="main">
       <div class="top">
         <span class="pill"><span class="dot"></span><span id="stateTxt">Conectando…</span></span>
         <span class="sp"></span>
-        <button class="iconbtn" onclick="api('import_env')">⚙ IA (.env)</button>
+        <button class="iconbtn" id="updBtn" onclick="doUpdate()">⬆ Atualizar<span class="badge" id="updBadge"></span></button>
       </div>
       <div class="stage">
         <div class="avatar">
@@ -185,6 +184,7 @@
   function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return; i.value=""; api('send_text',t); }
   document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter")sendText(); });
   function doUpdate(){ addMsg("sys","Procurando atualização…"); api('check_update'); }
+  function setUpdate(av){ const b=document.getElementById("updBadge"); if(b)b.style.display=av?"block":"none"; }
   // boot
   window.addEventListener('pywebviewready',()=>{ pywebview.api.bootstrap().then(st=>{
     renderConvos(st.convos,st.active); kemyState(st.state||"idle");

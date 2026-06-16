@@ -1726,10 +1726,28 @@ class WebApi:
     # ----- API exposta ao JS -----
     def bootstrap(self) -> dict:
         threading.Thread(target=self._connect, daemon=True).start()
+        threading.Thread(target=self._update_flag, daemon=True).start()
         it = self._cur() or {}
         return {"state": "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
                 "log": it.get("log", [])}
+
+    def _update_flag(self) -> None:
+        try:
+            local = (ROOT_DIR / "kemy_version.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            local = ""
+        if not local:
+            return
+        try:
+            req = urllib.request.Request(RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "KemyDesktop"})
+            data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
+            m = re.search(r"sha:\s*([0-9a-fA-F]{7,40})", data.get("body") or "")
+            remote = m.group(1) if m else ""
+            if remote and not remote.startswith(local) and not local.startswith(remote):
+                self._js("setUpdate(true)")
+        except Exception:
+            pass
 
     def _connect(self) -> None:
         if self.mode == "direct":

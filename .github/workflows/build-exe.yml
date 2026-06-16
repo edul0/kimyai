@@ -63,6 +63,7 @@ jobs:
             $lines -join "`n" | Out-File -Encoding ascii -NoNewline kemy_bundled.env
             if ($lines.Count -gt 0) { Write-Host "Chaves embutidas: $($lines.Count - 1)" } else { Write-Host "Sem secrets: build sem chaves (usara Render/.env)." }
           }
+          "${{ github.sha }}" | Out-File -Encoding ascii -NoNewline kemy_version.txt
 
       - name: Build .exe
         shell: pwsh
@@ -88,5 +89,6 @@ jobs:
           body: |
             Build automatica do assistente de voz Kemy (Windows).
             Baixe o KemyDesktop-windows.zip, extraia e rode KemyDesktop.exe.
+            sha: ${{ github.sha }}
           files: KemyDesktop-windows.zip
           fail_on_unmatched_files: true

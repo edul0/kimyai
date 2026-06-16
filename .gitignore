@@ -3,6 +3,7 @@
 # Ambiente e segredos
 .env
 kemy_bundled.env
+kemy_version.txt
 *.pem
 *.key
 env
