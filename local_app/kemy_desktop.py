@@ -279,6 +279,45 @@ def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
         return False
 
 
+def fetch_url_text(url: str, limit: int = 4000) -> str:
+    """Baixa uma pagina e devolve o texto limpo (sem tags), truncado."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KemyDesktop"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(2_000_000)
+        html = raw.decode("utf-8", "ignore")
+        html = re.sub(r"(?is)<(script|style|noscript|svg).*?</\1>", " ", html)
+        text = re.sub(r"(?s)<[^>]+>", " ", html)
+        text = re.sub(r"&[a-z#0-9]+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:limit]
+    except Exception:
+        return ""
+
+
+def web_search(query: str, limit: int = 6) -> str:
+    """Busca best-effort no DuckDuckGo (HTML), devolve titulos + links."""
+    try:
+        url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KemyDesktop"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html = resp.read().decode("utf-8", "ignore")
+        out: list[str] = []
+        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL):
+            title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            link = m.group(1)
+            dec = re.search(r"uddg=([^&]+)", link)
+            if dec:
+                link = urllib.parse.unquote(dec.group(1))
+            if title:
+                out.append(f"- {title} ({link})")
+            if len(out) >= limit:
+                break
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
 def extract_code_files(text: str) -> list[dict]:
     files: list[dict] = []
     if not text:
@@ -2340,6 +2379,9 @@ class WebApi:
         current = read_project_files(base)
         if current:
             system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
+        web = self._web_context(text)
+        if web:
+            system += web
         msgs = []
         for e in (it.get("log") if it else []) or []:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
@@ -2349,6 +2391,28 @@ class WebApi:
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         return chat or "Feito.", save
+
+    def _web_context(self, text: str) -> str:
+        """Le URLs citadas e faz busca na web quando o usuario pede; alimenta a IA."""
+        extra = ""
+        urls = re.findall(r"https?://[^\s)>\"']+", text)
+        for u in urls[:2]:
+            self._msg("sys", f"🌐 Lendo {u} …", store=False)
+            t = fetch_url_text(u)
+            if t:
+                extra += f"\n\nCONTEUDO DE {u}:\n{t}"
+        low = text.lower().strip()
+        triggers = ("pesquise", "pesquisar", "busque", "buscar", "procure", "procurar", "search")
+        if any(low.startswith(p) for p in triggers) or "na internet" in low or "na web" in low:
+            q = text.split(":", 1)[1].strip() if ":" in text else text
+            self._msg("sys", f"🔎 Buscando na web: {q}", store=False)
+            r = web_search(q)
+            if r:
+                extra += f"\n\nRESULTADOS DA WEB para '{q}':\n{r}"
+        if extra:
+            return ("\n\nINFORMACOES DA WEB (use estes dados atuais para responder; "
+                    "cite os links quando relevante):" + extra)
+        return ""
 
     def _gen_images(self, reqs: list[dict], base: Path) -> None:
         if not reqs:
