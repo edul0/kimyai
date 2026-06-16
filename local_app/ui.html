@@ -54,6 +54,8 @@
   /* avatar */
   .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 0 8px;gap:6px}
   .avatar{width:210px;height:210px;position:relative}
+  .l2dwrap{width:300px;height:340px;display:flex;align-items:center;justify-content:center}
+  #l2d{width:100%;height:100%}
   .statelbl{font-size:13px;font-weight:700;color:var(--st);letter-spacing:.4px;opacity:.9}
   .halo{position:absolute;inset:0;border-radius:50%;border:2px solid var(--st);opacity:.5;
     box-shadow:0 0 30px var(--st);animation:breathe 3.5s ease-in-out infinite}
@@ -123,6 +125,7 @@
         <button class="iconbtn" id="updBtn" onclick="doUpdate()">⬆ Atualizar<span class="badge" id="updBadge"></span></button>
       </div>
       <div class="stage">
+        <div class="l2dwrap" id="l2dwrap" style="display:none"><canvas id="l2d"></canvas></div>
         <div class="avatar" id="svgAvatar">
           <div class="halo"></div>
           <svg viewBox="0 0 200 200" aria-hidden="true">
@@ -234,14 +237,47 @@
         if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }
         try{ pywebview.api.get_state().then(function(s){ if(s) kemyState(s); }); }catch(e){}
       },1500);
+      // Carrega a VTuber Live2D DEPOIS que o app ja respondeu (nunca trava; SVG fica de reserva)
+      setTimeout(loadLive2D, 3000);
     }).catch(function(e){ kemyState('idle'); addMsg('sys','Falha no boot: '+e); });
   }
   window.addEventListener('pywebviewready', boot);
   boot();
   // fallback duro: se em 4s o estado nao saiu de "Conectando", assume pronto
   setTimeout(function(){ if(document.body.className==="offline"||document.body.className===""){ kemyState('idle'); } }, 4000);
-  // lip-sync da carinha SVG: no-op aqui (a boca usa animacao CSS quando 'speaking')
-  window.kemyMouth=function(v){};
+
+  // ---- VTuber Live2D (assincrono; cai pro SVG se falhar) ----
+  window._l2dMouth=0;
+  window.kemyMouth=function(v){ window._l2dMouth=Math.max(0,Math.min(1,+v||0)); };
+  function _loadScript(src){ return new Promise(function(res,rej){
+    var s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=rej;
+    document.head.appendChild(s); }); }
+  function loadLive2D(){
+    if(window.__l2dStarted) return; window.__l2dStarted=true;
+    _loadScript("https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js")
+      .then(function(){ return _loadScript("https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"); })
+      .then(function(){ return _loadScript("https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"); })
+      .then(_startL2D)
+      .catch(function(e){ console.log('Live2D libs falharam, mantendo SVG:',e); });
+  }
+  function _startL2D(){
+    try{
+      if(!window.PIXI||!window.PIXI.live2d){ return; }
+      var MODEL="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+      var W=300,H=340, box=document.getElementById('l2dwrap');
+      var app=new PIXI.Application({view:document.getElementById('l2d'),width:W,height:H,backgroundAlpha:0,antialias:true});
+      PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
+        app.stage.addChild(model);
+        box.style.display='flex';
+        var sv=document.getElementById('svgAvatar'); if(sv) sv.style.display='none';
+        var s=Math.min(W/model.width,H/model.height);
+        model.scale.set(s); model.x=(W-model.width*s)/2; model.y=(H-model.height*s)/2;
+        app.ticker.add(function(){
+          try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._l2dMouth); }catch(e){}
+        });
+      }).catch(function(e){ console.log('Live2D model falhou, usando SVG:',e); });
+    }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
+  }
 </script>
 </body>
 </html>
