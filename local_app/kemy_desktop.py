@@ -325,7 +325,25 @@ SYSTEM_PROMPT = (
     "11) FUNDOS: toda imagem de fundo usa SEMPRE center/cover no-repeat. Hero com imagem = "
     "background: linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)), url('...pollinations...') center/cover; "
     "PROIBIDO background-size que repita em faixas (ex.: 100% 300px) ou gradiente cinza chapado. "
-    "Imagens em <img> tambem com object-fit: cover e width/height definidos para nao distorcer."
+    "Imagens em <img> tambem com object-fit: cover e width/height definidos para nao distorcer.\n"
+    "12) PADRAO DE QUALIDADE (emule este nivel; adapte cores/copy/imagens ao tema):\n"
+    "HTML hero -> <section class=\"hero\"><div class=\"hero-in\">"
+    "<span class=\"eyebrow\">BARBEARIA PREMIUM</span>"
+    "<h1>Seu estilo, no capricho</h1>"
+    "<p>Cortes e barba com hora marcada, sem fila.</p>"
+    "<div class=\"cta\"><a href=\"#agendar\" class=\"btn primary\">Agendar agora</a>"
+    "<a href=\"#servicos\" class=\"btn ghost\">Ver servicos</a></div></div></section>\n"
+    "CSS -> :root{--bg:#0e0e10;--card:#17171b;--gold:#d4af37;--text:#f3f3f5;--muted:#a7a7ad}\n"
+    ".hero{min-height:85vh;display:grid;place-items:center;text-align:center;color:#fff;"
+    "background:linear-gradient(rgba(0,0,0,.62),rgba(0,0,0,.62)),"
+    "url('https://image.pollinations.ai/prompt/modern%20barbershop%20interior%20cinematic?width=1600&height=900&nologo=true') center/cover}\n"
+    ".hero-in{display:flex;flex-direction:column;align-items:center;gap:18px;max-width:680px;padding:0 24px}\n"
+    ".eyebrow{letter-spacing:3px;font-size:13px;color:var(--gold);font-weight:700}\n"
+    ".hero h1{font-size:clamp(40px,6vw,72px);font-weight:800;line-height:1.05;margin:0}\n"
+    ".btn{padding:14px 26px;border-radius:14px;font-weight:700;text-decoration:none;transition:.2s}\n"
+    ".btn.primary{background:var(--gold);color:#1a1304}.btn.primary:hover{transform:translateY(-3px)}\n"
+    ".btn.ghost{border:1px solid rgba(255,255,255,.5);color:#fff}\n"
+    "Cards de servico em grid responsivo com imagem Pollinations do servico no topo de cada card."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -1812,18 +1830,40 @@ class WebApi:
         self.vts.on_connect = lambda: self._js("vtsConnected()")
         self.mini = None
         self._quitting = False
+        self._speaking = False
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
+        threading.Thread(target=self._mini_mouth_loop, daemon=True).start()
 
     def _on_speak_start(self) -> None:
         self.vts.speaking = True
+        self._speaking = True
         self._state("speaking")
 
     def _on_speak_done(self) -> None:
         self.vts.speaking = False
+        self._speaking = False
         self.vts.set_mouth(0.0)
+        try:
+            if self.mini:
+                self.mini.evaluate_js("kemyMouth(0)")
+        except Exception:
+            pass
         self._after_speak()
+
+    def _mini_mouth_loop(self) -> None:
+        """Lip-sync da carinha do mini avatar: empurra o nivel da boca ~20fps."""
+        while True:
+            try:
+                if self.mini and self._speaking:
+                    lvl = self.speaker.mouth_level()
+                    self.mini.evaluate_js(f"kemyMouth({lvl:.2f})")
+                    time.sleep(0.05)
+                else:
+                    time.sleep(0.1)
+            except Exception:
+                time.sleep(0.1)
 
     # ----- helpers UI -----
     def _js(self, code: str) -> None:
@@ -2237,22 +2277,38 @@ class WebApi:
 MINI_HTML = """<!doctype html><html><head><meta charset=utf-8><style>
 html,body{margin:0;height:100%;background:#070a12;overflow:hidden;font-family:'Segoe UI',sans-serif}
 .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;-webkit-user-select:none}
-.orb{width:88px;height:88px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#2de0c8,#5b3aa0 70%,#1a1030);box-shadow:0 0 22px #2de0c8aa;display:flex;align-items:center;justify-content:center;animation:bob 4s ease-in-out infinite;transition:box-shadow .3s}
-.eyes{display:flex;gap:16px}
-.eye{width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 0 6px #fff;transition:height .15s}
-.lbl{margin-top:8px;font-size:12px;color:#9fe;opacity:.85}
+.face{width:120px;height:120px;border-radius:50%;background:radial-gradient(circle at 50% 36%,rgba(124,92,255,.30),rgba(12,8,20,.92) 72%);box-shadow:0 0 22px rgba(124,92,255,.5);display:flex;align-items:center;justify-content:center;animation:bob 4s ease-in-out infinite;transition:box-shadow .3s}
+.face svg{width:106px;height:106px}
+.iris{fill:#36e0c8}.gem{fill:#36e0c8}
+.mouth{fill:#6e2440;transform-box:fill-box;transform-origin:center;transition:transform .04s linear}
+.lbl{margin-top:7px;font-size:12px;color:#bfa9ff;opacity:.9}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-body.speaking .orb{box-shadow:0 0 32px #36f6d6}
-body.speaking .eye{height:5px}
-body.listening .orb{background:radial-gradient(circle at 35% 30%,#ff7aa8,#5b3aa0 70%,#1a1030);box-shadow:0 0 30px #ff5b8a}
-body.thinking .orb{animation:bob 1.1s ease-in-out infinite}
+body.speaking .face{box-shadow:0 0 32px rgba(54,246,214,.65)}
+body.listening .face{box-shadow:0 0 30px rgba(255,91,138,.6)}
+body.thinking .face{animation:bob 1.1s ease-in-out infinite}
 </style></head><body class=idle>
 <div class=wrap onclick="pywebview.api.show_main()" title="Clique para abrir a Kemy">
-  <div class=orb><div class=eyes><div class=eye></div><div class=eye></div></div></div>
+  <div class=face>
+    <svg viewBox="0 0 200 200" aria-hidden="true">
+      <path d="M40 96 Q28 180 70 168 Q100 182 130 168 Q172 180 160 96 Q150 30 100 26 Q50 30 40 96Z" fill="#1a1030"/>
+      <ellipse cx="100" cy="104" rx="42" ry="50" fill="#ece1f2"/>
+      <path d="M55 96 Q44 36 100 30 Q156 36 145 96 Q132 70 116 78 Q100 104 84 78 Q68 70 55 96Z" fill="#211433"/>
+      <path d="M100 64 l6 7 l-6 8 l-6 -8 Z" class="gem"/>
+      <path d="M74 100 q10 -7 22 -2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path d="M104 98 q12 -5 22 2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <g class="eye"><ellipse cx="85" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="85" cy="110" r="5.5"/><circle cx="87" cy="108" r="1.8" fill="#fff"/></g>
+      <g class="eye"><ellipse cx="115" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="115" cy="110" r="5.5"/><circle cx="117" cy="108" r="1.8" fill="#fff"/></g>
+      <ellipse cx="80" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+      <ellipse cx="120" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+      <ellipse class="mouth" cx="100" cy="136" rx="7" ry="5"/>
+    </svg>
+  </div>
   <div class=lbl id=lbl>Kemy</div>
 </div>
 <script>
 function kemyState(s){document.body.className=s;document.getElementById('lbl').textContent={idle:'Kemy',listening:'Ouvindo…',thinking:'Pensando…',speaking:'Falando…'}[s]||s;}
+var _mouth=document.querySelector('.mouth');
+function kemyMouth(v){ if(_mouth){ var s=1+Math.max(0,Math.min(1,v))*2.0; _mouth.style.transform='scaleY('+s+')'; } }
 </script></body></html>"""
 
 
