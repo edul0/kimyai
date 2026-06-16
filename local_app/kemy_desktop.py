@@ -1630,9 +1630,417 @@ class KemyVoiceApp:
         self.root.destroy()
 
 
+def _find_ui_html() -> Path | None:
+    for cand in (ROOT_DIR / "ui.html", Path(__file__).resolve().parent / "ui.html"):
+        try:
+            if cand.is_file():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+class WebApi:
+    """Ponte JS<->Python para a UI em HTML (pywebview)."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self.window = None
+        self.host, self.port = host, int(port)
+        self.base_url = f"http://{host}:{port}"
+        self.env_path = find_env_file()
+        self.env_vars = parse_env_file(self.env_path) if self.env_path else {}
+        self.workspace_root = self._workspace()
+        self.llm = LLMClient(self.env_vars)
+        self.mode = "direct" if self.llm.available else "online"
+        self.api = LocalAPI(self.base_url if self.mode != "online" else (self.env_vars.get("ONLINE_URL") or ONLINE_URL))
+        self.connected = False
+        self.busy = False
+        self.continuous = False
+        self.autonomous = False
+        self.convos_file = config_dir() / "conversations.json"
+        self.convos, self.active_id = [], None
+        self._load_convos()
+        self.speaker = Speaker()
+        self.speaker.on_start = lambda: self._state("speaking")
+        self.speaker.on_done = lambda: self._after_speak()
+        self.listener = Listener()
+
+    # ----- helpers UI -----
+    def _js(self, code: str) -> None:
+        try:
+            if self.window:
+                self.window.evaluate_js(code)
+        except Exception:
+            pass
+
+    def _state(self, s: str) -> None:
+        self._js(f"kemyState({json.dumps(s)})")
+
+    def _msg(self, role: str, text: str, save: str | None = None, store: bool = True) -> None:
+        self._js(f"addMsg({json.dumps(role)},{json.dumps(text)},{json.dumps(save)})")
+        if store and role in ("user", "kemy"):
+            it = self._cur()
+            if it is not None:
+                it.setdefault("log", []).append({"r": role, "t": text})
+                it["log"] = it["log"][-300:]
+                self._save_convos()
+
+    def _render(self) -> None:
+        pub = [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos]
+        self._js(f"renderConvos({json.dumps(pub)},{json.dumps(self.active_id)})")
+
+    # ----- conversas -----
+    def _workspace(self) -> Path:
+        raw = self.env_vars.get("KEMY_LOCAL_WORKSPACE_ROOT", "").strip()
+        return Path(raw) if raw else (Path.home() / "KemyWorkspace")
+
+    def _load_convos(self) -> None:
+        try:
+            d = json.loads(self.convos_file.read_text(encoding="utf-8"))
+            self.convos, self.active_id = d.get("items", []), d.get("active")
+        except Exception:
+            self.convos, self.active_id = [], None
+        if not self.convos:
+            self._add()
+        if not self.active_id or not self._cur():
+            self.active_id = self.convos[0]["id"]
+
+    def _save_convos(self) -> None:
+        try:
+            self.convos_file.write_text(json.dumps({"active": self.active_id, "items": self.convos}, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _add(self) -> dict:
+        cid = uuid.uuid4().hex[:8]
+        it = {"id": cid, "title": "Nova conversa", "session_id": None,
+              "project": str(self.workspace_root / f"projeto-{cid}"), "log": []}
+        self.convos.insert(0, it)
+        self.active_id = cid
+        self._save_convos()
+        return it
+
+    def _cur(self) -> dict | None:
+        return next((c for c in self.convos if c["id"] == self.active_id), None)
+
+    # ----- API exposta ao JS -----
+    def bootstrap(self) -> dict:
+        threading.Thread(target=self._connect, daemon=True).start()
+        it = self._cur() or {}
+        return {"state": "offline", "active": self.active_id,
+                "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
+                "log": it.get("log", [])}
+
+    def _connect(self) -> None:
+        if self.mode == "direct":
+            self.connected = True
+            self._state("idle")
+            self._msg("sys", f"IA direta ativa ({'Gemini' if self.llm.gemini else 'Groq' if self.llm.groq else 'Cerebras' if self.llm.cerebras else 'IA'}). Pasta: {self.workspace_root}", store=False)
+            self.speaker.say("Oi! Como posso ajudar?")
+            return
+        # online (Render)
+        url = self.api.base_url
+        self._msg("sys", f"Usando IA online: {url} (acordando o servidor…)", store=False)
+        for _ in range(40):
+            if _healthcheck(f"{url}/api/status", 4):
+                break
+            time.sleep(2)
+        try:
+            self.api.login(APP_USER, self.env_vars.get("KEMY_AUTH_PASSWORD") or APP_PASSWORD)
+        except Exception:
+            pass
+        self.connected = True
+        self._state("idle")
+
+    def new_convo(self) -> None:
+        self._add()
+        self.api.session_id = None
+        self._render()
+        self._js("clearChat()")
+
+    def select_convo(self, cid: str) -> None:
+        if self.busy:
+            return
+        self.active_id = cid
+        self.speaker.stop()
+        it = self._cur()
+        self.api.session_id = it.get("session_id") if it else None
+        self._save_convos()
+        self._render()
+        self._js("clearChat()")
+        for m in (it.get("log") if it else []) or []:
+            self._msg(m.get("r", "kemy"), m.get("t", ""), store=False)
+
+    def delete_convo(self, cid: str) -> None:
+        if self.busy:
+            return
+        self.convos = [c for c in self.convos if c["id"] != cid]
+        if not self.convos:
+            self._add()
+        if cid == self.active_id:
+            self.active_id = self.convos[0]["id"]
+        self._save_convos()
+        self._render()
+        self.select_convo(self.active_id)
+
+    def toggle(self, name: str) -> None:
+        if name == "conv":
+            self.continuous = not self.continuous
+            self._js(f"setToggle('conv',{json.dumps(self.continuous)})")
+            if self.continuous and self.connected and not self.busy:
+                self.listen()
+        else:
+            self.autonomous = not self.autonomous
+            self._js(f"setToggle('auto',{json.dumps(self.autonomous)})")
+
+    def stop_speak(self) -> None:
+        self.speaker.stop()
+
+    def open_folder(self) -> None:
+        it = self._cur()
+        target = Path(it["project"]) if it else self.workspace_root
+        if not target.exists():
+            target = self.workspace_root
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+        except Exception:
+            pass
+
+    def import_env(self) -> None:
+        try:
+            res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
+        except Exception:
+            res = None
+        if not res:
+            return
+        src = res[0] if isinstance(res, (list, tuple)) else res
+        try:
+            shutil.copyfile(src, config_dir() / ".env")
+        except Exception as exc:
+            self._msg("sys", f"Falha ao salvar .env: {exc}", store=False)
+            return
+        self.env_path = config_dir() / ".env"
+        self.env_vars = parse_env_file(self.env_path)
+        self.workspace_root = self._workspace()
+        self.llm = LLMClient(self.env_vars)
+        self.mode = "direct" if self.llm.available else "online"
+        self._msg("sys", "Config salva. IA reconfigurada.", store=False)
+        threading.Thread(target=self._connect, daemon=True).start()
+
+    def listen(self) -> None:
+        if not self.connected or self.busy:
+            return
+        self.speaker.stop()
+        self.listener.listen_once(
+            on_state=lambda s: self._state(s),
+            on_text=lambda t: self._handle(t),
+            on_error=lambda e: (self._msg("sys", e, store=False), self._state("idle")),
+        )
+
+    def send_text(self, text: str) -> None:
+        self._handle(text)
+
+    # ----- nucleo -----
+    def _handle(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            self._state("idle")
+            return
+        it = self._cur()
+        if it is not None and (it.get("title") in (None, "", "Nova conversa")):
+            it["title"] = text[:40]
+            self._render()
+        self._msg("user", text)
+        if not self.connected:
+            self._msg("sys", "Ainda conectando…", store=False)
+            return
+        self.busy = True
+        self._state("thinking")
+        threading.Thread(target=self._process, args=(text,), daemon=True).start()
+
+    def _process(self, text: str) -> None:
+        try:
+            if self.mode == "direct":
+                chat, save = self._process_direct(text)
+            else:
+                chat, save = self._process_online(text)
+        except Exception as exc:
+            chat, save = (f"Falhei: {exc}", None)
+        self.busy = False
+        self._msg("kemy", chat or "Feito.", save)
+        if self.speaker.available and chat:
+            self.speaker.say(chat[:600])
+            self._state("speaking")
+        else:
+            self._after_speak()
+
+    def _process_direct(self, text: str):
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        system = SYSTEM_PROMPT
+        current = read_project_files(base)
+        if current:
+            system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
+        msgs = []
+        for e in (it.get("log") if it else []) or []:
+            msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
+        reply = self.llm.chat(system, msgs[-10:])
+        files, chat = parse_llm_files(reply)
+        save = self._save(files, base)
+        self._maybe_run(extract_run_commands(reply), base)
+        return chat or "Feito.", save
+
+    def _process_online(self, text: str):
+        it = self._cur()
+        sid = it.get("session_id") if it else None
+        if not sid:
+            sid = self.api.new_session()
+            if it is not None:
+                it["session_id"] = sid
+                self._save_convos()
+        self.api.session_id = sid
+        q = self.api.send_command(text, sid, modo="coding")
+        job = q.get("job_id")
+        resultado, erro = None, None
+        for _ in range(600):
+            j = self.api.job_status(job)
+            if j.get("status") in ("done", "error", "canceled"):
+                resultado = j.get("resultado")
+                erro = j.get("erro") if j.get("status") == "error" else None
+                break
+            time.sleep(0.5)
+        spoken, display = result_to_speech(resultado, erro)
+        files = (resultado or {}).get("files") or extract_code_files(str((resultado or {}).get("raw") or ""))
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        return display, self._save(files, base)
+
+    def _save(self, files: list[dict], base: Path) -> str | None:
+        if not files:
+            return None
+        n, index = 0, None
+        for f in files:
+            rel = str(f.get("path") or "").strip().lstrip("/\\")
+            content = f.get("content")
+            if not rel or content is None:
+                continue
+            dest = base / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(str(content), encoding="utf-8", errors="ignore")
+                n += 1
+                if index is None and rel.lower().endswith((".html", ".htm")):
+                    index = dest
+            except Exception:
+                continue
+        if not n:
+            return None
+        if index is not None:
+            try:
+                webbrowser.open(index.as_uri())
+            except Exception:
+                pass
+        return f"{n} arquivo(s) em: {base}"
+
+    def _maybe_run(self, commands: list[str], base: Path) -> None:
+        if not commands:
+            return
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        for cmd in commands:
+            if not self.autonomous:
+                self._msg("sys", f"(comando sugerido, ative ⚡ Auto para rodar) $ {cmd}", store=False)
+                continue
+            self._msg("sys", f"$ {cmd}", store=False)
+            try:
+                p = subprocess.run(cmd, shell=True, cwd=str(base), capture_output=True, text=True, timeout=180)
+                out = ((p.stdout or "") + (p.stderr or "")).strip()[:800]
+                if out:
+                    self._msg("sys", out, store=False)
+            except Exception as exc:
+                self._msg("sys", f"Falha: {exc}", store=False)
+
+    def _after_speak(self) -> None:
+        self._state("idle" if self.connected else "offline")
+        if self.continuous and self.connected and not self.busy:
+            threading.Timer(0.7, self.listen).start()
+
+    def check_update(self) -> None:
+        threading.Thread(target=self._do_update, daemon=True).start()
+
+    def _do_update(self) -> None:
+        try:
+            req = urllib.request.Request(RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "KemyDesktop"})
+            data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+            url = next((a.get("browser_download_url") for a in (data.get("assets") or []) if str(a.get("name", "")).lower().endswith(".zip")), None)
+            if not url:
+                raise RuntimeError("Release sem .zip")
+            if not getattr(sys, "frozen", False):
+                self._msg("sys", "Update so no .exe. Abrindo Releases…", store=False)
+                webbrowser.open(RELEASES_URL)
+                return
+            self._msg("sys", "Baixando atualizacao (~120MB)…", store=False)
+            tmp = Path(tempfile.mkdtemp(prefix="kemy_upd_"))
+            zp = tmp / "u.zip"
+            urllib.request.urlretrieve(url, zp)
+            ext = tmp / "new"
+            with zipfile.ZipFile(zp) as zf:
+                zf.extractall(ext)
+            self._msg("sys", "Aplicando e reiniciando…", store=False)
+            bat = Path(tempfile.gettempdir()) / "kemy_update.bat"
+            exe = str(EXE_DIR / "KemyDesktop.exe")
+            bat.write_text("@echo off\r\ntimeout /t 2 /nobreak >nul\r\n"
+                           f'robocopy "{ext}" "{EXE_DIR}" /E /IS /IT /NFL /NDL /NJH /NJS >nul\r\n'
+                           f'start "" "{exe}"\r\n', encoding="utf-8")
+            subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x00000008)
+            time.sleep(0.6)
+            os._exit(0)
+        except Exception as exc:
+            self._msg("sys", f"Falha no update: {exc}. Abrindo Releases…", store=False)
+            try:
+                webbrowser.open(RELEASES_URL)
+            except Exception:
+                pass
+
+
+def run_webview(host: str, port: int) -> bool:
+    """Tenta a UI moderna em HTML. Retorna False se pywebview nao estiver disponivel."""
+    try:
+        import webview  # noqa
+    except Exception:
+        return False
+    html = _find_ui_html()
+    if not html:
+        return False
+    api = WebApi(host, port)
+    win = webview.create_window("Kemy - Assistente", url=html.as_uri(), js_api=api,
+                                width=1100, height=780, min_size=(900, 640),
+                                background_color="#070a12")
+    api.window = win
+    webview.start()
+    try:
+        api.speaker.stop()
+    except Exception:
+        pass
+    return True
+
+
+def webview_open_dialog():
+    import webview
+    return webview.OPEN_DIALOG
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Kemy Desktop - assistente de voz local")
     parser.add_argument("--serve", action="store_true", help="Executa apenas o backend FastAPI.")
+    parser.add_argument("--classic", action="store_true", help="Forca a UI antiga (Tkinter).")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     return parser.parse_args()
@@ -1644,6 +2052,13 @@ def main() -> int:
         run_server(args.host, args.port)
         return 0
     os.chdir(ROOT_DIR)
+    # UI moderna (HTML/pywebview); cai para Tkinter se indisponivel ou --classic.
+    if not args.classic:
+        try:
+            if run_webview(args.host, args.port):
+                return 0
+        except Exception:
+            pass
     root = tk.Tk()
     app = KemyVoiceApp(root, host=args.host, port=args.port)
     root.mainloop()

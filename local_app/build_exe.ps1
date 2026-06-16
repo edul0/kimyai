@@ -26,6 +26,9 @@ if (-not (Test-Path kemy_bundled.env)) { New-Item -ItemType File kemy_bundled.en
   --add-data "conhecimento;conhecimento" `
   --add-data ".env.example;." `
   --add-data "kemy_bundled.env;." `
+  --add-data "local_app/ui.html;." `
+  --collect-all "webview" `
+  --collect-all "clr_loader" `
   --collect-submodules "app" `
   --collect-submodules "uvicorn" `
   --collect-submodules "anyio" `
@@ -37,6 +40,7 @@ if (-not (Test-Path kemy_bundled.env)) { New-Item -ItemType File kemy_bundled.en
   --hidden-import "pyaudio" `
   --hidden-import "PIL" `
   --hidden-import "PIL._tkinter_finder" `
+  --hidden-import "clr" `
   local_app\kemy_desktop.py
 
 Write-Host ""

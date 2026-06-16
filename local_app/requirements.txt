@@ -14,5 +14,9 @@ PyAudio>=0.2.13
 # Avatar anime (carregar/redimensionar imagem; JPG e PNG).
 Pillow>=10.0
 
+# UI moderna em HTML (janela nativa via WebView2 no Windows).
+pywebview>=5.0
+pythonnet>=3.0.3
+
 # Empacotamento do .exe.
 pyinstaller>=6.0

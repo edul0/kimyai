@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kemy</title>
+<style>
+  :root{
+    --bg:#070a12; --bg2:#0b1020; --panel:rgba(255,255,255,.04); --panel2:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.08); --text:#eaf0ff; --muted:#8a98b8;
+    --accent:#7c5cff; --accent2:#22e0c8; --user:#9fe7d2;
+    --idle:#22e0c8; --listening:#5ab0ff; --thinking:#ffc857; --speaking:#b98bff; --error:#ff6b6b;
+    --st:var(--idle);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--text);
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(124,92,255,.18), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(34,224,200,.12), transparent 60%),
+      linear-gradient(160deg,#070a12,#0b1020);
+    overflow:hidden;
+  }
+  .app{display:grid;grid-template-columns:248px 1fr;height:100vh}
+  /* sidebar */
+  .side{background:rgba(0,0,0,.25);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px;gap:12px;backdrop-filter:blur(12px)}
+  .brand{display:flex;align-items:center;gap:10px;padding:4px 6px}
+  .brand b{font-size:20px;letter-spacing:.5px}
+  .brand small{color:var(--muted)}
+  .newbtn{border:0;border-radius:14px;padding:12px;font-weight:700;color:#08111a;cursor:pointer;
+    background:linear-gradient(135deg,var(--accent2),#5ad8ff);box-shadow:0 8px 24px rgba(34,224,200,.25);transition:.2s}
+  .newbtn:hover{transform:translateY(-2px);filter:brightness(1.05)}
+  .lbl{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1.5px;padding:4px 6px}
+  .convos{display:flex;flex-direction:column;gap:6px;overflow:auto;flex:1}
+  .conv{display:flex;align-items:center;gap:8px;border:1px solid transparent;border-radius:12px;padding:10px 10px;color:var(--muted);cursor:pointer;transition:.15s}
+  .conv:hover{background:var(--panel);color:var(--text)}
+  .conv.active{background:var(--panel2);color:var(--text);border-color:var(--line)}
+  .conv .bar{width:3px;align-self:stretch;border-radius:3px;background:transparent}
+  .conv.active .bar{background:linear-gradient(var(--accent),var(--accent2))}
+  .conv .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:600}
+  .conv .del{opacity:.5;border:0;background:none;color:inherit;cursor:pointer;font-size:13px}
+  .conv .del:hover{opacity:1;color:var(--error)}
+  /* main */
+  .main{display:flex;flex-direction:column;min-width:0}
+  .top{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .top .sp{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--st);box-shadow:0 0 12px var(--st);transition:.2s}
+  .iconbtn{border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:10px;padding:7px 11px;font-size:12px;cursor:pointer;transition:.15s}
+  .iconbtn:hover{background:var(--panel2);color:var(--text);transform:translateY(-1px)}
+  /* avatar */
+  .stage{display:flex;justify-content:center;padding:18px 0 6px}
+  .avatar{width:180px;height:180px;position:relative}
+  .halo{position:absolute;inset:0;border-radius:50%;border:2px solid var(--st);opacity:.5;
+    box-shadow:0 0 30px var(--st);animation:breathe 3.5s ease-in-out infinite}
+  body.listening .halo,body.speaking .halo{animation:pulse 1.1s ease-in-out infinite}
+  @keyframes breathe{0%,100%{transform:scale(1);opacity:.45}50%{transform:scale(1.05);opacity:.7}}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.12);opacity:.9}}
+  .avatar svg{position:absolute;inset:0;width:100%;height:100%;animation:bob 4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  .eye{transform-origin:center;animation:blink 4.2s infinite}
+  @keyframes blink{0%,94%,100%{transform:scaleY(1)}97%{transform:scaleY(.1)}}
+  .iris{fill:var(--st);filter:drop-shadow(0 0 4px var(--st))}
+  .gem{fill:var(--st);filter:drop-shadow(0 0 5px var(--st));animation:breathe 2.4s ease-in-out infinite}
+  .mouth{transform-origin:center;transform:scaleY(.35)}
+  body.speaking .mouth{animation:talk .28s steps(2) infinite}
+  @keyframes talk{0%{transform:scaleY(.3)}50%{transform:scaleY(1.1)}100%{transform:scaleY(.5)}}
+  /* chat */
+  .chat{flex:1;overflow:auto;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:78%;padding:12px 15px;border-radius:16px;line-height:1.55;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+  .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(34,224,200,.12));border:1px solid var(--line)}
+  .msg.kemy{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+  .msg.sys{align-self:center;background:none;color:var(--muted);font-size:12px;font-style:italic;padding:2px}
+  .msg .save{margin-top:8px;font-size:12px;color:var(--accent2);font-weight:700}
+  /* composer */
+  .composer{padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:10px;align-items:center}
+  .input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 16px;color:var(--text);font-size:14px;outline:none;transition:.15s}
+  .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,92,255,.18)}
+  .send{border:0;border-radius:14px;padding:13px 22px;font-weight:700;color:#08111a;cursor:pointer;background:linear-gradient(135deg,var(--accent2),#5ad8ff);transition:.2s}
+  .send:hover{transform:translateY(-2px)}
+  .toggles{display:flex;gap:8px;align-items:center}
+  .talk{border:0;border-radius:12px;padding:11px 20px;font-weight:700;color:#08111a;cursor:pointer;background:linear-gradient(135deg,var(--listening),#7cc4ff);transition:.2s}
+  .talk:hover{transform:translateY(-2px)}
+  .tg{border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;transition:.15s}
+  .tg.on{color:#08111a}
+  .tg.conv.on{background:var(--accent2)}
+  .tg.auto.on{background:var(--thinking)}
+  .tg.mute{margin-left:auto}
+  .chat::-webkit-scrollbar,.convos::-webkit-scrollbar{width:8px}
+  .chat::-webkit-scrollbar-thumb,.convos::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+</style>
+</head>
+<body class="idle">
+  <div class="app">
+    <aside class="side">
+      <div class="brand"><b>Kemy</b><small>· local</small></div>
+      <button class="newbtn" onclick="api('new_convo')">＋ Nova conversa</button>
+      <div class="lbl">CONVERSAS</div>
+      <div class="convos" id="convos"></div>
+      <div class="row" style="gap:6px">
+        <button class="iconbtn" style="flex:1" onclick="api('open_folder')">📁 Pasta</button>
+        <button class="iconbtn" style="flex:1" onclick="doUpdate()">⬆ Atualizar</button>
+      </div>
+    </aside>
+    <section class="main">
+      <div class="top">
+        <span class="pill"><span class="dot"></span><span id="stateTxt">Conectando…</span></span>
+        <span class="sp"></span>
+        <button class="iconbtn" onclick="api('import_env')">⚙ IA (.env)</button>
+      </div>
+      <div class="stage">
+        <div class="avatar">
+          <div class="halo"></div>
+          <svg viewBox="0 0 200 200" aria-hidden="true">
+            <!-- cabelo de tras -->
+            <path d="M40 96 Q28 180 70 168 Q100 182 130 168 Q172 180 160 96 Q150 30 100 26 Q50 30 40 96Z" fill="#1a1030"/>
+            <!-- rosto -->
+            <ellipse cx="100" cy="104" rx="42" ry="50" fill="#ece1f2"/>
+            <!-- pods -->
+            <rect x="48" y="96" width="14" height="34" rx="7" fill="#120a1f"/>
+            <rect x="138" y="96" width="14" height="34" rx="7" fill="#120a1f"/>
+            <circle cx="55" cy="113" r="5" class="iris"/><circle cx="145" cy="113" r="5" class="iris"/>
+            <!-- franja cobrindo a coroa -->
+            <path d="M55 96 Q44 36 100 30 Q156 36 145 96 Q132 70 116 78 Q100 104 84 78 Q68 70 55 96Z" fill="#211433"/>
+            <!-- gema -->
+            <path d="M100 64 l6 7 l-6 8 l-6 -8 Z" class="gem"/>
+            <!-- delineado -->
+            <path d="M74 100 q10 -7 22 -2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <path d="M104 98 q12 -5 22 2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <!-- olhos -->
+            <g class="eye"><ellipse cx="85" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="85" cy="110" r="5.5"/><circle cx="87" cy="108" r="1.8" fill="#fff"/></g>
+            <g class="eye"><ellipse cx="115" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="115" cy="110" r="5.5"/><circle cx="117" cy="108" r="1.8" fill="#fff"/></g>
+            <!-- blush -->
+            <ellipse cx="80" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+            <ellipse cx="120" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+            <!-- boca -->
+            <ellipse class="mouth" cx="100" cy="136" rx="7" ry="5" fill="#6e2440"/>
+          </svg>
+        </div>
+      </div>
+      <div class="chat" id="chat"></div>
+      <div class="composer">
+        <div class="row">
+          <input class="input" id="inp" placeholder="Peça algo: crie um site, edite o código, abra um app…" />
+          <button class="send" onclick="sendText()">Enviar</button>
+        </div>
+        <div class="toggles">
+          <button class="talk" id="talk" onclick="api('listen')">🎙 Falar</button>
+          <button class="tg conv" id="tgConv" onclick="toggle('conv')">💬 Conversa</button>
+          <button class="tg auto" id="tgAuto" onclick="toggle('auto')">⚡ Auto</button>
+          <button class="tg mute" onclick="api('stop_speak')">🔇 Silenciar</button>
+        </div>
+      </div>
+    </section>
+  </div>
+<script>
+  const STATE_TXT={idle:"Pronta",listening:"Ouvindo…",thinking:"Pensando…",speaking:"Falando…",offline:"Conectando…",error:"Erro"};
+  function api(name,arg){ if(!(window.pywebview&&pywebview.api&&pywebview.api[name]))return;
+    return arg===undefined?pywebview.api[name]():pywebview.api[name](arg); }
+  function kemyState(s){ document.body.className=s; document.getElementById("stateTxt").textContent=STATE_TXT[s]||s; }
+  function addMsg(role,text,save){
+    const c=document.getElementById("chat");
+    const d=document.createElement("div"); d.className="msg "+role;
+    d.textContent=text;
+    if(save){const s=document.createElement("div");s.className="save";s.textContent="💾 "+save;d.appendChild(s);}
+    c.appendChild(d); c.scrollTop=c.scrollHeight;
+  }
+  function clearChat(){document.getElementById("chat").innerHTML="";}
+  function renderConvos(list,active){
+    const box=document.getElementById("convos"); box.innerHTML="";
+    list.forEach(it=>{
+      const d=document.createElement("div"); d.className="conv"+(it.id===active?" active":"");
+      d.innerHTML='<span class="bar"></span><span class="t"></span><button class="del">🗑</button>';
+      d.querySelector(".t").textContent=it.title||"Nova conversa";
+      d.onclick=e=>{ if(e.target.classList.contains("del")){api('delete_convo',it.id);} else {api('select_convo',it.id);} };
+      box.appendChild(d);
+    });
+  }
+  function setToggle(name,on){ const b=document.getElementById(name==="conv"?"tgConv":"tgAuto"); b.classList.toggle("on",on);
+    b.textContent=(name==="conv"?"💬 Conversa":"⚡ Auto")+(on?": ON":""); }
+  function toggle(name){ api('toggle',name); }
+  function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return; i.value=""; api('send_text',t); }
+  document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter")sendText(); });
+  function doUpdate(){ addMsg("sys","Procurando atualização…"); api('check_update'); }
+  // boot
+  window.addEventListener('pywebviewready',()=>{ pywebview.api.bootstrap().then(st=>{
+    renderConvos(st.convos,st.active); kemyState(st.state||"idle");
+    (st.log||[]).forEach(m=>addMsg(m.r,m.t));
+  }); });
+</script>
+</body>
+</html>
