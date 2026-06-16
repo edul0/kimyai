@@ -220,17 +220,19 @@
   window.kemyMouth=function(v){ window._l2dMouth=Math.max(0,Math.min(1,+v||0)); };
   (function(){
     var MODEL="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+    var W=280,H=300;
     function start(){
       try{
         var box=document.getElementById('l2dwrap');
-        var app=new PIXI.Application({view:document.getElementById('l2d'),transparent:true,autoStart:true,resizeTo:box,antialias:true});
+        var app=new PIXI.Application({view:document.getElementById('l2d'),width:W,height:H,backgroundAlpha:0,antialias:true});
         PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
           app.stage.addChild(model);
-          function fit(){ var s=Math.min(box.clientWidth/model.width, box.clientHeight/model.height);
-            model.scale.set(s); model.x=(box.clientWidth-model.width*s)/2; model.y=(box.clientHeight-model.height*s)/2; }
-          fit(); window.addEventListener('resize',fit);
+          // mostra o quadro ANTES de dimensionar
           box.style.display='flex';
           var sv=document.getElementById('svgAvatar'); if(sv) sv.style.display='none';
+          function fit(){ var s=Math.min(W/model.width,H/model.height);
+            model.scale.set(s); model.x=(W-model.width*s)/2; model.y=(H-model.height*s)/2; }
+          fit();
           app.ticker.add(function(){
             try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._l2dMouth); }catch(e){}
           });

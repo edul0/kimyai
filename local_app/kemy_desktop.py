@@ -2661,21 +2661,42 @@ class WebApi:
         try:
             req = urllib.request.Request(RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "KemyDesktop"})
             data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+            # ja esta na ultima versao? compara o sha local com o do release
+            remote = ""
+            m = re.search(r"sha:\s*([0-9a-fA-F]{7,40})", data.get("body") or "")
+            if m:
+                remote = m.group(1)
+            local = build_tag()
+            if remote and local and (remote.startswith(local) or local.startswith(remote)):
+                self._msg("sys", f"✅ Voce ja esta na versao mais recente ({local}). Nada a baixar.", store=False)
+                self._js("setUpdate(false)")
+                return
             url = next((a.get("browser_download_url") for a in (data.get("assets") or []) if str(a.get("name", "")).lower().endswith(".zip")), None)
             if not url:
                 raise RuntimeError("Release sem .zip")
             if not getattr(sys, "frozen", False):
-                self._msg("sys", "Update so no .exe. Abrindo Releases…", store=False)
+                self._msg("sys", "Update automatico so no .exe. Abrindo a pagina de Releases…", store=False)
                 webbrowser.open(RELEASES_URL)
                 return
-            self._msg("sys", "Baixando atualizacao (~120MB)…", store=False)
+            self._msg("sys", f"⬇ Baixando atualizacao {remote[:7] or ''} (~120MB)… pode levar 1-2 min.", store=False)
             tmp = Path(tempfile.mkdtemp(prefix="kemy_upd_"))
             zp = tmp / "u.zip"
-            urllib.request.urlretrieve(url, zp)
+
+            last = [0]
+
+            def _progress(blocks, bsize, total):
+                if total > 0:
+                    pct = int(min(100, blocks * bsize * 100 / total))
+                    if pct >= last[0] + 25:
+                        last[0] = pct
+                        self._msg("sys", f"… {pct}%", store=False)
+
+            urllib.request.urlretrieve(url, zp, _progress)
+            self._msg("sys", "📦 Download concluido. Extraindo…", store=False)
             ext = tmp / "new"
             with zipfile.ZipFile(zp) as zf:
                 zf.extractall(ext)
-            self._msg("sys", "Aplicando e reiniciando…", store=False)
+            self._msg("sys", "🔄 Aplicando e reiniciando a Kemy…", store=False)
             bat = Path(tempfile.gettempdir()) / "kemy_update.bat"
             exe = str(EXE_DIR / "KemyDesktop.exe")
             bat.write_text("@echo off\r\ntimeout /t 2 /nobreak >nul\r\n"
@@ -2685,7 +2706,7 @@ class WebApi:
             time.sleep(0.6)
             os._exit(0)
         except Exception as exc:
-            self._msg("sys", f"Falha no update: {exc}. Abrindo Releases…", store=False)
+            self._msg("sys", f"Falha no update: {exc}. Abrindo a pagina de Releases…", store=False)
             try:
                 webbrowser.open(RELEASES_URL)
             except Exception:
