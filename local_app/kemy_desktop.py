@@ -601,14 +601,18 @@ class Avatar:
         c.coords(self.band, cx - rx * 1.15, cy + ry * 0.25, cx + rx * 1.15, cy + ry * 1.55)
         c.itemconfig(self.band, outline=accent, start=200, extent=140, width=3)
 
-        # franja gotica em V (widow's peak)
+        # franja/cabelo cobrindo a coroa inteira (widow's peak baixo) - sem careca
         c.coords(self.bangs,
-                 cx - rx * 0.98, cy - ry * 0.32, cx - rx * 1.02, cy - ry * 1.04,
-                 cx - rx * 0.45, cy - ry * 0.78, cx - rx * 0.5, cy - ry * 1.12,
-                 cx, cy - ry * 0.8, cx + rx * 0.5, cy - ry * 1.12,
-                 cx + rx * 0.45, cy - ry * 0.78, cx + rx * 1.02, cy - ry * 1.04,
-                 cx + rx * 0.98, cy - ry * 0.32, cx + rx * 0.5, cy - ry * 0.52,
-                 cx, cy - ry * 0.1, cx - rx * 0.5, cy - ry * 0.52)
+                 cx - rx * 1.04, cy - ry * 0.15,
+                 cx - rx * 1.12, cy - ry * 1.05,
+                 cx - rx * 0.4, cy - ry * 1.3,
+                 cx, cy - ry * 1.36,
+                 cx + rx * 0.4, cy - ry * 1.3,
+                 cx + rx * 1.12, cy - ry * 1.05,
+                 cx + rx * 1.04, cy - ry * 0.15,
+                 cx + rx * 0.5, cy - ry * 0.45,
+                 cx, cy - ry * 0.02,
+                 cx - rx * 0.5, cy - ry * 0.45)
         c.itemconfig(self.bangs, fill=COLORS["hair"])
 
         # gema futurista na testa (pulsa)
@@ -992,22 +996,25 @@ class KemyVoiceApp:
         controls.pack(fill="x", padx=16, pady=(2, 14))
         self.talk_btn = tk.Button(controls, text="🎙  Falar", command=self._on_talk,
                                   bg=COLORS["listening"], fg=COLORS["bg"], font=("Segoe UI", 11, "bold"),
-                                  relief="flat", activebackground=COLORS["speaking"], padx=20, pady=10,
+                                  relief="flat", activebackground=COLORS["speaking"], padx=22, pady=10,
                                   cursor="hand2")
         self.talk_btn.pack(side="left")
-        self.continuous_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(controls, text="Modo conversa", variable=self.continuous_var,
-                       command=self._toggle_continuous, bg=COLORS["bg"], fg=COLORS["muted"],
-                       selectcolor=COLORS["panel"], activebackground=COLORS["bg"],
-                       activeforeground=COLORS["text"], font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
-        self.autonomous_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(controls, text="Rodar comandos sem confirmar", variable=self.autonomous_var,
-                       bg=COLORS["bg"], fg=COLORS["muted"], selectcolor=COLORS["panel"],
-                       activebackground=COLORS["bg"], activeforeground=COLORS["text"],
-                       font=("Segoe UI", 9)).pack(side="left", padx=4)
-        tk.Button(controls, text="Silenciar", command=self.speaker.stop, bg=COLORS["panel"],
-                  fg=COLORS["text"], font=("Segoe UI", 10), relief="flat", padx=14, pady=8,
-                  cursor="hand2").pack(side="right")
+        # toggles modernos (sem cara de checkbox do XP)
+        self.continuous = False
+        self.autonomous = False
+        self.conv_toggle = tk.Button(controls, text="💬 Conversa", command=self._toggle_continuous,
+                                     bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 9, "bold"),
+                                     relief="flat", padx=14, pady=8, cursor="hand2",
+                                     activebackground=COLORS["panel_soft"])
+        self.conv_toggle.pack(side="left", padx=(10, 6))
+        self.auto_toggle = tk.Button(controls, text="⚡ Auto", command=self._toggle_autonomous,
+                                     bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 9, "bold"),
+                                     relief="flat", padx=14, pady=8, cursor="hand2",
+                                     activebackground=COLORS["panel_soft"])
+        self.auto_toggle.pack(side="left", padx=4)
+        tk.Button(controls, text="🔇 Silenciar", command=self.speaker.stop, bg=COLORS["panel"],
+                  fg=COLORS["muted"], font=("Segoe UI", 9, "bold"), relief="flat", padx=14, pady=8,
+                  cursor="hand2", activebackground=COLORS["panel_soft"]).pack(side="right")
 
         if not self.listener.available:
             self.talk_btn.configure(state="disabled", text="Voz off")
@@ -1555,7 +1562,7 @@ class KemyVoiceApp:
 
     # ----- execucao de comandos ----- #
     def _handle_actions(self, commands: list[str]) -> None:
-        autonomous = self.autonomous_var.get()
+        autonomous = self.autonomous
         to_run: list[str] = []
         for cmd in commands:
             if autonomous or messagebox.askyesno(
@@ -1590,9 +1597,22 @@ class KemyVoiceApp:
             self.root.after(700, self._on_talk)
 
     def _toggle_continuous(self) -> None:
-        self.continuous = self.continuous_var.get()
-        if self.continuous and self.connected and not self.busy:
+        self.continuous = not self.continuous
+        on = self.continuous
+        self.conv_toggle.configure(
+            bg=COLORS["accent"] if on else COLORS["panel"],
+            fg=COLORS["bg"] if on else COLORS["muted"],
+            text="💬 Conversa: ON" if on else "💬 Conversa")
+        if on and self.connected and not self.busy:
             self._on_talk()
+
+    def _toggle_autonomous(self) -> None:
+        self.autonomous = not self.autonomous
+        on = self.autonomous
+        self.auto_toggle.configure(
+            bg=COLORS["thinking"] if on else COLORS["panel"],
+            fg=COLORS["bg"] if on else COLORS["muted"],
+            text="⚡ Auto: ON" if on else "⚡ Auto")
 
     def on_close(self) -> None:
         self.continuous = False
