@@ -116,6 +116,7 @@
       <div class="top">
         <span class="pill"><span class="dot"></span><span id="stateTxt">Conectando…</span></span>
         <span class="sp"></span>
+        <button class="iconbtn" onclick="openVoice()">🎙️ Voz</button>
         <button class="iconbtn" onclick="api('preview')">👁 Preview</button>
         <button class="iconbtn" onclick="api('vts_connect')">🎭 VTuber</button>
         <button class="iconbtn" onclick="api('vts_test')" title="Testa a boca do modelo no VTube Studio">👄 Testar boca</button>
@@ -168,6 +169,24 @@
       </div>
     </section>
   </div>
+  <div id="voiceModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:60;align-items:center;justify-content:center">
+    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:24px;width:440px;max-width:92%">
+      <h3 style="margin:0 0 6px">🎙️ Voz personalizada (ElevenLabs)</h3>
+      <p style="margin:0 0 14px;color:var(--muted);font-size:13px">Cole a chave da API e o Voice ID. Deixe o ID vazio para usar a voz padrão.</p>
+      <input id="vKey" class="input" placeholder="Chave da API (xi-api-key)" style="width:100%;margin-bottom:10px;box-sizing:border-box"/>
+      <input id="vVoice" class="input" placeholder="Voice ID (ex.: 33B4UnXyTNbgLmdEDh5P)" style="width:100%;margin-bottom:16px;box-sizing:border-box"/>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="tg" onclick="closeVoice()">Cancelar</button>
+        <button class="send" onclick="saveVoice()">Salvar e testar</button>
+      </div>
+    </div>
+  </div>
+<script>
+  function openVoice(){ document.getElementById('voiceModal').style.display='flex'; }
+  function closeVoice(){ document.getElementById('voiceModal').style.display='none'; }
+  function saveVoice(){ var k=document.getElementById('vKey').value.trim(), v=document.getElementById('vVoice').value.trim();
+    if(!k){ return; } api('set_voice', k+'|'+v); closeVoice(); }
+</script>
 <script>
   const STATE_TXT={idle:"Pronta",listening:"Ouvindo…",thinking:"Pensando…",speaking:"Falando…",offline:"Conectando…",error:"Erro"};
   function api(name,arg){ if(!(window.pywebview&&pywebview.api&&pywebview.api[name]))return;

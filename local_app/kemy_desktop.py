@@ -2828,6 +2828,28 @@ class WebApi:
         self._msg("sys", "Conectando ao VTube Studio…", store=False)
         self.vts.start()
 
+    def set_voice(self, data: str) -> None:
+        """Configura a voz de personagem (ElevenLabs): data = 'chave|voice_id'."""
+        try:
+            key, _, voice = (data or "").partition("|")
+            key, voice = key.strip(), voice.strip()
+            if not key:
+                self._msg("sys", "Cole a chave da API do ElevenLabs.", store=False)
+                return
+            cfg = config_dir() / ".env"
+            self.speaker.el_key = key
+            _set_env_var(cfg, "KEMY_ELEVENLABS_KEY", key)
+            self.env_vars["KEMY_ELEVENLABS_KEY"] = key
+            if voice:
+                self.speaker.el_voice = voice
+                _set_env_var(cfg, "KEMY_ELEVENLABS_VOICE", voice)
+                self.env_vars["KEMY_ELEVENLABS_VOICE"] = voice
+            self.speaker.available = True
+            self._msg("sys", "🎙️ Voz personalizada salva! Testando agora…", store=False)
+            self.speaker.say("Oi! Essa é a minha voz nova. Ficou boa?")
+        except Exception as exc:
+            self._msg("sys", f"Falha ao configurar a voz: {exc}", store=False)
+
     def vts_test(self) -> None:
         if not self.vts.authed:
             self._msg("sys", "Conecte o VTube Studio primeiro (botao 🎭 VTuber).", store=False)
