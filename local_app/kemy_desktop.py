@@ -128,6 +128,19 @@ def build_tag() -> str:
         return "dev"
 
 
+# Motivo da falha da UI moderna (webview), exibido no modo classico para diagnostico.
+WEBVIEW_ERROR = ""
+
+
+def _record_webview_error(reason: str) -> None:
+    global WEBVIEW_ERROR
+    WEBVIEW_ERROR = reason
+    try:
+        (config_dir() / "webview_error.log").write_text(reason, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def find_env_file() -> Path | None:
     for cand in (EXE_DIR / ".env", config_dir() / ".env", ROOT_DIR / ".env",
                  ROOT_DIR / "kemy_bundled.env", Path.cwd() / ".env"):
@@ -1123,6 +1136,9 @@ class KemyVoiceApp:
     # ----- conexao ----- #
     def _bootstrap(self) -> None:
         self.root.after(0, lambda: self._log("Iniciando Kemy local...", "sys"))
+        if WEBVIEW_ERROR:
+            reason = WEBVIEW_ERROR.strip().splitlines()[-1] if WEBVIEW_ERROR.strip() else WEBVIEW_ERROR
+            self.root.after(0, lambda r=reason: self._log(f"[UI moderna falhou] {r}", "sys"))
         if self.env_path:
             self.root.after(0, lambda: self._log(f"Config: {self.env_path}", "sys"))
         # Modo direto: fala direto com a IA (sem o backend pesado). Mais rapido e obedece.
@@ -2245,19 +2261,11 @@ def run_webview(host: str, port: int) -> bool:
     try:
         import webview  # noqa
     except Exception as exc:
-        try:
-            (config_dir() / "webview_error.log").write_text(
-                f"import webview falhou: {exc!r}", encoding="utf-8")
-        except Exception:
-            pass
+        _record_webview_error(f"import webview falhou: {exc!r}")
         return False
     html = _find_ui_html()
     if not html:
-        try:
-            (config_dir() / "webview_error.log").write_text(
-                "ui.html nao encontrado no bundle", encoding="utf-8")
-        except Exception:
-            pass
+        _record_webview_error("ui.html nao encontrado no bundle")
         return False
     api = WebApi(host, port)
     win = webview.create_window(f"Kemy - Assistente ({build_tag()})", url=html.as_uri(), js_api=api,
@@ -2340,11 +2348,7 @@ def main() -> int:
                 return 0
         except Exception:
             import traceback
-            try:
-                (config_dir() / "webview_error.log").write_text(
-                    traceback.format_exc(), encoding="utf-8")
-            except Exception:
-                pass
+            _record_webview_error(traceback.format_exc())
     root = tk.Tk()
     app = KemyVoiceApp(root, host=args.host, port=args.port)
     root.mainloop()
