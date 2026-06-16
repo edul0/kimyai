@@ -128,6 +128,25 @@ def build_tag() -> str:
         return "dev"
 
 
+def unblock_bundle() -> None:
+    """Remove o 'Mark of the Web' (Zone.Identifier) das DLLs do bundle.
+
+    Quando o zip e baixado da internet, o Windows marca os arquivos como bloqueados.
+    O .NET entao se recusa a carregar a Python.Runtime.dll (pythonnet), e a UI
+    moderna (webview/winforms) cai para o modo classico. Limpar o ADS resolve sem
+    o usuario precisar desbloquear manualmente."""
+    if os.name != "nt":
+        return
+    try:
+        for dll in ROOT_DIR.rglob("*.dll"):
+            try:
+                os.remove(f"{dll}:Zone.Identifier")
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 # Motivo da falha da UI moderna (webview), exibido no modo classico para diagnostico.
 WEBVIEW_ERROR = ""
 
@@ -2343,6 +2362,7 @@ def main() -> int:
     os.chdir(ROOT_DIR)
     # UI moderna (HTML/pywebview); cai para Tkinter se indisponivel ou --classic.
     if not args.classic:
+        unblock_bundle()
         try:
             if run_webview(args.host, args.port):
                 return 0
