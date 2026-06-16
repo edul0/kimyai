@@ -408,8 +408,10 @@ class LLMClient:
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "llama-3.3-70b"])
         self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
         self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct"])
-        # Gemini 3.1 Pro (plano pago) como principal; cai para o flash gratuito se indisponivel.
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.0-flash"])
+        # Padrao GRATIS: Flash (free tier). O Gemini 3.1 Pro via API e PAGO (precisa de
+        # faturamento ativado) e nao entra por padrao. Para usar o Pro, defina por env:
+        # GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
@@ -426,15 +428,15 @@ class LLMClient:
             for m in chosen:
                 attempts.append((prov, m, maker(m)))
 
-        # Gemini primeiro (plano pago, Gemini 3.1 Pro = melhor qualidade); demais como reserva.
-        if self.gemini:
-            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
+        # Cerebras/Groq (gratis, modelos de codigo) primeiro; Gemini Flash (free tier) como reserva.
         if self.cerebras:
             add("cerebras", self.cerebras_models, lambda m: (lambda: self._openai_compat(
                 "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages)))
         if self.groq:
             add("groq", self.groq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages)))
+        if self.gemini:
+            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
         if self.openai:
             add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
                 "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages)))
