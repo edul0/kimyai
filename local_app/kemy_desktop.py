@@ -1882,6 +1882,7 @@ class VTubeStudio:
         self.mouth_provider = None
         self.on_connect = None
         self._loop_started = False
+        self.mouth_param = "MouthOpen"
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True).start()
@@ -1910,27 +1911,54 @@ class VTubeStudio:
             r = self._send("AuthenticationRequest",
                            {"pluginName": "Kemy", "pluginDeveloper": "edul0", "authenticationToken": token})
             self.authed = bool((r.get("data") or {}).get("authenticated"))
-            self.log("VTube Studio conectado! Lip-sync ativo." if self.authed
-                     else "VTube Studio: clique em PERMITIR o plugin Kemy na janela do VTS e tente de novo.")
+            if not self.authed:
+                self.log("VTube Studio: clique em PERMITIR o plugin Kemy na janela do VTS e tente de novo.")
+                return
         except Exception as exc:
             self.log(f"VTS: falha ao autenticar ({exc}).")
             return
-        if self.authed:
-            # teste visivel: abre/fecha a boca do modelo algumas vezes ao conectar
+        # Detecta o modelo e o parametro de boca real do modelo carregado.
+        self._detect_mouth()
+        if self.on_connect:
             try:
-                for _ in range(3):
-                    self.set_mouth(0.9); time.sleep(0.18)
-                    self.set_mouth(0.0); time.sleep(0.18)
+                self.on_connect()
             except Exception:
                 pass
-            if self.on_connect:
-                try:
-                    self.on_connect()
-                except Exception:
-                    pass
-            if not self._loop_started:
-                self._loop_started = True
-                threading.Thread(target=self._mouth_loop, daemon=True).start()
+        try:
+            self.test()  # abre/fecha a boca para o usuario ver
+        except Exception:
+            pass
+        if not self._loop_started:
+            self._loop_started = True
+            threading.Thread(target=self._mouth_loop, daemon=True).start()
+
+    def _detect_mouth(self) -> None:
+        try:
+            r = self._send("InputParameterListRequest", {})
+            data = r.get("data") or {}
+            if not data.get("modelLoaded", True):
+                self.log("VTube Studio conectado, mas NENHUM modelo esta carregado. Carregue um modelo no VTS.")
+                return
+            params = (data.get("defaultParameters") or []) + (data.get("customParameters") or [])
+            names = [p.get("name", "") for p in params]
+            pick = None
+            if "MouthOpen" in names:
+                pick = "MouthOpen"
+            else:
+                pick = next((n for n in names if "mouth" in n.lower() and "open" in n.lower()), None)
+                pick = pick or next((n for n in names if "mouth" in n.lower()), None)
+            if pick:
+                self.mouth_param = pick
+            model = data.get("modelName") or "modelo"
+            self.log(f"VTube Studio conectado! Modelo: {model}. Lip-sync no parametro '{self.mouth_param}'.")
+        except Exception:
+            self.log("VTube Studio conectado! (lip-sync em MouthOpen)")
+
+    def test(self) -> None:
+        """Abre e fecha a boca do modelo algumas vezes, para teste visual."""
+        for _ in range(4):
+            self.set_mouth(1.0); time.sleep(0.22)
+            self.set_mouth(0.0); time.sleep(0.18)
 
     def _send(self, mtype: str, data: dict) -> dict:
         msg = {"apiName": "VTubeStudioPublicAPI", "apiVersion": "1.0",
@@ -1945,7 +1973,7 @@ class VTubeStudio:
         try:
             self._send("InjectParameterDataRequest", {
                 "faceFound": False, "mode": "set",
-                "parameterValues": [{"id": "MouthOpen", "value": max(0.0, min(1.0, float(value)))}],
+                "parameterValues": [{"id": self.mouth_param, "value": max(0.0, min(1.0, float(value)))}],
             })
         except Exception:
             self.authed = False
@@ -1958,7 +1986,7 @@ class VTubeStudio:
                     self.set_mouth(v)
             except Exception:
                 pass
-            time.sleep(0.06)
+            time.sleep(0.04)
 
 
 class WebApi:
@@ -2516,6 +2544,13 @@ class WebApi:
         self._msg("sys", "Conectando ao VTube Studio…", store=False)
         self.vts.start()
 
+    def vts_test(self) -> None:
+        if not self.vts.authed:
+            self._msg("sys", "Conecte o VTube Studio primeiro (botao 🎭 VTuber).", store=False)
+            return
+        self._msg("sys", f"Testando a boca no parametro '{self.vts.mouth_param}' — olhe a janela do VTS…", store=False)
+        threading.Thread(target=self.vts.test, daemon=True).start()
+
     def check_update(self) -> None:
         threading.Thread(target=self._do_update, daemon=True).start()
 
@@ -2665,7 +2700,9 @@ def run_webview(host: str, port: int) -> bool:
         if getattr(api, "_companion_done", False):
             return
         api._companion_done = True
-        if os.environ.get("KEMY_NO_MINI") != "1":
+        # A carinha flutuante generica fica DESLIGADA por padrao (o rosto e o VTube Studio).
+        # Para reativar a bolinha local: defina KEMY_MINI=1
+        if os.environ.get("KEMY_MINI") == "1":
             mw, mh = 150, 168
             mx, my = _corner_pos(mw, mh)
             try:
