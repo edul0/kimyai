@@ -1757,6 +1757,8 @@ class WebApi:
         self.vts = VTubeStudio(lambda m: self._msg("sys", m, store=False))
         self.vts.mouth_provider = self.speaker.mouth_level
         self.vts.on_connect = lambda: self._js("vtsConnected()")
+        self.mini = None
+        self._quitting = False
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -1780,6 +1782,38 @@ class WebApi:
 
     def _state(self, s: str) -> None:
         self._js(f"kemyState({json.dumps(s)})")
+        if self.mini:
+            try:
+                self.mini.evaluate_js(f"kemyState({json.dumps(s)})")
+            except Exception:
+                pass
+
+    # ----- janela / desktop companion -----
+    def show_main(self) -> None:
+        try:
+            if self.window:
+                self.window.show()
+        except Exception:
+            pass
+
+    def hide_main(self) -> None:
+        try:
+            if self.window:
+                self.window.hide()
+        except Exception:
+            pass
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        try:
+            self.speaker.stop()
+        except Exception:
+            pass
+        try:
+            import webview
+            webview.destroy()
+        except Exception:
+            os._exit(0)
 
     def _msg(self, role: str, text: str, save: str | None = None, store: bool = True) -> None:
         self._js(f"addMsg({json.dumps(role)},{json.dumps(text)},{json.dumps(save)})")
@@ -2138,6 +2172,65 @@ class WebApi:
                 pass
 
 
+MINI_HTML = """<!doctype html><html><head><meta charset=utf-8><style>
+html,body{margin:0;height:100%;background:#070a12;overflow:hidden;font-family:'Segoe UI',sans-serif}
+.wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;-webkit-user-select:none}
+.orb{width:88px;height:88px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#2de0c8,#5b3aa0 70%,#1a1030);box-shadow:0 0 22px #2de0c8aa;display:flex;align-items:center;justify-content:center;animation:bob 4s ease-in-out infinite;transition:box-shadow .3s}
+.eyes{display:flex;gap:16px}
+.eye{width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 0 6px #fff;transition:height .15s}
+.lbl{margin-top:8px;font-size:12px;color:#9fe;opacity:.85}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+body.speaking .orb{box-shadow:0 0 32px #36f6d6}
+body.speaking .eye{height:5px}
+body.listening .orb{background:radial-gradient(circle at 35% 30%,#ff7aa8,#5b3aa0 70%,#1a1030);box-shadow:0 0 30px #ff5b8a}
+body.thinking .orb{animation:bob 1.1s ease-in-out infinite}
+</style></head><body class=idle>
+<div class=wrap onclick="pywebview.api.show_main()" title="Clique para abrir a Kemy">
+  <div class=orb><div class=eyes><div class=eye></div><div class=eye></div></div></div>
+  <div class=lbl id=lbl>Kemy</div>
+</div>
+<script>
+function kemyState(s){document.body.className=s;document.getElementById('lbl').textContent={idle:'Kemy',listening:'Ouvindo…',thinking:'Pensando…',speaking:'Falando…'}[s]||s;}
+</script></body></html>"""
+
+
+def _corner_pos(w: int, h: int):
+    """Canto inferior direito, acima da barra de tarefas (perto do relogio)."""
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        try:
+            u.SetProcessDPIAware()
+        except Exception:
+            pass
+        sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+        return max(0, sw - w - 24), max(0, sh - h - 64)
+    except Exception:
+        return 1120, 560
+
+
+def _start_tray(api, win) -> None:
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    img = Image.new("RGBA", (64, 64), (11, 15, 26, 0))
+    d = ImageDraw.Draw(img)
+    d.ellipse((8, 8, 56, 56), fill=(45, 224, 200, 255))
+    d.ellipse((22, 26, 30, 34), fill=(11, 15, 26, 255))
+    d.ellipse((36, 26, 44, 34), fill=(11, 15, 26, 255))
+    menu = pystray.Menu(
+        pystray.MenuItem("Mostrar Kemy", lambda i: api.show_main(), default=True),
+        pystray.MenuItem("Esconder janela", lambda i: api.hide_main()),
+        pystray.MenuItem("Falar agora", lambda i: api.listen()),
+        pystray.MenuItem("Sair", lambda i: (i.stop(), api.quit_app())),
+    )
+    icon = pystray.Icon("Kemy", img, "Kemy", menu)
+    threading.Thread(target=icon.run, daemon=True).start()
+    api._tray = icon
+
+
 def run_webview(host: str, port: int) -> bool:
     """Tenta a UI moderna em HTML. Retorna False se pywebview nao estiver disponivel."""
     try:
@@ -2152,6 +2245,32 @@ def run_webview(host: str, port: int) -> bool:
                                 width=1100, height=780, min_size=(900, 640),
                                 background_color="#070a12")
     api.window = win
+
+    # fechar a janela apenas esconde (app continua na bandeja + mini avatar)
+    def _on_closing():
+        if api._quitting:
+            return True
+        api.hide_main()
+        return False
+
+    try:
+        win.events.closing += _on_closing
+    except Exception:
+        pass
+
+    # mini avatar flutuante perto do relogio
+    mw, mh = 150, 168
+    mx, my = _corner_pos(mw, mh)
+    try:
+        mini = webview.create_window("Kemy", html=MINI_HTML, js_api=api,
+                                     width=mw, height=mh, x=mx, y=my,
+                                     frameless=True, easy_drag=True, on_top=True,
+                                     background_color="#070a12")
+        api.mini = mini
+    except Exception:
+        api.mini = None
+
+    _start_tray(api, win)
     webview.start()
     try:
         api.speaker.stop()

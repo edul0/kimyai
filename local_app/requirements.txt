@@ -21,5 +21,9 @@ pythonnet>=3.0.3
 # Integracao com o VTube Studio (API WebSocket).
 websocket-client>=1.7
 
+# Companion de desktop: icone na bandeja + mini avatar flutuante.
+pystray>=0.19
+Pillow>=10.0
+
 # Empacotamento do .exe.
 pyinstaller>=6.0
