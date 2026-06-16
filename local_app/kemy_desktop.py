@@ -383,6 +383,10 @@ SYSTEM_PROMPT = (
     "<<<FILE: caminho/do/arquivo>>>\n"
     "conteudo completo do arquivo\n"
     "<<<END>>>\n"
+    "   FORMATO OBRIGATORIO. PROIBIDO usar '**index.html**', '### index.html', titulos em "
+    "markdown ou colocar so o nome do arquivo. SEMPRE comece com '<<<FILE: nome>>>' numa linha, "
+    "depois o codigo, depois '<<<END>>>'. NUNCA escreva '<<<END>>>' sem ter aberto '<<<FILE:>>>' "
+    "antes, e NUNCA deixe um arquivo vazio — todo arquivo deve ter o codigo completo dentro.\n"
     "3) Ao ATUALIZAR um projeto existente, use os ARQUIVOS ATUAIS fornecidos como "
     "base e reescreva completos apenas os arquivos que mudarem, mantendo o resto "
     "funcionando. Nao recomece o projeto do zero.\n"
@@ -458,6 +462,35 @@ SYSTEM_PROMPT = (
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
+_FNAME = r"[\w./\-]+\.(?:html?|css|js|jsx|tsx?|json|py|md|txt)"
+
+
+def parse_loose_files(text: str) -> list[dict]:
+    """Fallback tolerante: pega 'NOME.ext' (em **bold**, ### ou cru) seguido do conteudo,
+    terminando em <<<END>>>, no proximo cabecalho de arquivo, ou no fim."""
+    files: list[dict] = []
+    # normaliza terminadores soltos
+    headers = list(re.finditer(rf"(?:\*\*|`|#{{1,4}}\s*|//\s*)?({_FNAME})(?:\*\*|`)?\s*:?\s*\n", text))
+    for i, h in enumerate(headers):
+        name = h.group(1).strip()
+        start = h.end()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        body = text[start:end]
+        body = re.split(r"<<<END>>>", body)[0]
+        body = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", body)
+        body = re.sub(r"\n?```\s*$", "", body.rstrip())
+        body = body.strip("\n")
+        if len(body) > 15:  # ignora cabecalho sem conteudo
+            files.append({"path": name, "content": body + "\n"})
+    return files
+
+
+def _clean_chat(text: str) -> str:
+    """Remove marcadores de arquivo que por acaso vazaram para o texto de conversa."""
+    text = re.sub(r"<<<FILE:.*?>>>", "", text)
+    text = text.replace("<<<END>>>", "")
+    text = re.sub(rf"^\s*(?:\*\*|`|#{{1,4}}\s*)?{_FNAME}(?:\*\*|`)?\s*:?\s*$", "", text, flags=re.MULTILINE)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def parse_llm_files(text: str) -> tuple[list[dict], str]:
@@ -465,13 +498,18 @@ def parse_llm_files(text: str) -> tuple[list[dict], str]:
     files = [{"path": m.group(1).strip(), "content": m.group(2).strip("\n") + "\n"}
              for m in FILE_RE.finditer(text)]
     chat = FILE_RE.sub("", text).strip()
-    if not files:  # fallback: blocos markdown ```lang
+    if not files:  # fallback 1: blocos markdown ```lang
         cf = extract_code_files(text)
         if cf:
             files = cf
             chat = re.sub(r"```[a-zA-Z0-9_+\-]*[ \t]*\n.*?```", "", text, flags=re.DOTALL).strip()
-    # nao mostrar os blocos de comando crus no chat
-    chat = re.sub(r"```(?:kemy-run|run)\s*\n.*?```", "", chat, flags=re.DOTALL | re.IGNORECASE).strip()
+    if not files:  # fallback 2: cabecalhos soltos tipo **index.html**
+        lf = parse_loose_files(text)
+        if lf:
+            files = lf
+    # limpa blocos de comando crus e marcadores vazados
+    chat = re.sub(r"```(?:kemy-run|run)\s*\n.*?```", "", chat, flags=re.DOTALL | re.IGNORECASE)
+    chat = _clean_chat(chat)
     return files, chat
 
 
