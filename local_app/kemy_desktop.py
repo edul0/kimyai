@@ -486,6 +486,29 @@ SYSTEM_PROMPT = (
     "Entregue a lista COMPLETA, nunca so 2-3 exemplos."
 )
 
+# Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
+CHAT_PROMPT = (
+    "Voce e a Kemy, uma assistente simpatica e prestativa. Converse em PORTUGUES, "
+    "de forma curta, natural e amigavel, como uma amiga. Responda direto, sem enrolar e "
+    "sem markdown. Se o usuario pedir para criar/editar um site ou codigo, ou abrir um "
+    "programa, voce tambem faz isso normalmente."
+)
+
+# Palavras que indicam pedido de criar/editar codigo ou executar algo (usa o prompt completo).
+BUILD_HINTS = (
+    "site", "página", "pagina", "landing", "app", "aplicativo", "programa", "código",
+    "codigo", "html", "css", "javascript", "script", "jogo", "game", "dashboard", "crud",
+    "api", "crie", "cria", "criar", "gere", "gera", "gerar", "faça", "faca", "fazer",
+    "monte", "montar", "desenvolva", "construa", "edite", "editar", "altere", "alterar",
+    "conserte", "corrija", "abra", "abrir", "instale", "instalar", "rode", "rodar", "execute",
+)
+
+
+def is_build_request(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in BUILD_HINTS)
+
+
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
 _FNAME = r"[\w./\-]+\.(?:html?|css|js|jsx|tsx?|json|py|md|txt)"
 
@@ -604,7 +627,7 @@ class LLMClient:
             return f"OpenRouter · {self.openrouter_models[0]}"
         return "IA"
 
-    def chat(self, system: str, messages: list[dict]) -> str:
+    def chat(self, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
         errors: list[str] = []
         # Cerebras e Groq primeiro (rapidos e cota generosa); Gemini/OpenAI/OpenRouter como reserva.
         # Por provedor, tenta os modelos preferidos (codigo) e cai pro estavel; uma vez que um
@@ -619,18 +642,18 @@ class LLMClient:
         # Cerebras/Groq (gratis, modelos de codigo) primeiro; Gemini Flash (free tier) como reserva.
         if self.cerebras:
             add("cerebras", self.cerebras_models, lambda m: (lambda: self._openai_compat(
-                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages)))
+                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages, max_tokens)))
         if self.groq:
             add("groq", self.groq_models, lambda m: (lambda: self._openai_compat(
-                "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages)))
+                "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
         if self.gemini:
-            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
+            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
         if self.openai:
             add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
-                "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages)))
+                "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages, max_tokens)))
         if self.openrouter:
             add("openrouter", self.openrouter_models, lambda m: (lambda: self._openai_compat(
-                "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages)))
+                "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages, max_tokens)))
         for prov, model, fn in attempts:
             try:
                 res = fn()
@@ -643,7 +666,7 @@ class LLMClient:
              "As chaves podem estar esgotadas ou bloqueadas — gere chaves novas e atualize o KEMY_ENV.")
             if errors else "Sem provedor de IA configurado.")
 
-    def _post(self, url: str, headers: dict, payload: dict, timeout: float = 120) -> dict:
+    def _post(self, url: str, headers: dict, payload: dict, timeout: float = 60) -> dict:
         data = json.dumps(payload).encode("utf-8")
         last_err: Exception | None = None
         # Retry com backoff em 429/503 (limites momentaneos sao comuns no free tier).
@@ -670,7 +693,7 @@ class LLMClient:
                 raise
         raise last_err or RuntimeError("falha desconhecida")
 
-    def _gemini(self, system: str, messages: list[dict], model: str | None = None) -> str:
+    def _gemini(self, system: str, messages: list[dict], model: str | None = None, max_tokens: int = 16000) -> str:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model or self.gemini_model}:generateContent?key={self.gemini}")
         contents = [{"role": "model" if m["role"] == "assistant" else "user",
@@ -678,7 +701,7 @@ class LLMClient:
         payload = {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": contents,
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 16384},
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": min(16384, max_tokens)},
         }
         data = self._post(url, {"Content-Type": "application/json"}, payload)
         return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -701,10 +724,10 @@ class LLMClient:
                 continue
         raise RuntimeError("Nao consegui analisar a imagem com o Gemini.")
 
-    def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict]) -> str:
+    def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
         msgs = [{"role": "system", "content": system}]
         msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
-        payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": 16000}
+        payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": max_tokens}
         data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, payload)
         return data["choices"][0]["message"]["content"]
 
@@ -2514,17 +2537,25 @@ class WebApi:
     def _process_direct(self, text: str):
         it = self._cur()
         base = Path(it["project"]) if it else (self.workspace_root / "projeto")
-        system = SYSTEM_PROMPT
         current = read_project_files(base)
-        if current:
-            system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
-        web = self._web_context(text)
-        if web:
-            system += web
+        # Conversa simples -> prompt LEVE e resposta rapida; criar/editar codigo -> prompt completo.
+        build = is_build_request(text) or bool(current)
         msgs = []
         for e in (it.get("log") if it else []) or []:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
-        reply = self.llm.chat(system, msgs[-10:])
+        web = self._web_context(text)
+        if not build:
+            system = CHAT_PROMPT + (web or "")
+            reply = self.llm.chat(system, msgs[-8:], max_tokens=900)
+            self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
+            _, chat = parse_llm_files(reply)
+            return (chat or reply).strip() or "…", None
+        system = SYSTEM_PROMPT
+        if current:
+            system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
+        if web:
+            system += web
+        reply = self.llm.chat(system, msgs[-10:], max_tokens=16000)
         files, chat = parse_llm_files(reply)
         save = self._save(files, base)
         self._localize_images(base)
