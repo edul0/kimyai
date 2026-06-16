@@ -1109,8 +1109,8 @@ class Listener:
             try:
                 with sr.Microphone() as source:
                     on_state("listening")
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.4)
-                    audio = self._recognizer.listen(source, timeout=8, phrase_time_limit=14)
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.25)
+                    audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=15)
                 on_state("thinking")
                 text = self._recognizer.recognize_google(audio, language="pt-BR")
                 on_text(text)
@@ -2326,8 +2326,12 @@ class WebApi:
         if name == "conv":
             self.continuous = not self.continuous
             self._js(f"setToggle('conv',{json.dumps(self.continuous)})")
-            if self.continuous and self.connected and not self.busy:
-                self.listen()
+            if self.continuous:
+                self._msg("sys", "💬 Modo Conversa ligado: pode falar! Eu escuto, respondo e volto a escutar sozinha.", store=False)
+                if self.connected and not self.busy:
+                    self.listen()
+            else:
+                self._msg("sys", "Modo Conversa desligado.", store=False)
         else:
             self.autonomous = not self.autonomous
             self._js(f"setToggle('auto',{json.dumps(self.autonomous)})")
@@ -2448,14 +2452,27 @@ class WebApi:
         threading.Thread(target=self._connect, daemon=True).start()
 
     def listen(self) -> None:
-        if not self.connected or self.busy:
+        if not self.listener.available:
+            self._msg("sys", "🎤 Microfone indisponivel neste PC (instale o PyAudio ou verifique o microfone).", store=False)
+            return
+        if not self.connected:
+            self._msg("sys", "Espera conectar antes de falar…", store=False)
+            return
+        if self.busy:
+            self._msg("sys", "Deixa eu terminar de responder primeiro 😊", store=False)
             return
         self.speaker.stop()
         self.listener.listen_once(
             on_state=lambda s: self._state(s),
             on_text=lambda t: self._handle(t),
-            on_error=lambda e: (self._msg("sys", e, store=False), self._state("idle")),
+            on_error=lambda e: (self._msg("sys", f"🎤 {e}", store=False), self._state("idle"),
+                                 self._relisten_if_conv()),
         )
+
+    def _relisten_if_conv(self) -> None:
+        # No modo Conversa, se nao ouviu nada, tenta de novo automaticamente.
+        if self.continuous and self.connected and not self.busy:
+            threading.Timer(0.6, self.listen).start()
 
     def send_text(self, text: str) -> None:
         self._handle(text)
