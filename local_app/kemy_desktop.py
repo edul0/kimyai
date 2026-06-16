@@ -232,6 +232,23 @@ def extract_run_commands(text: str) -> list[str]:
     return cmds
 
 
+def download_to(url: str, dest: Path, timeout: int = 90) -> bool:
+    """Baixa um binario (imagem) para o disco, com 2 tentativas. True se ok."""
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KemyDesktop"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            if len(data) < 800:
+                raise RuntimeError("vazio")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            return True
+        except Exception:
+            time.sleep(1.0 * (attempt + 1))
+    return False
+
+
 def extract_image_requests(text: str) -> list[dict]:
     """Le blocos ```kemy-image (uma imagem por linha: 'descricao | arquivo.png | LARGxALT')."""
     reqs: list[dict] = []
@@ -2416,9 +2433,51 @@ class WebApi:
         reply = self.llm.chat(system, msgs[-10:])
         files, chat = parse_llm_files(reply)
         save = self._save(files, base)
+        self._localize_images(base)
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         return chat or "Feito.", save
+
+    def _localize_images(self, base: Path) -> None:
+        """Baixa as imagens do Pollinations citadas no HTML/CSS e troca por arquivos locais,
+        para que o site nao dependa de fetch ao vivo (que vinha quebrado)."""
+        targets = list(base.glob("*.html")) + list(base.glob("*.css")) + list(base.glob("*.js"))
+        if not targets:
+            return
+        url_re = re.compile(r"https://image\.pollinations\.ai/prompt/[^\s\"')]+")
+        # coleta todas as URLs unicas
+        all_urls: list[str] = []
+        contents: dict[Path, str] = {}
+        for f in targets:
+            try:
+                txt = f.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            contents[f] = txt
+            for u in url_re.findall(txt):
+                if u not in all_urls:
+                    all_urls.append(u)
+        if not all_urls:
+            return
+        self._msg("sys", f"🖼 Baixando {len(all_urls)} imagem(ns) para o site (deixa elas estaveis)…", store=False)
+        assets = base / "assets"
+        mapping: dict[str, str] = {}
+        for i, u in enumerate(all_urls[:12], 1):
+            dest = assets / f"img{i}.jpg"
+            if download_to(u, dest):
+                mapping[u] = f"assets/img{i}.jpg"
+        if not mapping:
+            return
+        for f, txt in contents.items():
+            new = txt
+            for u, local in mapping.items():
+                new = new.replace(u, local)
+            if new != txt:
+                try:
+                    f.write_text(new, encoding="utf-8")
+                except Exception:
+                    pass
+        self._msg("sys", f"✅ {len(mapping)} imagem(ns) salvas em /assets e aplicadas ao site.", store=False)
 
     def _web_context(self, text: str) -> str:
         """Le URLs citadas e faz busca na web quando o usuario pede; alimenta a IA."""
