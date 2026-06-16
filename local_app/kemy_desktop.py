@@ -458,7 +458,14 @@ SYSTEM_PROMPT = (
     "use um bloco ```kemy-image com UMA imagem por linha no formato "
     "'descricao em INGLES | nome-arquivo.png | LARGURAxALTURA'. "
     "Ex.: minimalist barber logo, gold on black background | logo.png | 800x800 . "
-    "A Kemy baixa e salva a imagem na pasta do projeto automaticamente."
+    "A Kemy baixa e salva a imagem na pasta do projeto automaticamente.\n"
+    "14) CONTEUDO COM MUITOS ITENS/DADOS (Pokedex, catalogo grande, lista de filmes, "
+    "criptos, etc.): NUNCA escreva os dados na mao (voce trunca e fica incompleto). "
+    "Em vez disso, BUSQUE de uma API publica gratuita via fetch no JavaScript e renderize "
+    "DINAMICAMENTE (com busca, paginacao ou scroll infinito). Exemplos de APIs gratis e "
+    "sem chave: Pokemon -> https://pokeapi.co/api/v2/pokemon?limit=151 (e a sprite em "
+    "results[i].url -> sprites.front_default); filmes/series, cripto (CoinGecko), etc. "
+    "Entregue a lista COMPLETA, nunca so 2-3 exemplos."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -653,7 +660,7 @@ class LLMClient:
         payload = {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": contents,
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 8192},
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 16384},
         }
         data = self._post(url, {"Content-Type": "application/json"}, payload)
         return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -679,7 +686,7 @@ class LLMClient:
     def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict]) -> str:
         msgs = [{"role": "system", "content": system}]
         msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
-        payload = {"model": model, "messages": msgs, "temperature": 0.6}
+        payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": 16000}
         data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, payload)
         return data["choices"][0]["message"]["content"]
 
@@ -2707,8 +2714,10 @@ class WebApi:
             self._msg("sys", "🔄 Aplicando e reiniciando a Kemy…", store=False)
             bat = Path(tempfile.gettempdir()) / "kemy_update.bat"
             exe = str(EXE_DIR / "KemyDesktop.exe")
-            bat.write_text("@echo off\r\ntimeout /t 2 /nobreak >nul\r\n"
-                           f'robocopy "{ext}" "{EXE_DIR}" /E /IS /IT /NFL /NDL /NJH /NJS >nul\r\n'
+            # /R:15 /W:1 espera os arquivos travados liberarem (o app precisa fechar
+            # totalmente) — evita atualizacao parcial/corrompida. timeout maior tambem.
+            bat.write_text("@echo off\r\ntimeout /t 4 /nobreak >nul\r\n"
+                           f'robocopy "{ext}" "{EXE_DIR}" /E /IS /IT /R:15 /W:1 /NFL /NDL /NJH /NJS >nul\r\n'
                            f'start "" "{exe}"\r\n', encoding="utf-8")
             subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x00000008)
             time.sleep(0.6)
