@@ -2085,20 +2085,26 @@ class WebApi:
         self.vts.speaking = False
         self._speaking = False
         self.vts.set_mouth(0.0)
-        try:
-            if self.mini:
-                self.mini.evaluate_js("kemyMouth(0)")
-        except Exception:
-            pass
+        for w in (self.window, self.mini):
+            try:
+                if w:
+                    w.evaluate_js("kemyMouth(0)")
+            except Exception:
+                pass
         self._after_speak()
 
     def _mini_mouth_loop(self) -> None:
-        """Lip-sync da carinha do mini avatar: empurra o nivel da boca ~20fps."""
+        """Lip-sync: empurra o nivel da boca (~20fps) para o VTuber Live2D no app e a mini."""
         while True:
             try:
-                if self.mini and self._speaking:
-                    lvl = self.speaker.mouth_level()
-                    self.mini.evaluate_js(f"kemyMouth({lvl:.2f})")
+                if self._speaking:
+                    js = f"kemyMouth({self.speaker.mouth_level():.2f})"
+                    for w in (self.window, self.mini):
+                        if w:
+                            try:
+                                w.evaluate_js(js)
+                            except Exception:
+                                pass
                     time.sleep(0.05)
                 else:
                     time.sleep(0.1)

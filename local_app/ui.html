@@ -54,6 +54,8 @@
   /* avatar */
   .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 0 8px;gap:6px}
   .avatar{width:210px;height:210px;position:relative}
+  .l2dwrap{width:280px;height:300px;display:flex;align-items:center;justify-content:center}
+  #l2d{width:100%;height:100%}
   .statelbl{font-size:13px;font-weight:700;color:var(--st);letter-spacing:.4px;opacity:.9}
   .halo{position:absolute;inset:0;border-radius:50%;border:2px solid var(--st);opacity:.5;
     box-shadow:0 0 30px var(--st);animation:breathe 3.5s ease-in-out infinite}
@@ -122,7 +124,8 @@
         <button class="iconbtn" id="updBtn" onclick="doUpdate()">⬆ Atualizar<span class="badge" id="updBadge"></span></button>
       </div>
       <div class="stage">
-        <div class="avatar">
+        <div class="l2dwrap" id="l2dwrap" style="display:none"><canvas id="l2d"></canvas></div>
+        <div class="avatar" id="svgAvatar">
           <div class="halo"></div>
           <svg viewBox="0 0 200 200" aria-hidden="true">
             <!-- cabelo de tras -->
@@ -206,6 +209,39 @@
     renderConvos(st.convos,st.active); kemyState(st.state||"idle");
     (st.log||[]).forEach(m=>addMsg(m.r,m.t));
   }); });
+</script>
+<!-- VTuber Live2D no proprio app (cai para o desenho SVG se nao carregar) -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+<script>
+  window._l2dMouth=0;
+  // boca: chamada pelo Python durante a fala. Move o modelo Live2D; o SVG usa CSS.
+  window.kemyMouth=function(v){ window._l2dMouth=Math.max(0,Math.min(1,+v||0)); };
+  (function(){
+    var MODEL="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+    function start(){
+      try{
+        var box=document.getElementById('l2dwrap');
+        var app=new PIXI.Application({view:document.getElementById('l2d'),transparent:true,autoStart:true,resizeTo:box,antialias:true});
+        PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
+          app.stage.addChild(model);
+          function fit(){ var s=Math.min(box.clientWidth/model.width, box.clientHeight/model.height);
+            model.scale.set(s); model.x=(box.clientWidth-model.width*s)/2; model.y=(box.clientHeight-model.height*s)/2; }
+          fit(); window.addEventListener('resize',fit);
+          box.style.display='flex';
+          var sv=document.getElementById('svgAvatar'); if(sv) sv.style.display='none';
+          app.ticker.add(function(){
+            try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._l2dMouth); }catch(e){}
+          });
+        }).catch(function(e){ console.log('Live2D model falhou, usando SVG:',e); });
+      }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
+    }
+    var tries=0, iv=setInterval(function(){ tries++;
+      if(window.PIXI&&window.PIXI.live2d){ clearInterval(iv); start(); }
+      else if(tries>50){ clearInterval(iv); console.log('Live2D nao carregou (sem internet?), mantendo SVG'); }
+    },200);
+  })();
 </script>
 </body>
 </html>
