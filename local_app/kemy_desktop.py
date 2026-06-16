@@ -22,9 +22,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import base64
+import random
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
@@ -229,6 +232,53 @@ def extract_run_commands(text: str) -> list[str]:
     return cmds
 
 
+def extract_image_requests(text: str) -> list[dict]:
+    """Le blocos ```kemy-image (uma imagem por linha: 'descricao | arquivo.png | LARGxALT')."""
+    reqs: list[dict] = []
+    if not text:
+        return reqs
+    for match in re.finditer(r"```kemy-image\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        for line in match.group(1).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if not parts[0]:
+                continue
+            fname = parts[1] if len(parts) > 1 and parts[1] else f"imagem{len(reqs)+1}.png"
+            if not fname.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                fname += ".png"
+            size = parts[2] if len(parts) > 2 and parts[2] else "1024x1024"
+            reqs.append({"prompt": parts[0], "file": fname, "size": size})
+    return reqs
+
+
+def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
+    """Gera uma imagem do tema via Pollinations (gratis, sem chave) e salva em disco."""
+    w, h = 1024, 1024
+    try:
+        a, _, b = size.lower().partition("x")
+        if a.strip().isdigit():
+            w = max(64, min(2048, int(a.strip())))
+        if b.strip().isdigit():
+            h = max(64, min(2048, int(b.strip())))
+    except Exception:
+        pass
+    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:300]) +
+           f"?width={w}&height={h}&nologo=true&seed={random.randint(1, 99999)}")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "KemyDesktop"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = resp.read()
+        if len(data) < 800:  # provavel erro/HTML, nao imagem
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return True
+    except Exception:
+        return False
+
+
 def extract_code_files(text: str) -> list[dict]:
     files: list[dict] = []
     if not text:
@@ -343,7 +393,12 @@ SYSTEM_PROMPT = (
     ".btn{padding:14px 26px;border-radius:14px;font-weight:700;text-decoration:none;transition:.2s}\n"
     ".btn.primary{background:var(--gold);color:#1a1304}.btn.primary:hover{transform:translateY(-3px)}\n"
     ".btn.ghost{border:1px solid rgba(255,255,255,.5);color:#fff}\n"
-    "Cards de servico em grid responsivo com imagem Pollinations do servico no topo de cada card."
+    "Cards de servico em grid responsivo com imagem Pollinations do servico no topo de cada card.\n"
+    "13) GERAR IMAGEM AVULSA (logo, foto, icone, arte) que o usuario pediu fora de um site: "
+    "use um bloco ```kemy-image com UMA imagem por linha no formato "
+    "'descricao em INGLES | nome-arquivo.png | LARGURAxALTURA'. "
+    "Ex.: minimalist barber logo, gold on black background | logo.png | 800x800 . "
+    "A Kemy baixa e salva a imagem na pasta do projeto automaticamente."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -508,6 +563,24 @@ class LLMClient:
         }
         data = self._post(url, {"Content-Type": "application/json"}, payload)
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    def vision(self, prompt: str, image_b64: str, mime: str) -> str:
+        """Analisa uma imagem (multimodal). Usa Gemini (free tier suporta visao)."""
+        if not self.gemini:
+            raise RuntimeError("Para enviar imagens, configure a chave do Gemini (GEMINI_API_KEY).")
+        for model in self.gemini_models:
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{model}:generateContent?key={self.gemini}")
+            payload = {"contents": [{"role": "user", "parts": [
+                {"text": prompt or "Descreva esta imagem em portugues e como posso usa-la."},
+                {"inline_data": {"mime_type": mime, "data": image_b64}},
+            ]}], "generationConfig": {"temperature": 0.5, "maxOutputTokens": 4096}}
+            try:
+                data = self._post(url, {"Content-Type": "application/json"}, payload)
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception:
+                continue
+        raise RuntimeError("Nao consegui analisar a imagem com o Gemini.")
 
     def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict]) -> str:
         msgs = [{"role": "system", "content": system}]
@@ -2142,6 +2215,43 @@ class WebApi:
         except Exception as exc:
             self._msg("sys", f"Falha ao definir a pasta: {exc}", store=False)
 
+    def analyze_image(self, prompt: str = "") -> None:
+        """Deixa o usuario escolher uma imagem e a Kemy 've' e responde (visao multimodal)."""
+        try:
+            res = self.window.create_file_dialog(
+                webview_open_dialog(),
+                file_types=("Imagens (*.png;*.jpg;*.jpeg;*.webp)", "Todos (*.*)"))  # type: ignore
+        except Exception:
+            try:
+                res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
+            except Exception as exc:
+                self._msg("sys", f"Nao consegui abrir o seletor: {exc}", store=False)
+                return
+        if not res:
+            return
+        path = Path(res[0] if isinstance(res, (list, tuple)) else res)
+        ext = path.suffix.lower().lstrip(".")
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "webp": "image/webp"}.get(ext, "image/png")
+        self._msg("user", f"[imagem: {path.name}] {prompt}".strip())
+        self.busy = True
+        self._state("thinking")
+        threading.Thread(target=self._do_vision, args=(path, mime, prompt), daemon=True).start()
+
+    def _do_vision(self, path: Path, mime: str, prompt: str) -> None:
+        try:
+            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+            reply = self.llm.vision(prompt, b64, mime)
+        except Exception as exc:
+            reply = f"Falhei ao ver a imagem: {exc}"
+        self.busy = False
+        self._msg("kemy", reply)
+        if self.speaker.available and reply:
+            self.speaker.say(reply[:600])
+            self._state("speaking")
+        else:
+            self._after_speak()
+
     def preview(self) -> None:
         """Abre o preview do site da conversa atual (index.html mais recente)."""
         it = self._cur()
@@ -2237,7 +2347,30 @@ class WebApi:
         files, chat = parse_llm_files(reply)
         save = self._save(files, base)
         self._maybe_run(extract_run_commands(reply), base)
+        self._gen_images(extract_image_requests(reply), base)
         return chat or "Feito.", save
+
+    def _gen_images(self, reqs: list[dict], base: Path) -> None:
+        if not reqs:
+            return
+        self._msg("sys", f"🎨 Gerando {len(reqs)} imagem(ns)…", store=False)
+        ok: list[str] = []
+        for r in reqs[:6]:
+            dest = base / r["file"]
+            if download_image(r["prompt"], dest, r.get("size", "1024x1024")):
+                ok.append(r["file"])
+        if ok:
+            self._msg("sys", f"🖼 Pronto: {', '.join(ok)} (em {base})", store=False)
+            try:
+                first = base / ok[0]
+                if os.name == "nt":
+                    os.startfile(str(first))  # type: ignore[attr-defined]
+                else:
+                    webbrowser.open(first.as_uri())
+            except Exception:
+                pass
+        else:
+            self._msg("sys", "Nao consegui gerar a imagem agora (tente de novo).", store=False)
 
     def _process_online(self, text: str):
         it = self._cur()
