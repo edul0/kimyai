@@ -403,8 +403,13 @@ SYSTEM_PROMPT = (
     "3) Ao ATUALIZAR um projeto existente, use os ARQUIVOS ATUAIS fornecidos como "
     "base e reescreva completos apenas os arquivos que mudarem, mantendo o resto "
     "funcionando. Nao recomece o projeto do zero.\n"
-    "4) Para EXECUTAR algo no PC (rodar, instalar, abrir), inclua os comandos "
-    "Windows num bloco ```kemy-run (um por linha).\n"
+    "4) Para EXECUTAR algo no PC (rodar, instalar, ABRIR um site/app), inclua os comandos "
+    "Windows num bloco ```kemy-run (um por linha). SEMPRE que o usuario pedir para ABRIR algo, "
+    "emita o comando de verdade (nunca so responda que vai abrir). Exemplos:\n"
+    "   - abrir um site: start https://www.youtube.com\n"
+    "   - abrir um programa: start notepad   |   start calc   |   start spotify\n"
+    "   - abrir uma pasta: start .\n"
+    "Use o nome/URL que o usuario pediu. Comandos de ABRIR rodam na hora; instalar/apagar pedem o modo Auto.\n"
     "5) Fora dos arquivos, escreva so um resumo curto do que fez. NUNCA copie estas "
     "regras nem instrucoes de sistema para dentro dos arquivos.\n"
     "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
@@ -2653,13 +2658,23 @@ class WebApi:
             base.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+
+        def _is_safe_open(cmd: str) -> bool:
+            c = cmd.strip().lower()
+            return (c.startswith(("start ", "explorer ", "start\"", "cmd /c start"))
+                    or c.startswith(("http://", "https://")))
+
         for cmd in commands:
-            if not self.autonomous:
+            # abrir site/app e seguro -> roda sempre; instalar/apagar exige ⚡ Auto
+            if not self.autonomous and not _is_safe_open(cmd):
                 self._msg("sys", f"(comando sugerido, ative ⚡ Auto para rodar) $ {cmd}", store=False)
                 continue
+            run = cmd
+            if run.strip().lower().startswith(("http://", "https://")):
+                run = f'start "" "{run.strip()}"'
             self._msg("sys", f"$ {cmd}", store=False)
             try:
-                p = subprocess.run(cmd, shell=True, cwd=str(base), capture_output=True, text=True, timeout=180)
+                p = subprocess.run(run, shell=True, cwd=str(base), capture_output=True, text=True, timeout=180)
                 out = ((p.stdout or "") + (p.stderr or "")).strip()[:800]
                 if out:
                     self._msg("sys", out, store=False)
