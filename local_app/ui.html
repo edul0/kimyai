@@ -42,7 +42,7 @@
   .conv .del{opacity:.5;border:0;background:none;color:inherit;cursor:pointer;font-size:13px}
   .conv .del:hover{opacity:1;color:var(--error)}
   /* main */
-  .main{display:flex;flex-direction:column;min-width:0}
+  .main{display:flex;flex-direction:column;min-width:0;min-height:0;height:100vh;overflow:hidden}
   .top{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line)}
   .top .sp{flex:1}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--muted)}
@@ -73,7 +73,7 @@
   body.speaking .mouth{animation:talk .28s steps(2) infinite}
   @keyframes talk{0%{transform:scaleY(.3)}50%{transform:scaleY(1.1)}100%{transform:scaleY(.5)}}
   /* chat */
-  .chat{flex:1;overflow:auto;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
+  .chat{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
   .msg{max-width:78%;padding:12px 15px;border-radius:16px;line-height:1.55;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s ease}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
   .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(34,224,200,.12));border:1px solid var(--line)}
@@ -95,8 +95,10 @@
   .tg.conv.on{background:var(--accent2)}
   .tg.auto.on{background:var(--thinking)}
   .tg.mute{margin-left:auto}
-  .chat::-webkit-scrollbar,.convos::-webkit-scrollbar{width:8px}
-  .chat::-webkit-scrollbar-thumb,.convos::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+  .chat::-webkit-scrollbar,.convos::-webkit-scrollbar{width:12px}
+  .chat::-webkit-scrollbar-track,.convos::-webkit-scrollbar-track{background:rgba(255,255,255,.04);border-radius:8px}
+  .chat::-webkit-scrollbar-thumb,.convos::-webkit-scrollbar-thumb{background:linear-gradient(var(--accent),var(--accent2));border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+  .chat::-webkit-scrollbar-thumb:hover,.convos::-webkit-scrollbar-thumb:hover{background:var(--accent2)}
 </style>
 </head>
 <body class="idle">
