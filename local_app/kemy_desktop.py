@@ -1033,6 +1033,10 @@ class Speaker:
         self._speaking = False
         self._last_word = 0.0
         self.voice = os.environ.get("KEMY_VOICE", "pt-BR-FranciscaNeural")
+        # ElevenLabs (voz de personagem premium) — se houver chave.
+        self.el_key = os.environ.get("KEMY_ELEVENLABS_KEY") or os.environ.get("ELEVENLABS_API_KEY")
+        self.el_voice = os.environ.get("KEMY_ELEVENLABS_VOICE", "EXAVITQu4vr4xnSDxMaL")
+        self.el_model = os.environ.get("KEMY_ELEVENLABS_MODEL", "eleven_multilingual_v2")
         self._edge_ok = False
         if os.name == "nt" and os.environ.get("KEMY_VOICE_ENGINE", "edge") != "sapi":
             try:
@@ -1040,7 +1044,7 @@ class Speaker:
                 self._edge_ok = True
             except Exception:
                 self._edge_ok = False
-        self.available = self._edge_ok or VOICE_SUPPORT["tts"]
+        self.available = bool(self.el_key) or self._edge_ok or VOICE_SUPPORT["tts"]
         if self.available:
             threading.Thread(target=self._loop, daemon=True).start()
 
@@ -1094,7 +1098,13 @@ class Speaker:
             if self.on_start:
                 self.on_start()
             spoke = False
-            if self._edge_ok:
+            if self.el_key:
+                try:
+                    self._speak_eleven(text)
+                    spoke = True
+                except Exception:
+                    spoke = False  # chave invalida/cota -> tenta edge
+            if not spoke and self._edge_ok:
                 try:
                     self._speak_edge(text)
                     spoke = True
@@ -1112,7 +1122,6 @@ class Speaker:
 
     def _speak_edge(self, text: str) -> None:
         import asyncio
-        import ctypes
         import edge_tts
         path = os.path.join(tempfile.gettempdir(), f"kemy_tts_{uuid.uuid4().hex[:8]}.mp3")
 
@@ -1122,6 +1131,25 @@ class Speaker:
         asyncio.run(_gen())
         if not os.path.exists(path) or os.path.getsize(path) < 256:
             raise RuntimeError("edge-tts falhou")
+        self._play_mp3(path)
+
+    def _speak_eleven(self, text: str) -> None:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.el_voice}"
+        body = json.dumps({"text": text, "model_id": self.el_model,
+                           "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "xi-api-key": self.el_key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            audio = r.read()
+        if len(audio) < 256:
+            raise RuntimeError("elevenlabs vazio")
+        path = os.path.join(tempfile.gettempdir(), f"kemy_tts_{uuid.uuid4().hex[:8]}.mp3")
+        with open(path, "wb") as f:
+            f.write(audio)
+        self._play_mp3(path)
+
+    def _play_mp3(self, path: str) -> None:
+        import ctypes
         alias = "kemyv" + uuid.uuid4().hex[:6]
         mci = ctypes.windll.winmm.mciSendStringW
         try:
