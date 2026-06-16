@@ -43,6 +43,7 @@ if (-not (Test-Path kemy_version.txt)) { New-Item -ItemType File kemy_version.tx
   --hidden-import "PIL" `
   --hidden-import "PIL._tkinter_finder" `
   --hidden-import "clr" `
+  --hidden-import "websocket" `
   local_app\kemy_desktop.py
 
 Write-Host ""

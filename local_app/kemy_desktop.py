@@ -1640,6 +1640,85 @@ def _find_ui_html() -> Path | None:
     return None
 
 
+class VTubeStudio:
+    """Conector com o VTube Studio via API WebSocket publica (lip-sync do modelo)."""
+
+    def __init__(self, log, port: int = 8001) -> None:
+        self.log = log
+        self.port = int(port)
+        self.ws = None
+        self.authed = False
+        self.lock = threading.Lock()
+        self.token_file = config_dir() / "vts_token.txt"
+        self.speaking = False
+        self.mouth_provider = None
+        self._loop_started = False
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            import websocket  # websocket-client
+        except Exception:
+            self.log("Instale 'websocket-client' para usar o VTube Studio.")
+            return
+        try:
+            self.ws = websocket.create_connection(f"ws://127.0.0.1:{self.port}", timeout=6)
+        except Exception:
+            self.log("VTube Studio nao encontrado. Abra o VTS e ative 'Start API' (porta 8001).")
+            return
+        try:
+            token = self.token_file.read_text(encoding="utf-8").strip() if self.token_file.exists() else ""
+            if not token:
+                r = self._send("AuthenticationTokenRequest", {"pluginName": "Kemy", "pluginDeveloper": "edul0"})
+                token = (r.get("data") or {}).get("authenticationToken", "")
+                if token:
+                    try:
+                        self.token_file.write_text(token, encoding="utf-8")
+                    except Exception:
+                        pass
+            r = self._send("AuthenticationRequest",
+                           {"pluginName": "Kemy", "pluginDeveloper": "edul0", "authenticationToken": token})
+            self.authed = bool((r.get("data") or {}).get("authenticated"))
+            self.log("VTube Studio conectado! Lip-sync ativo." if self.authed
+                     else "VTube Studio: clique em PERMITIR o plugin Kemy na janela do VTS e tente de novo.")
+        except Exception as exc:
+            self.log(f"VTS: falha ao autenticar ({exc}).")
+            return
+        if self.authed and not self._loop_started:
+            self._loop_started = True
+            threading.Thread(target=self._mouth_loop, daemon=True).start()
+
+    def _send(self, mtype: str, data: dict) -> dict:
+        msg = {"apiName": "VTubeStudioPublicAPI", "apiVersion": "1.0",
+               "requestID": uuid.uuid4().hex[:8], "messageType": mtype, "data": data}
+        with self.lock:
+            self.ws.send(json.dumps(msg))
+            return json.loads(self.ws.recv())
+
+    def set_mouth(self, value: float) -> None:
+        if not (self.authed and self.ws):
+            return
+        try:
+            self._send("InjectParameterDataRequest", {
+                "faceFound": False, "mode": "set",
+                "parameterValues": [{"id": "MouthOpen", "value": max(0.0, min(1.0, float(value)))}],
+            })
+        except Exception:
+            self.authed = False
+
+    def _mouth_loop(self) -> None:
+        while True:
+            try:
+                if self.authed:
+                    v = self.mouth_provider() if (self.speaking and self.mouth_provider) else 0.0
+                    self.set_mouth(v)
+            except Exception:
+                pass
+            time.sleep(0.06)
+
+
 class WebApi:
     """Ponte JS<->Python para a UI em HTML (pywebview)."""
 
@@ -1661,9 +1740,20 @@ class WebApi:
         self.convos, self.active_id = [], None
         self._load_convos()
         self.speaker = Speaker()
-        self.speaker.on_start = lambda: self._state("speaking")
-        self.speaker.on_done = lambda: self._after_speak()
+        self.vts = VTubeStudio(lambda m: self._msg("sys", m, store=False))
+        self.vts.mouth_provider = self.speaker.mouth_level
+        self.speaker.on_start = self._on_speak_start
+        self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
+
+    def _on_speak_start(self) -> None:
+        self.vts.speaking = True
+        self._state("speaking")
+
+    def _on_speak_done(self) -> None:
+        self.vts.speaking = False
+        self.vts.set_mouth(0.0)
+        self._after_speak()
 
     # ----- helpers UI -----
     def _js(self, code: str) -> None:
@@ -1750,6 +1840,7 @@ class WebApi:
             pass
 
     def _connect(self) -> None:
+        self.vts.start()
         if self.mode == "direct":
             self.connected = True
             self._state("idle")
@@ -1989,6 +2080,10 @@ class WebApi:
         self._state("idle" if self.connected else "offline")
         if self.continuous and self.connected and not self.busy:
             threading.Timer(0.7, self.listen).start()
+
+    def vts_connect(self) -> None:
+        self._msg("sys", "Conectando ao VTube Studio…", store=False)
+        self.vts.start()
 
     def check_update(self) -> None:
         threading.Thread(target=self._do_update, daemon=True).start()

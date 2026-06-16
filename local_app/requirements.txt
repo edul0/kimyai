@@ -18,5 +18,8 @@ Pillow>=10.0
 pywebview>=5.0
 pythonnet>=3.0.3
 
+# Integracao com o VTube Studio (API WebSocket).
+websocket-client>=1.7
+
 # Empacotamento do .exe.
 pyinstaller>=6.0
