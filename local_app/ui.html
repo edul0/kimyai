@@ -204,18 +204,26 @@
   document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter")sendText(); });
   function doUpdate(){ addMsg("sys","Procurando atualização…"); api('check_update'); }
   function setUpdate(av){ const b=document.getElementById("updBadge"); if(b)b.style.display=av?"block":"none"; }
-  // boot
-  window.addEventListener('pywebviewready',()=>{ pywebview.api.bootstrap().then(st=>{
-    renderConvos(st.convos,st.active); kemyState(st.state||"idle");
-    (st.log||[]).forEach(m=>addMsg(m.r,m.t));
-    // rede de seguranca: se por algum motivo continuar "Conectando", consulta o estado
-    var tries=0, iv=setInterval(function(){ tries++;
-      if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }
-      try{ pywebview.api.get_state().then(function(s){ if(s) kemyState(s); }); }catch(e){}
-    },1500);
-    // Carrega o VTuber Live2D DEPOIS, sem travar o app (injecao dinamica + atraso).
-    setTimeout(loadLive2D, 2500);
-  }); });
+  // boot — robusto: funciona mesmo se 'pywebviewready' disparar antes do listener
+  var _booted=false;
+  function boot(){
+    if(_booted) return;
+    if(!(window.pywebview && window.pywebview.api && pywebview.api.bootstrap)){ return setTimeout(boot,150); }
+    _booted=true;
+    pywebview.api.bootstrap().then(function(st){
+      renderConvos(st.convos,st.active); kemyState(st.state||"idle");
+      (st.log||[]).forEach(function(m){ addMsg(m.r,m.t); });
+      // rede de seguranca: se continuar "Conectando", consulta o estado
+      var tries=0, iv=setInterval(function(){ tries++;
+        if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }
+        try{ pywebview.api.get_state().then(function(s){ if(s) kemyState(s); }); }catch(e){}
+      },1500);
+      // Carrega o VTuber Live2D DEPOIS, sem travar o app
+      setTimeout(loadLive2D, 2500);
+    });
+  }
+  window.addEventListener('pywebviewready', boot);
+  boot();
 
   // ---- VTuber Live2D (carregado de forma assincrona; cai para o SVG se falhar) ----
   window._l2dMouth=0;
