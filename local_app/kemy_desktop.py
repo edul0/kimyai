@@ -416,6 +416,20 @@ class LLMClient:
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
 
+    def primary_label(self) -> str:
+        """Provedor + modelo que sera tentado primeiro (mesma ordem do chat())."""
+        if self.cerebras:
+            return f"Cerebras · {self.cerebras_models[0]}"
+        if self.groq:
+            return f"Groq · {self.groq_models[0]}"
+        if self.gemini:
+            return f"Gemini · {self.gemini_models[0]}"
+        if self.openai:
+            return f"OpenAI · {self.openai_models[0]}"
+        if self.openrouter:
+            return f"OpenRouter · {self.openrouter_models[0]}"
+        return "IA"
+
     def chat(self, system: str, messages: list[dict]) -> str:
         errors: list[str] = []
         # Cerebras e Groq primeiro (rapidos e cota generosa); Gemini/OpenAI/OpenRouter como reserva.
@@ -1224,8 +1238,7 @@ class KemyVoiceApp:
             self.connected = True
             self.root.after(0, lambda: self._set_state("idle"))
             self.root.after(0, lambda: self._log(
-                f"IA direta ativa ({'Gemini' if self.llm.gemini else 'Groq' if self.llm.groq else 'OpenAI'}). "
-                f"Pasta: {self.workspace_root}", "sys"))
+                f"IA ativa ({self.llm.primary_label()}). Pasta: {self.workspace_root}", "sys"))
             self.speaker.say("Oi! Como posso ajudar?")
             return
         # Sem .env local: usa o Render (que ja tem as chaves). Zero config.
@@ -2027,7 +2040,7 @@ class WebApi:
         if self.mode == "direct":
             self.connected = True
             self._state("idle")
-            self._msg("sys", f"IA direta ativa ({'Gemini' if self.llm.gemini else 'Groq' if self.llm.groq else 'Cerebras' if self.llm.cerebras else 'IA'}). Pasta: {self.workspace_root}", store=False)
+            self._msg("sys", f"IA ativa ({self.llm.primary_label()}). Pasta: {self.workspace_root}", store=False)
             self.speaker.say("Oi! Como posso ajudar?")
             return
         # online (Render)
