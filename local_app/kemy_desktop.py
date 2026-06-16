@@ -2258,19 +2258,34 @@ def run_webview(host: str, port: int) -> bool:
     except Exception:
         pass
 
-    # mini avatar flutuante perto do relogio
-    mw, mh = 150, 168
-    mx, my = _corner_pos(mw, mh)
-    try:
-        mini = webview.create_window("Kemy", html=MINI_HTML, js_api=api,
-                                     width=mw, height=mh, x=mx, y=my,
-                                     frameless=True, easy_drag=True, on_top=True,
-                                     background_color="#070a12")
-        api.mini = mini
-    except Exception:
-        api.mini = None
+    # O mini avatar e a bandeja sao criados SO depois que a janela principal
+    # termina de carregar. Criar duas janelas WebView2 ao mesmo tempo trava a
+    # inicializacao (conflito na pasta de dados do WebView2).
+    def _setup_companion():
+        if getattr(api, "_companion_done", False):
+            return
+        api._companion_done = True
+        if os.environ.get("KEMY_NO_MINI") != "1":
+            mw, mh = 150, 168
+            mx, my = _corner_pos(mw, mh)
+            try:
+                mini = webview.create_window("Kemy", html=MINI_HTML, js_api=api,
+                                             width=mw, height=mh, x=mx, y=my,
+                                             frameless=True, easy_drag=True, on_top=True,
+                                             background_color="#070a12")
+                api.mini = mini
+            except Exception:
+                api.mini = None
+        try:
+            _start_tray(api, win)
+        except Exception:
+            pass
 
-    _start_tray(api, win)
+    try:
+        win.events.loaded += lambda: _setup_companion()
+    except Exception:
+        pass
+
     webview.start()
     try:
         api.speaker.stop()
