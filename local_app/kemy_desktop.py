@@ -1652,6 +1652,7 @@ class VTubeStudio:
         self.token_file = config_dir() / "vts_token.txt"
         self.speaking = False
         self.mouth_provider = None
+        self.on_connect = None
         self._loop_started = False
 
     def start(self) -> None:
@@ -1686,9 +1687,22 @@ class VTubeStudio:
         except Exception as exc:
             self.log(f"VTS: falha ao autenticar ({exc}).")
             return
-        if self.authed and not self._loop_started:
-            self._loop_started = True
-            threading.Thread(target=self._mouth_loop, daemon=True).start()
+        if self.authed:
+            # teste visivel: abre/fecha a boca do modelo algumas vezes ao conectar
+            try:
+                for _ in range(3):
+                    self.set_mouth(0.9); time.sleep(0.18)
+                    self.set_mouth(0.0); time.sleep(0.18)
+            except Exception:
+                pass
+            if self.on_connect:
+                try:
+                    self.on_connect()
+                except Exception:
+                    pass
+            if not self._loop_started:
+                self._loop_started = True
+                threading.Thread(target=self._mouth_loop, daemon=True).start()
 
     def _send(self, mtype: str, data: dict) -> dict:
         msg = {"apiName": "VTubeStudioPublicAPI", "apiVersion": "1.0",
@@ -1742,6 +1756,7 @@ class WebApi:
         self.speaker = Speaker()
         self.vts = VTubeStudio(lambda m: self._msg("sys", m, store=False))
         self.vts.mouth_provider = self.speaker.mouth_level
+        self.vts.on_connect = lambda: self._js("vtsConnected()")
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
