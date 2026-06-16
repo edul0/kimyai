@@ -119,6 +119,15 @@ def config_dir() -> Path:
     return d
 
 
+def build_tag() -> str:
+    """Identificador curto da build (sha) para sabermos qual versao esta rodando."""
+    try:
+        sha = (ROOT_DIR / "kemy_version.txt").read_text(encoding="utf-8").strip()
+        return sha[:7] if sha else "dev"
+    except Exception:
+        return "dev"
+
+
 def find_env_file() -> Path | None:
     for cand in (EXE_DIR / ".env", config_dir() / ".env", ROOT_DIR / ".env",
                  ROOT_DIR / "kemy_bundled.env", Path.cwd() / ".env"):
@@ -918,7 +927,7 @@ class KemyVoiceApp:
 
     # ----- UI ----- #
     def _build_ui(self) -> None:
-        self.root.title("Kemy - Assistente de Voz")
+        self.root.title(f"Kemy - Assistente de Voz (classico {build_tag()})")
         self.root.geometry("1060x760")
         self.root.minsize(900, 640)
         self.root.configure(bg=COLORS["bg"])
@@ -2235,13 +2244,23 @@ def run_webview(host: str, port: int) -> bool:
     """Tenta a UI moderna em HTML. Retorna False se pywebview nao estiver disponivel."""
     try:
         import webview  # noqa
-    except Exception:
+    except Exception as exc:
+        try:
+            (config_dir() / "webview_error.log").write_text(
+                f"import webview falhou: {exc!r}", encoding="utf-8")
+        except Exception:
+            pass
         return False
     html = _find_ui_html()
     if not html:
+        try:
+            (config_dir() / "webview_error.log").write_text(
+                "ui.html nao encontrado no bundle", encoding="utf-8")
+        except Exception:
+            pass
         return False
     api = WebApi(host, port)
-    win = webview.create_window("Kemy - Assistente", url=html.as_uri(), js_api=api,
+    win = webview.create_window(f"Kemy - Assistente ({build_tag()})", url=html.as_uri(), js_api=api,
                                 width=1100, height=780, min_size=(900, 640),
                                 background_color="#070a12")
     api.window = win
@@ -2320,7 +2339,12 @@ def main() -> int:
             if run_webview(args.host, args.port):
                 return 0
         except Exception:
-            pass
+            import traceback
+            try:
+                (config_dir() / "webview_error.log").write_text(
+                    traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
     root = tk.Tk()
     app = KemyVoiceApp(root, host=args.host, port=args.port)
     root.mainloop()
