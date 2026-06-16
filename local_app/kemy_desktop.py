@@ -315,8 +315,17 @@ SYSTEM_PROMPT = (
     "   - PROIBIDO: layout cru, fundo cinza chapado sem graca, textos colados, tudo numa "
     "linha so, ou pagina sem hierarquia visual. Entregue algo que pareca feito por um "
     "designer senior.\n"
-    "10) Combine cores, icones (emojis ok), imagens (use https://picsum.photos ou "
-    "https://source.unsplash.com/...) e a copy ao tema exato do pedido."
+    "10) IMAGENS sempre CONTEXTUAIS, ligadas ao tema do site. Use o gerador gratuito "
+    "(sem chave) https://image.pollinations.ai/prompt/<DESCRICAO>?width=1200&height=800&nologo=true "
+    "onde <DESCRICAO> descreve a imagem em INGLES e url-encoded (espaco = %20), ex.: "
+    "modern%20barbershop%20interior , man%20getting%20a%20haircut , barber%20cutting%20beard . "
+    "Varie &seed=1, &seed=2, &seed=3 para imagens diferentes. Ajuste width/height ao uso (card "
+    "quadrado 600x600, hero largo 1600x900). NUNCA use picsum.photos nem source.unsplash.com "
+    "(devolvem fotos aleatorias sem relacao com o tema).\n"
+    "11) FUNDOS: toda imagem de fundo usa SEMPRE center/cover no-repeat. Hero com imagem = "
+    "background: linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)), url('...pollinations...') center/cover; "
+    "PROIBIDO background-size que repita em faixas (ex.: 100% 300px) ou gradiente cinza chapado. "
+    "Imagens em <img> tambem com object-fit: cover e width/height definidos para nao distorcer."
 )
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
@@ -1837,6 +1846,15 @@ class WebApi:
         try:
             if self.window:
                 self.window.show()
+                try:
+                    self.window.restore()  # desminimiza e traz pra frente
+                except Exception:
+                    pass
+                try:
+                    self.window.on_top = True
+                    self.window.on_top = False
+                except Exception:
+                    pass
         except Exception:
             pass
 
