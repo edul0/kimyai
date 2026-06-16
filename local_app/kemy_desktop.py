@@ -2212,12 +2212,20 @@ class WebApi:
 
     # ----- API exposta ao JS -----
     def bootstrap(self) -> dict:
+        # Modo direto nao precisa de rede: ja fica pronto na hora (sem depender de
+        # evaluate_js em segundo plano, que vinha falhando -> "Conectando" infinito).
+        if self.mode == "direct":
+            self.connected = True
         threading.Thread(target=self._connect, daemon=True).start()
         threading.Thread(target=self._update_flag, daemon=True).start()
         it = self._cur() or {}
-        return {"state": "offline", "active": self.active_id,
+        return {"state": "idle" if self.connected else "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
                 "log": it.get("log", [])}
+
+    def get_state(self) -> str:
+        """Consultado pela UI como rede de seguranca (caso o push de estado falhe)."""
+        return "idle" if self.connected else ("offline" if self.mode == "online" else "idle")
 
     def _update_flag(self) -> None:
         try:
