@@ -391,33 +391,61 @@ class LLMClient:
         self.cerebras = env.get("CEREBRAS_API_KEY")
         self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
         self.openrouter = env.get("OPENROUTER_API_KEY")
-        self.gemini_model = env.get("GEMINI_PRIMARY_MODEL") or "gemini-2.0-flash"
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai or self.openrouter)
+
+        def _list(key: str, default: list[str]) -> list[str]:
+            raw = (env.get(key) or "").strip()
+            picked = [m.strip() for m in raw.split(",") if m.strip()] if raw else []
+            # mantem o conhecido-bom no fim como rede de seguranca
+            for d in default:
+                if d not in picked:
+                    picked.append(d)
+            return picked
+
+        # Listas preferenciais: modelos de CODIGO/recentes primeiro, fallback estavel no fim.
+        # Sobrescreva por env (CEREBRAS_MODEL, GROQ_MODEL, OPENROUTER_MODEL, GEMINI_PRIMARY_MODEL),
+        # virgula-separado, na ordem de preferencia.
+        self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "llama-3.3-70b"])
+        self.groq_models = _list("GROQ_MODEL", ["moonshotai/kimi-k2-instruct", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
+        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct"])
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash"])
+        self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
+        self.gemini_model = self.gemini_models[0]
+        self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
 
     def chat(self, system: str, messages: list[dict]) -> str:
         errors: list[str] = []
         # Cerebras e Groq primeiro (rapidos e cota generosa); Gemini/OpenAI/OpenRouter como reserva.
-        attempts = []
+        # Por provedor, tenta os modelos preferidos (codigo) e cai pro estavel; uma vez que um
+        # modelo funciona, fica travado nele (self._working) para nao gastar chamadas a toa.
+        attempts: list[tuple[str, str, object]] = []
+
+        def add(prov: str, models: list[str], maker) -> None:
+            chosen = [self._working[prov]] if self._working.get(prov) in models else models
+            for m in chosen:
+                attempts.append((prov, m, maker(m)))
+
         if self.cerebras:
-            attempts.append(("cerebras", lambda: self._openai_compat(
-                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, "llama-3.3-70b", system, messages)))
+            add("cerebras", self.cerebras_models, lambda m: (lambda: self._openai_compat(
+                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages)))
         if self.groq:
-            attempts.append(("groq", lambda: self._openai_compat(
-                "https://api.groq.com/openai/v1/chat/completions", self.groq, "llama-3.3-70b-versatile", system, messages)))
+            add("groq", self.groq_models, lambda m: (lambda: self._openai_compat(
+                "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages)))
         if self.gemini:
-            attempts.append(("gemini", lambda: self._gemini(system, messages)))
+            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
         if self.openai:
-            attempts.append(("openai", lambda: self._openai_compat(
-                "https://api.openai.com/v1/chat/completions", self.openai, "gpt-4o-mini", system, messages)))
+            add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
+                "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages)))
         if self.openrouter:
-            attempts.append(("openrouter", lambda: self._openai_compat(
-                "https://openrouter.ai/api/v1/chat/completions", self.openrouter,
-                "meta-llama/llama-3.3-70b-instruct", system, messages)))
-        for name, fn in attempts:
+            add("openrouter", self.openrouter_models, lambda m: (lambda: self._openai_compat(
+                "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages)))
+        for prov, model, fn in attempts:
             try:
-                return fn()
+                res = fn()
+                self._working[prov] = model
+                return res
             except Exception as exc:
-                errors.append(f"{name}: {exc}")
+                errors.append(f"{prov}/{model}: {exc}")
         raise RuntimeError(
             ("Todos os provedores falharam (" + "; ".join(errors) + "). "
              "As chaves podem estar esgotadas ou bloqueadas — gere chaves novas e atualize o KEMY_ENV.")
@@ -450,9 +478,9 @@ class LLMClient:
                 raise
         raise last_err or RuntimeError("falha desconhecida")
 
-    def _gemini(self, system: str, messages: list[dict]) -> str:
+    def _gemini(self, system: str, messages: list[dict], model: str | None = None) -> str:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{self.gemini_model}:generateContent?key={self.gemini}")
+               f"{model or self.gemini_model}:generateContent?key={self.gemini}")
         contents = [{"role": "model" if m["role"] == "assistant" else "user",
                      "parts": [{"text": m["content"]}]} for m in messages]
         payload = {
