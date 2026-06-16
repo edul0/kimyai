@@ -411,7 +411,7 @@ class LLMClient:
         # Padrao GRATIS: Gemini 3 Flash (free tier, sem faturamento) e o melhor flash gratuito;
         # cai para 2.5/2.0 Flash se o ID nao existir na conta. O Gemini 3.1 PRO via API e PAGO
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
