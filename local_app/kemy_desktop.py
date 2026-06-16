@@ -408,10 +408,10 @@ class LLMClient:
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "llama-3.3-70b"])
         self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
         self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct"])
-        # Padrao GRATIS: Flash (free tier). O Gemini 3.1 Pro via API e PAGO (precisa de
-        # faturamento ativado) e nao entra por padrao. Para usar o Pro, defina por env:
-        # GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash"])
+        # Padrao GRATIS: Gemini 3 Flash (free tier, sem faturamento) e o melhor flash gratuito;
+        # cai para 2.5/2.0 Flash se o ID nao existir na conta. O Gemini 3.1 PRO via API e PAGO
+        # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
