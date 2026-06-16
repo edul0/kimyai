@@ -7,6 +7,9 @@ pyttsx3>=2.90
 # Reconhecimento de fala (microfone).
 SpeechRecognition>=3.10.0
 
+# Voz neural natural (gratis, sem chave; vozes pt-BR). Base para voz personalizada.
+edge-tts>=6.1.0
+
 # Backend do microfone para o SpeechRecognition.
 # No Windows o pip instala o wheel pronto; no Linux pode exigir portaudio.
 PyAudio>=0.2.13

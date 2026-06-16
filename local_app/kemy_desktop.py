@@ -1022,14 +1022,25 @@ class Avatar:
 # Voz
 # --------------------------------------------------------------------------- #
 class Speaker:
+    """Voz da Kemy. Prefere Edge TTS (voz neural natural, gratis, precisa internet);
+    cai para o pyttsx3/SAPI5 (offline, robotico) se o Edge falhar."""
+
     def __init__(self) -> None:
-        self.available = VOICE_SUPPORT["tts"]
         self.on_start = None
         self.on_done = None
         self._queue: "queue.Queue[str | None]" = queue.Queue()
         self._engine = None
         self._speaking = False
         self._last_word = 0.0
+        self.voice = os.environ.get("KEMY_VOICE", "pt-BR-FranciscaNeural")
+        self._edge_ok = False
+        if os.name == "nt" and os.environ.get("KEMY_VOICE_ENGINE", "edge") != "sapi":
+            try:
+                import edge_tts  # noqa: F401
+                self._edge_ok = True
+            except Exception:
+                self._edge_ok = False
+        self.available = self._edge_ok or VOICE_SUPPORT["tts"]
         if self.available:
             threading.Thread(target=self._loop, daemon=True).start()
 
@@ -1039,6 +1050,9 @@ class Speaker:
     def mouth_level(self) -> float:
         if not self._speaking:
             return 0.0
+        # Edge: nao temos eventos de palavra -> oscila para simular a fala.
+        if self._edge_ok or self._engine is None:
+            return 0.22 + 0.7 * abs(math.sin(time.time() * 11.0))
         dt = time.time() - self._last_word
         if dt < 0.13:
             return 1.0
@@ -1047,9 +1061,9 @@ class Speaker:
         return 0.18
 
     def _loop(self) -> None:
+        engine = None
         try:
             import pyttsx3
-
             engine = pyttsx3.init()
             self._engine = engine
             try:
@@ -1066,8 +1080,11 @@ class Speaker:
             except Exception:
                 pass
         except Exception:
-            self.available = False
-            return
+            engine = None
+            self._engine = None
+            if not self._edge_ok:
+                self.available = False
+                return
         while True:
             text = self._queue.get()
             if not text:
@@ -1076,14 +1093,59 @@ class Speaker:
             self._last_word = time.time()
             if self.on_start:
                 self.on_start()
-            try:
-                engine.say(text)
-                engine.runAndWait()
-            except Exception:
-                pass
+            spoke = False
+            if self._edge_ok:
+                try:
+                    self._speak_edge(text)
+                    spoke = True
+                except Exception:
+                    spoke = False  # sem internet/erro -> cai pro SAPI
+            if not spoke and engine is not None:
+                try:
+                    engine.say(text)
+                    engine.runAndWait()
+                except Exception:
+                    pass
             self._speaking = False
             if self.on_done and self._queue.empty():
                 self.on_done()
+
+    def _speak_edge(self, text: str) -> None:
+        import asyncio
+        import ctypes
+        import edge_tts
+        path = os.path.join(tempfile.gettempdir(), f"kemy_tts_{uuid.uuid4().hex[:8]}.mp3")
+
+        async def _gen() -> None:
+            await edge_tts.Communicate(text, self.voice).save(path)
+
+        asyncio.run(_gen())
+        if not os.path.exists(path) or os.path.getsize(path) < 256:
+            raise RuntimeError("edge-tts falhou")
+        alias = "kemyv" + uuid.uuid4().hex[:6]
+        mci = ctypes.windll.winmm.mciSendStringW
+        try:
+            mci(f'open "{path}" type mpegvideo alias {alias}', None, 0, None)
+            buf = ctypes.create_unicode_buffer(64)
+            mci(f"status {alias} length", buf, 64, None)
+            try:
+                length = int(buf.value)
+            except Exception:
+                length = 0
+            mci(f"play {alias}", None, 0, None)
+            start = time.time()
+            while self._speaking and (time.time() - start) * 1000 < length + 250:
+                time.sleep(0.05)
+        finally:
+            try:
+                mci(f"stop {alias}", None, 0, None)
+                mci(f"close {alias}", None, 0, None)
+            except Exception:
+                pass
+            try:
+                os.remove(path)
+            except Exception:
+                pass
 
     def say(self, text: str) -> None:
         if self.available and text.strip():
