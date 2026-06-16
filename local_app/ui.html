@@ -208,42 +208,41 @@
   window.addEventListener('pywebviewready',()=>{ pywebview.api.bootstrap().then(st=>{
     renderConvos(st.convos,st.active); kemyState(st.state||"idle");
     (st.log||[]).forEach(m=>addMsg(m.r,m.t));
+    // Carrega o VTuber Live2D DEPOIS, sem travar o app (injecao dinamica + atraso).
+    setTimeout(loadLive2D, 2500);
   }); });
-</script>
-<!-- VTuber Live2D no proprio app (cai para o desenho SVG se nao carregar) -->
-<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
-<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
-<script>
+
+  // ---- VTuber Live2D (carregado de forma assincrona; cai para o SVG se falhar) ----
   window._l2dMouth=0;
-  // boca: chamada pelo Python durante a fala. Move o modelo Live2D; o SVG usa CSS.
   window.kemyMouth=function(v){ window._l2dMouth=Math.max(0,Math.min(1,+v||0)); };
-  (function(){
-    var MODEL="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
-    var W=280,H=300;
-    function start(){
-      try{
-        var box=document.getElementById('l2dwrap');
-        var app=new PIXI.Application({view:document.getElementById('l2d'),width:W,height:H,backgroundAlpha:0,antialias:true});
-        PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
-          app.stage.addChild(model);
-          // mostra o quadro ANTES de dimensionar
-          box.style.display='flex';
-          var sv=document.getElementById('svgAvatar'); if(sv) sv.style.display='none';
-          function fit(){ var s=Math.min(W/model.width,H/model.height);
-            model.scale.set(s); model.x=(W-model.width*s)/2; model.y=(H-model.height*s)/2; }
-          fit();
-          app.ticker.add(function(){
-            try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._l2dMouth); }catch(e){}
-          });
-        }).catch(function(e){ console.log('Live2D model falhou, usando SVG:',e); });
-      }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
-    }
-    var tries=0, iv=setInterval(function(){ tries++;
-      if(window.PIXI&&window.PIXI.live2d){ clearInterval(iv); start(); }
-      else if(tries>50){ clearInterval(iv); console.log('Live2D nao carregou (sem internet?), mantendo SVG'); }
-    },200);
-  })();
+  function _loadScript(src){ return new Promise(function(res,rej){
+    var s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=rej;
+    document.head.appendChild(s); }); }
+  function loadLive2D(){
+    _loadScript("https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js")
+      .then(function(){ return _loadScript("https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"); })
+      .then(function(){ return _loadScript("https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"); })
+      .then(_startL2D)
+      .catch(function(e){ console.log('Live2D libs falharam, mantendo SVG:',e); });
+  }
+  function _startL2D(){
+    try{
+      if(!window.PIXI||!window.PIXI.live2d){ return; }
+      var MODEL="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+      var W=280,H=300, box=document.getElementById('l2dwrap');
+      var app=new PIXI.Application({view:document.getElementById('l2d'),width:W,height:H,backgroundAlpha:0,antialias:true});
+      PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
+        app.stage.addChild(model);
+        box.style.display='flex';
+        var sv=document.getElementById('svgAvatar'); if(sv) sv.style.display='none';
+        var s=Math.min(W/model.width,H/model.height);
+        model.scale.set(s); model.x=(W-model.width*s)/2; model.y=(H-model.height*s)/2;
+        app.ticker.add(function(){
+          try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._l2dMouth); }catch(e){}
+        });
+      }).catch(function(e){ console.log('Live2D model falhou, usando SVG:',e); });
+    }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
+  }
 </script>
 </body>
 </html>
