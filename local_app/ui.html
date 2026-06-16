@@ -215,10 +215,12 @@
         if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }
         try{ pywebview.api.get_state().then(function(s){ if(s) kemyState(s); }); }catch(e){}
       },1500);
-    });
+    }).catch(function(e){ kemyState('idle'); addMsg('sys','Falha no boot: '+e); });
   }
   window.addEventListener('pywebviewready', boot);
   boot();
+  // fallback duro: se em 4s o estado nao saiu de "Conectando", assume pronto
+  setTimeout(function(){ if(document.body.className==="offline"||document.body.className===""){ kemyState('idle'); } }, 4000);
   // lip-sync da carinha SVG: no-op aqui (a boca usa animacao CSS quando 'speaking')
   window.kemyMouth=function(v){};
 </script>
