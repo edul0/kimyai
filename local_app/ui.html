@@ -108,12 +108,14 @@
       <button class="newbtn" onclick="api('new_convo')">＋ Nova conversa</button>
       <div class="lbl">CONVERSAS</div>
       <div class="convos" id="convos"></div>
+      <button class="iconbtn" style="width:100%" onclick="api('choose_workspace')">🗂 Escolher pasta</button>
       <button class="iconbtn" style="width:100%" onclick="api('open_folder')">📁 Abrir pasta</button>
     </aside>
     <section class="main">
       <div class="top">
         <span class="pill"><span class="dot"></span><span id="stateTxt">Conectando…</span></span>
         <span class="sp"></span>
+        <button class="iconbtn" onclick="api('preview')">👁 Preview</button>
         <button class="iconbtn" onclick="api('vts_connect')">🎭 VTuber</button>
         <button class="iconbtn" id="updBtn" onclick="doUpdate()">⬆ Atualizar<span class="badge" id="updBadge"></span></button>
       </div>

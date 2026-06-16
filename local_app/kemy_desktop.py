@@ -406,9 +406,10 @@ class LLMClient:
         # Sobrescreva por env (CEREBRAS_MODEL, GROQ_MODEL, OPENROUTER_MODEL, GEMINI_PRIMARY_MODEL),
         # virgula-separado, na ordem de preferencia.
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "llama-3.3-70b"])
-        self.groq_models = _list("GROQ_MODEL", ["moonshotai/kimi-k2-instruct", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
+        self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
         self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct"])
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash"])
+        # Gemini 3.1 Pro (plano pago) como principal; cai para o flash gratuito se indisponivel.
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
@@ -425,14 +426,15 @@ class LLMClient:
             for m in chosen:
                 attempts.append((prov, m, maker(m)))
 
+        # Gemini primeiro (plano pago, Gemini 3.1 Pro = melhor qualidade); demais como reserva.
+        if self.gemini:
+            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
         if self.cerebras:
             add("cerebras", self.cerebras_models, lambda m: (lambda: self._openai_compat(
                 "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages)))
         if self.groq:
             add("groq", self.groq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages)))
-        if self.gemini:
-            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m)))
         if self.openai:
             add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
                 "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages)))
@@ -2100,6 +2102,44 @@ class WebApi:
         except Exception:
             pass
 
+    def choose_workspace(self) -> None:
+        """Deixa o usuario escolher a pasta onde a Kemy cria/edita os projetos."""
+        try:
+            res = self.window.create_file_dialog(webview_folder_dialog())  # type: ignore
+        except Exception as exc:
+            self._msg("sys", f"Nao consegui abrir o seletor de pasta: {exc}", store=False)
+            return
+        if not res:
+            return
+        chosen = res[0] if isinstance(res, (list, tuple)) else res
+        try:
+            new_root = Path(chosen)
+            new_root.mkdir(parents=True, exist_ok=True)
+            self.workspace_root = new_root
+            self.env_vars["KEMY_LOCAL_WORKSPACE_ROOT"] = str(new_root)
+            _set_env_var(config_dir() / ".env", "KEMY_LOCAL_WORKSPACE_ROOT", str(new_root))
+            # projetos das proximas conversas vao para a nova pasta
+            it = self._cur()
+            if it:
+                it["project"] = str(new_root / f"projeto-{it['id']}")
+                self._save_convos()
+            self._msg("sys", f"Pasta de trabalho agora e: {new_root}", store=False)
+        except Exception as exc:
+            self._msg("sys", f"Falha ao definir a pasta: {exc}", store=False)
+
+    def preview(self) -> None:
+        """Abre o preview do site da conversa atual (index.html mais recente)."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        index = base / "index.html"
+        if not index.exists():
+            self._msg("sys", "Ainda nao ha um site para visualizar nesta conversa.", store=False)
+            return
+        try:
+            webbrowser.open(index.as_uri())
+        except Exception as exc:
+            self._msg("sys", f"Nao consegui abrir o preview: {exc}", store=False)
+
     def import_env(self) -> None:
         try:
             res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
@@ -2445,6 +2485,35 @@ def run_webview(host: str, port: int) -> bool:
 def webview_open_dialog():
     import webview
     return webview.OPEN_DIALOG
+
+
+def webview_folder_dialog():
+    import webview
+    return webview.FOLDER_DIALOG
+
+
+def _set_env_var(path: Path, key: str, value: str) -> None:
+    """Cria/atualiza uma linha KEY=VALUE num arquivo .env, preservando o resto."""
+    lines: list[str] = []
+    try:
+        if path.exists():
+            lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        lines = []
+    out, done = [], False
+    for ln in lines:
+        if ln.strip().startswith(f"{key}=") or ln.strip().startswith(f"{key} ="):
+            out.append(f"{key}={value}")
+            done = True
+        else:
+            out.append(ln)
+    if not done:
+        out.append(f"{key}={value}")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
