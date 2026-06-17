@@ -625,9 +625,10 @@ class LLMClient:
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
         self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
-        # Modelos RAPIDOS (menores) para bate-papo/voz: respondem um "oi" em ~1-2s.
-        self.cerebras_fast = _list("CEREBRAS_FAST", ["llama-3.3-70b", "gpt-oss-120b"])
-        self.groq_fast = _list("GROQ_FAST", ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"])
+        # Modelos para bate-papo/voz: inteligentes E rapidos (GPT-OSS 120B segura bem o
+        # contexto e responde em ~1-2s); Llama so como ultimo fallback.
+        self.cerebras_fast = _list("CEREBRAS_FAST", ["gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507", "llama-3.3-70b"])
+        self.groq_fast = _list("GROQ_FAST", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
 
