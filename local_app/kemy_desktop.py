@@ -191,6 +191,21 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return data
 
 
+def load_merged_env() -> dict[str, str]:
+    """Junta TODOS os .env: o embutido (chaves da IA) como base e o do usuario
+    (config_dir, com voz/workspace) por cima. Evita que o .env do usuario apague
+    as chaves da IA embutidas (bug do 'modo online / 404')."""
+    merged: dict[str, str] = {}
+    for cand in (ROOT_DIR / "kemy_bundled.env", ROOT_DIR / ".env",
+                 EXE_DIR / ".env", Path.cwd() / ".env", config_dir() / ".env"):
+        try:
+            if cand.is_file():
+                merged.update(parse_env_file(cand))
+        except Exception:
+            continue
+    return merged
+
+
 def _detect_voice_support() -> dict[str, bool]:
     support = {"tts": False, "stt": False}
     try:
@@ -2207,8 +2222,8 @@ class WebApi:
         self.window = None
         self.host, self.port = host, int(port)
         self.base_url = f"http://{host}:{port}"
-        self.env_path = find_env_file()
-        self.env_vars = parse_env_file(self.env_path) if self.env_path else {}
+        self.env_path = config_dir() / ".env"
+        self.env_vars = load_merged_env()
         self.workspace_root = self._workspace()
         self.llm = LLMClient(self.env_vars)
         self.mode = "direct" if self.llm.available else "online"
@@ -2576,7 +2591,7 @@ class WebApi:
             self._msg("sys", f"Falha ao salvar .env: {exc}", store=False)
             return
         self.env_path = config_dir() / ".env"
-        self.env_vars = parse_env_file(self.env_path)
+        self.env_vars = load_merged_env()
         self.workspace_root = self._workspace()
         self.llm = LLMClient(self.env_vars)
         self.mode = "direct" if self.llm.available else "online"
