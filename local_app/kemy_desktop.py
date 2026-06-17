@@ -1144,7 +1144,7 @@ class Speaker:
                            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}).encode("utf-8")
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "xi-api-key": self.el_key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             audio = r.read()
         if len(audio) < 256:
             raise RuntimeError("elevenlabs vazio")
@@ -1181,8 +1181,21 @@ class Speaker:
                 pass
 
     def say(self, text: str) -> None:
-        if self.available and text.strip():
-            self._queue.put(text)
+        if not (self.available and text.strip()):
+            return
+        # Fala em frases (chunks) para o audio comecar rapido = sensacao de tempo real.
+        parts = re.split(r"(?<=[.!?…\n])\s+", text.strip())
+        chunk = ""
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            chunk = f"{chunk} {p}".strip() if chunk else p
+            if len(chunk) >= 55:
+                self._queue.put(chunk)
+                chunk = ""
+        if chunk:
+            self._queue.put(chunk)
 
     def stop(self) -> None:
         if not self.available:
