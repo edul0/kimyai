@@ -2578,6 +2578,105 @@ class WebApi:
         else:
             self._after_speak()
 
+    def _try_open_intent(self, text: str):
+        """Abre site/app de verdade quando o usuario pede 'abra ...'. Retorna a resposta
+        ou None se nao for um pedido de abrir."""
+        m = re.match(r"(?i)^\s*(?:(?:pode|poderia|voc[eê]|vc|me|por\s*favor|pf|ai|a[ií])\s+)*(?:abr(?:a|ir|e)|abre|inicia[r]?|executa[r]?|p[oô]e|coloca)\s+(.+)$", text.strip())
+        if not m:
+            return None
+        target = m.group(1).strip().strip("?.!").strip()
+        target = re.sub(r"(?i)^(?:o|a|os|as|um|uma|meu|minha|o\s+app|app|site|aba)\s+", "", target).strip()
+        low = target.lower()
+        sites = {"youtube": "https://www.youtube.com", "google": "https://www.google.com",
+                 "gmail": "https://mail.google.com", "whatsapp": "https://web.whatsapp.com",
+                 "instagram": "https://www.instagram.com", "facebook": "https://www.facebook.com",
+                 "twitch": "https://www.twitch.tv", "netflix": "https://www.netflix.com",
+                 "github": "https://github.com", "chatgpt": "https://chatgpt.com",
+                 "tiktok": "https://www.tiktok.com", "twitter": "https://x.com", "x": "https://x.com"}
+        apps = {"notepad": "notepad", "bloco de notas": "notepad", "calculadora": "calc", "calc": "calc",
+                "paint": "mspaint", "explorador": "explorer", "explorador de arquivos": "explorer",
+                "cmd": "cmd", "terminal": "cmd", "spotify": "spotify", "discord": "discord",
+                "steam": "steam", "chrome": "chrome", "edge": "msedge", "configuracoes": "ms-settings:"}
+        cmd, label = None, target
+        ym = re.search(r"(?i)(?:canal|v[ií]deo|m[uú]sica|playlist|live)?\s*(.+?)\s+n[oa]\s+youtube", low)
+        if "youtube" in low and ym and ym.group(1).strip() not in ("", "o", "a"):
+            q = ym.group(1).strip()
+            cmd = f'start "" "https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"'
+            label = f"{q} no YouTube"
+        elif low in sites:
+            cmd = f'start "" "{sites[low]}"'
+        elif low in apps:
+            a = apps[low]
+            cmd = f'start "" "{a}"' if a.startswith(("http", "ms-")) else f"start {a}"
+        elif low.startswith(("http://", "https://")) or re.match(r"^[\w-]+\.\w{2,}", low):
+            url = target if low.startswith("http") else "https://" + target
+            cmd = f'start "" "{url}"'
+        else:
+            cmd = f'start "" "https://www.google.com/search?q={urllib.parse.quote(target)}"'
+            label = f"uma busca por '{target}'"
+        try:
+            subprocess.Popen(cmd, shell=True)
+            return f"Pronto, abri {label}! 👍"
+        except Exception as exc:
+            return f"Tentei abrir {label} mas deu erro: {exc}"
+
+    def _screen_reply(self, prompt: str) -> str:
+        """Tira print da tela e a Kemy analisa (visao)."""
+        if not self.llm.gemini:
+            return "Pra ver sua tela eu preciso da chave do Gemini configurada."
+        self._msg("sys", "👁️ Olhando sua tela…", store=False)
+        try:
+            import io
+            from PIL import ImageGrab
+            img = ImageGrab.grab()
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=70)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return self.llm.vision(prompt + "\n(Esta e a tela atual do usuario.)", b64, "image/jpeg")
+        except Exception as exc:
+            return f"Nao consegui capturar a tela: {exc}"
+
+    def see_screen(self) -> None:
+        """Botao: a Kemy olha a tela e comenta."""
+        if self.busy:
+            return
+        self._msg("user", "👁️ (olha minha tela)", store=False)
+        self.busy = True
+        self._state("thinking")
+
+        def _run() -> None:
+            reply = self._screen_reply("Descreva o que estou vendo na minha tela e, se fizer sentido, me ajude.")
+            self.busy = False
+            self._msg("kemy", reply)
+            if self.speaker.available and reply:
+                self.speaker.say(reply[:600])
+                self._state("speaking")
+            else:
+                self._after_speak()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def toggle_overlay(self) -> None:
+        """Modo overlay: só a VTuber na tela, sempre por cima, ouvindo em tempo real."""
+        self._overlay = not getattr(self, "_overlay", False)
+        on = self._overlay
+        self._js(f"setOverlay({json.dumps(on)})")
+        try:
+            if self.window:
+                self.window.on_top = on
+                self.window.resize(360, 560) if on else self.window.resize(1100, 780)
+        except Exception:
+            pass
+        if on:
+            if not self.continuous:
+                self.continuous = True
+                self._js("setToggle('conv',true)")
+                if self.connected and not self.busy:
+                    self.listen()
+            self._msg("sys", "🖥️ Modo overlay ligado: só eu na tela, ouvindo você. Clique de novo pra sair.", store=False)
+        else:
+            self._msg("sys", "Modo overlay desligado.", store=False)
+
     def preview(self) -> None:
         """Abre o preview do site da conversa atual (index.html mais recente)."""
         it = self._cur()
@@ -2675,6 +2774,13 @@ class WebApi:
     def _process_direct(self, text: str):
         it = self._cur()
         base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        # Acao direta: abrir site/app de verdade (sem depender da IA inventar).
+        opened = self._try_open_intent(text)
+        if opened is not None:
+            return opened, None
+        # Ver a tela do usuario.
+        if re.search(r"(?i)(v[eê]j?a?|olh[ae]|enxerg\w+|analis\w+|print).{0,20}(minha )?tela|o que (tem|h[aá]|aparece|esta|tô|to|estou) (na|vendo na|aqui na)?\s*(minha )?tela", text):
+            return self._screen_reply(text), None
         current = read_project_files(base)
         # Conversa simples -> prompt LEVE e resposta rapida; criar/editar codigo -> prompt completo.
         build = is_build_request(text) or bool(current)
