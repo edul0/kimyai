@@ -264,6 +264,26 @@ def download_to(url: str, dest: Path, timeout: int = 90) -> bool:
     return False
 
 
+def extract_thumb_requests(text: str) -> list[dict]:
+    """Le blocos ```kemy-thumb (uma por linha: 'TITULO | cena em ingles | arquivo.png')."""
+    reqs: list[dict] = []
+    if not text:
+        return reqs
+    for match in re.finditer(r"```kemy-thumb\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        for line in match.group(1).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            title = parts[0]
+            scene = parts[1] if len(parts) > 1 else ""
+            fname = parts[2] if len(parts) > 2 and parts[2] else "thumbnail.png"
+            if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
+                fname += ".png"
+            reqs.append({"title": title, "scene": scene, "file": fname})
+    return reqs
+
+
 def extract_image_requests(text: str) -> list[dict]:
     """Le blocos ```kemy-image (uma imagem por linha: 'descricao | arquivo.png | LARGxALT')."""
     reqs: list[dict] = []
@@ -309,6 +329,79 @@ def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
         return True
     except Exception:
         return False
+
+
+def _thumb_font(size: int):
+    from PIL import ImageFont
+    for name in ("C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/ARIALBD.TTF",
+                 "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/seguibl.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.truetype("arialbd.ttf", size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _wrap_to_width(draw, text: str, font, max_w: int) -> list:
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if draw.textlength(t, font=font) <= max_w or not cur:
+            cur = t
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
+    """Gera uma thumbnail estilo YouTuber: arte chamativa (Pollinations) + titulo GRANDE
+    com contorno, desenhado por cima com fonte nitida."""
+    from PIL import Image, ImageDraw
+    prompt = ((scene or "").strip() or "exciting dramatic scene") + (
+        ", youtube thumbnail style, ultra vibrant saturated colors, high contrast, dramatic "
+        "cinematic lighting, bold, eye-catching, sharp focus, 4k")
+    tmp = dest.parent / ("_bg_" + dest.name)
+    if not download_image(prompt, tmp, "1280x720"):
+        return False
+    try:
+        img = Image.open(tmp).convert("RGB").resize((1280, 720))
+    except Exception:
+        return False
+    draw = ImageDraw.Draw(img)
+    title = (title or "").strip().upper()
+    if title:
+        size, lines, font = 140, [title], None
+        while size >= 46:
+            font = _thumb_font(size)
+            lines = _wrap_to_width(draw, title, font, 1180)
+            line_h = int(size * 1.06)
+            if len(lines) <= 3 and line_h * len(lines) <= 330:
+                break
+            size -= 8
+        line_h = int(size * 1.06)
+        y = 26
+        stroke = max(6, size // 11)
+        for ln in lines:
+            w = draw.textlength(ln, font=font)
+            draw.text(((1280 - w) / 2, y), ln, font=font, fill="#FFE100",
+                      stroke_width=stroke, stroke_fill="black")
+            y += line_h
+    try:
+        img.save(dest, quality=92)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
 
 
 def fetch_url_text(url: str, limit: int = 4000) -> str:
@@ -496,8 +589,14 @@ SYSTEM_PROMPT = (
     "short dark purple bob hair, blue eyes, black business suit with light-blue scarf'. "
     "IMPORTANTE: o gerador NAO sabe o rosto real do usuario nem inclui texto legivel — "
     "se o usuario pedir a propria foto, avise que voce nao tem a foto dele (peca para ele anexar uma "
-    "pelo botao 📎) e gere o resto; se pedir um titulo escrito, diga que o texto sai melhor se ele "
-    "adicionar depois (ou voce gera a arte sem texto). A Kemy baixa e salva a imagem automaticamente.\n"
+    "pelo botao 📎) e gere o resto. A Kemy baixa e salva a imagem automaticamente.\n"
+    "13b) THUMBNAIL do YouTube (quando o usuario falar 'thumb', 'thumbnail', 'capa' ou 'miniatura'): "
+    "use um bloco ```kemy-thumb com UMA por linha no formato 'TITULO | cena em INGLES | arquivo.png'. "
+    "O TITULO sai em letra GRANDE com contorno (estilo youtuber br: Miyuta, Saiko, Goulart) — a propria "
+    "Kemy desenha o texto por cima, entao NAO inclua o texto na descricao da cena. A cena descreve so a "
+    "imagem (dramatica, cores fortes, expressao marcante); inclua o visual da Kemy se ela aparecer. "
+    "Ex.: MINHA NOVA IA?! | shocked excited anime vtuber girl with dark purple hair pointing at a glowing "
+    "blue AI hologram, dramatic neon lighting, vibrant | thumb.png\n"
     "14) CONTEUDO COM MUITOS ITENS/DADOS (Pokedex, catalogo grande, lista de filmes, "
     "criptos, etc.): NUNCA escreva os dados na mao (voce trunca e fica incompleto). "
     "Em vez disso, BUSQUE de uma API publica gratuita via fetch no JavaScript e renderize "
@@ -522,6 +621,7 @@ BUILD_HINTS = (
     "api", "crie", "cria", "criar", "gere", "gera", "gerar", "faça", "faca", "fazer",
     "monte", "montar", "desenvolva", "construa", "edite", "editar", "altere", "alterar",
     "conserte", "corrija", "abra", "abrir", "instale", "instalar", "rode", "rodar", "execute",
+    "thumb", "thumbnail", "capa", "miniatura", "logo", "imagem", "foto", "desenho", "arte",
 )
 
 
@@ -2842,6 +2942,7 @@ class WebApi:
         self._localize_images(base)
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
+        self._gen_thumbs(extract_thumb_requests(reply), base)
         return chat or "Feito.", save
 
     def _localize_images(self, base: Path) -> None:
@@ -2928,6 +3029,28 @@ class WebApi:
                 pass
         else:
             self._msg("sys", "Nao consegui gerar a imagem agora (tente de novo).", store=False)
+
+    def _gen_thumbs(self, reqs: list[dict], base: Path) -> None:
+        if not reqs:
+            return
+        self._msg("sys", f"🎬 Montando {len(reqs)} thumbnail(s) (arte + titulo)…", store=False)
+        ok: list[str] = []
+        for r in reqs[:3]:
+            dest = base / r["file"]
+            if make_thumbnail(r.get("title", ""), r.get("scene", ""), dest):
+                ok.append(r["file"])
+        if ok:
+            self._msg("sys", f"🖼 Thumbnail pronta: {', '.join(ok)} (em {base})", store=False)
+            try:
+                first = base / ok[0]
+                if os.name == "nt":
+                    os.startfile(str(first))  # type: ignore[attr-defined]
+                else:
+                    webbrowser.open(first.as_uri())
+            except Exception:
+                pass
+        else:
+            self._msg("sys", "Nao consegui montar a thumbnail agora (tente de novo).", store=False)
 
     def _process_online(self, text: str):
         it = self._cur()
