@@ -659,15 +659,21 @@ class LLMClient:
             for m in chosen:
                 attempts.append((prov, m, maker(m)))
 
-        # Cerebras/Groq (gratis) primeiro; Gemini Flash (free tier) como reserva.
+        def add_gemini() -> None:
+            if self.gemini:
+                add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
+
+        # Conversa (fast): Gemini 3 Flash primeiro (segura bem o contexto); cai pro Cerebras.
+        if fast:
+            add_gemini()
         if self.cerebras:
             add("cerebras", cb_models, lambda m: (lambda: self._openai_compat(
                 "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages, max_tokens)))
         if self.groq:
             add("groq", gq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
-        if self.gemini:
-            add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
+        if not fast:
+            add_gemini()
         if self.openai:
             add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
                 "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages, max_tokens)))
