@@ -1165,6 +1165,32 @@ class Avatar:
 # --------------------------------------------------------------------------- #
 # Voz
 # --------------------------------------------------------------------------- #
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
+    "\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE00-\U0000FE0F\U00002700-\U000027BF]+")
+
+
+def clean_for_speech(text: str) -> str:
+    """Limpa o texto para a fala soar humana: remove markdown, links, emojis e simbolos
+    que a voz leria em voz alta (asterisco, hashtag, crase, etc.)."""
+    if not text:
+        return ""
+    t = text
+    t = re.sub(r"```.*?```", " ", t, flags=re.DOTALL)          # blocos de codigo
+    t = re.sub(r"`[^`]*`", " ", t)                              # codigo inline
+    t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)              # [texto](link) -> texto
+    t = re.sub(r"https?://\S+|www\.\S+", " ", t)                # urls
+    t = re.sub(r"[*_#~>`|]+", " ", t)                            # simbolos de markdown
+    t = re.sub(r"^\s*[-•·]\s*", "", t, flags=re.MULTILINE)       # bullets
+    t = _EMOJI_RE.sub(" ", t)                                    # emojis
+    t = t.replace("…", "...").replace("•", " ")
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)                       # espaco antes de pontuacao
+    t = re.sub(r"\n{2,}", ". ", t).replace("\n", " ")
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
+
+
 class Speaker:
     """Voz da Kemy. Prefere Edge TTS (voz neural natural, gratis, precisa internet);
     cai para o pyttsx3/SAPI5 (offline, robotico) se o Edge falhar."""
@@ -1325,6 +1351,7 @@ class Speaker:
                 pass
 
     def say(self, text: str) -> None:
+        text = clean_for_speech(text)
         if not (self.available and text.strip()):
             return
         # Fala em frases (chunks) para o audio comecar rapido = sensacao de tempo real.
