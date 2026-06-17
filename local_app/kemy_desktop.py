@@ -1028,6 +1028,8 @@ class Speaker:
     def __init__(self) -> None:
         self.on_start = None
         self.on_done = None
+        self.log = None
+        self._el_warned = False
         self._queue: "queue.Queue[str | None]" = queue.Queue()
         self._engine = None
         self._speaking = False
@@ -1102,8 +1104,11 @@ class Speaker:
                 try:
                     self._speak_eleven(text)
                     spoke = True
-                except Exception:
+                except Exception as exc:
                     spoke = False  # chave invalida/cota -> tenta edge
+                    if self.log and not self._el_warned:
+                        self._el_warned = True
+                        self.log(f"⚠️ Voz ElevenLabs indisponivel ({exc}); usando a voz reserva.")
             if not spoke and self._edge_ok:
                 try:
                     self._speak_edge(text)
@@ -2203,6 +2208,7 @@ class WebApi:
         self.convos, self.active_id = [], None
         self._load_convos()
         self.speaker = Speaker()
+        self.speaker.log = lambda m: self._msg("sys", m, store=False)
         self.vts = VTubeStudio(lambda m: self._msg("sys", m, store=False))
         self.vts.mouth_provider = self.speaker.mouth_level
         self.vts.on_connect = lambda: self._js("vtsConnected()")
@@ -2829,26 +2835,61 @@ class WebApi:
         self.vts.start()
 
     def set_voice(self, data: str) -> None:
-        """Configura a voz de personagem (ElevenLabs): data = 'chave|voice_id'."""
+        """Configura a voz de personagem (ElevenLabs): data = 'chave|voice_id'.
+        Valida a chave de verdade e diz o erro exato se falhar."""
+        key, _, voice = (data or "").partition("|")
+        key, voice = key.strip(), voice.strip()
+        if not key:
+            self._msg("sys", "Cole a chave da API do ElevenLabs.", store=False)
+            return
+        voice = voice or self.speaker.el_voice
+        self._msg("sys", "🎙️ Validando a chave do ElevenLabs…", store=False)
+        threading.Thread(target=self._validate_voice, args=(key, voice), daemon=True).start()
+
+    def _validate_voice(self, key: str, voice: str) -> None:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}"
+        body = json.dumps({"text": "Oi, essa e a minha voz nova!",
+                           "model_id": self.speaker.el_model,
+                           "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
         try:
-            key, _, voice = (data or "").partition("|")
-            key, voice = key.strip(), voice.strip()
-            if not key:
-                self._msg("sys", "Cole a chave da API do ElevenLabs.", store=False)
-                return
-            cfg = config_dir() / ".env"
-            self.speaker.el_key = key
-            _set_env_var(cfg, "KEMY_ELEVENLABS_KEY", key)
-            self.env_vars["KEMY_ELEVENLABS_KEY"] = key
-            if voice:
-                self.speaker.el_voice = voice
-                _set_env_var(cfg, "KEMY_ELEVENLABS_VOICE", voice)
-                self.env_vars["KEMY_ELEVENLABS_VOICE"] = voice
-            self.speaker.available = True
-            self._msg("sys", "🎙️ Voz personalizada salva! Testando agora…", store=False)
-            self.speaker.say("Oi! Essa é a minha voz nova. Ficou boa?")
+            with urllib.request.urlopen(req, timeout=40) as r:
+                audio = r.read()
+            if len(audio) < 256:
+                raise RuntimeError("resposta vazia")
+        except urllib.error.HTTPError as exc:
+            reason = {401: "chave invalida ou sem permissao 'Text to Speech'",
+                      403: "chave sem permissao 'Text to Speech' (ative no painel)",
+                      404: "Voice ID nao encontrado (confira o ID da voz)",
+                      422: "Voice ID invalido para sua conta",
+                      429: "cota do mes esgotada"}.get(exc.code, f"erro HTTP {exc.code}")
+            self._msg("sys", f"❌ ElevenLabs: {reason}. A voz NAO foi alterada.", store=False)
+            return
         except Exception as exc:
-            self._msg("sys", f"Falha ao configurar a voz: {exc}", store=False)
+            self._msg("sys", f"❌ Falha ao validar a voz: {exc}", store=False)
+            return
+        # sucesso: salva e toca o audio de teste
+        cfg = config_dir() / ".env"
+        self.speaker.el_key = key
+        self.speaker.el_voice = voice
+        self.speaker.available = True
+        _set_env_var(cfg, "KEMY_ELEVENLABS_KEY", key)
+        _set_env_var(cfg, "KEMY_ELEVENLABS_VOICE", voice)
+        self.env_vars["KEMY_ELEVENLABS_KEY"] = key
+        self.env_vars["KEMY_ELEVENLABS_VOICE"] = voice
+        try:
+            path = os.path.join(tempfile.gettempdir(), f"kemy_voicetest_{uuid.uuid4().hex[:6]}.mp3")
+            with open(path, "wb") as f:
+                f.write(audio)
+            self.speaker._speaking = True
+            self._state("speaking")
+            self.speaker._play_mp3(path)
+            self.speaker._speaking = False
+            self._after_speak()
+        except Exception:
+            pass
+        self._msg("sys", "✅ Voz personalizada ativada com sucesso!", store=False)
 
     def vts_test(self) -> None:
         if not self.vts.authed:
