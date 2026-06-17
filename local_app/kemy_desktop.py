@@ -2577,12 +2577,11 @@ class WebApi:
             pass
 
     def _connect(self) -> None:
-        self.vts.start()
+        # O VTube Studio so conecta quando o usuario pedir (evita poluir com "nao encontrado").
         if self.mode == "direct":
             self.connected = True
             self._state("idle")
-            self._msg("sys", f"IA ativa ({self.llm.primary_label()}). Pasta: {self.workspace_root}", store=False)
-            self.speaker.say("Oi! Como posso ajudar?")
+            self.speaker.say("Oi! Tô prontinha pra te ajudar.")
             return
         # online (Render)
         url = self.api.base_url

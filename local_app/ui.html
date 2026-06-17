@@ -51,6 +51,15 @@
   .iconbtn:hover{background:var(--panel2);color:var(--text);transform:translateY(-1px)}
   .badge{position:absolute;top:-4px;right:-4px;width:11px;height:11px;border-radius:50%;background:#ff4d4d;
     box-shadow:0 0 8px #ff4d4d;display:none;animation:pulse 1.2s ease-in-out infinite}
+  /* menu "mais opcoes" */
+  .menuwrap{position:relative}
+  .menu{display:none;position:absolute;right:0;top:46px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:12px;padding:6px;min-width:230px;z-index:45;box-shadow:0 14px 34px rgba(0,0,0,.55)}
+  .menu.open{display:block}
+  .menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);
+    padding:10px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+  .menu button:hover{background:var(--panel)}
+  .menusep{height:1px;background:var(--line);margin:5px 4px}
   /* avatar */
   .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 0 8px;gap:6px}
   .avatar{width:210px;height:210px;position:relative}
@@ -142,13 +151,19 @@
       <div class="top">
         <span class="pill"><span class="dot"></span><span id="stateTxt">Conectando…</span></span>
         <span class="sp"></span>
-        <button class="iconbtn" onclick="api('toggle_overlay')">🪄 Mini</button>
-        <button class="iconbtn" onclick="api('see_screen')">👁️ Ver tela</button>
-        <button class="iconbtn" onclick="openVoice()">🎙️ Voz</button>
-        <button class="iconbtn" onclick="api('preview')">👁 Preview</button>
-        <button class="iconbtn" onclick="api('vts_connect')">🎭 VTuber</button>
-        <button class="iconbtn" onclick="api('vts_test')" title="Testa a boca do modelo no VTube Studio">👄 Testar boca</button>
-        <button class="iconbtn" id="updBtn" onclick="doUpdate()">⬆ Atualizar<span class="badge" id="updBadge"></span></button>
+        <button class="iconbtn" onclick="api('toggle_overlay')" title="Modo mini, só a Kemy num canto">🪄 Mini</button>
+        <button class="iconbtn" onclick="api('see_screen')" title="A Kemy olha sua tela">👁️ Ver tela</button>
+        <div class="menuwrap">
+          <button class="iconbtn" onclick="toggleMenu()" title="Mais opções">⋯<span class="badge" id="updBadge"></span></button>
+          <div class="menu" id="menu">
+            <button onclick="openVoice();closeMenu()">🎙️ Voz da Kemy</button>
+            <button onclick="api('preview');closeMenu()">👁 Ver o site (preview)</button>
+            <button onclick="api('vts_connect');closeMenu()">🎭 Conectar VTube Studio</button>
+            <button onclick="api('vts_test');closeMenu()">👄 Testar boca (VTS)</button>
+            <div class="menusep"></div>
+            <button id="updItem" onclick="doUpdate();closeMenu()">⬆ Atualizar a Kemy</button>
+          </div>
+        </div>
       </div>
       <div class="stage">
         <div class="l2dwrap" id="l2dwrap" style="display:none"><canvas id="l2d"></canvas></div>
@@ -286,7 +301,12 @@
   function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return; i.value=""; api('send_text',t); }
   document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter")sendText(); });
   function doUpdate(){ addMsg("sys","Procurando atualização…"); api('check_update'); }
-  function setUpdate(av){ const b=document.getElementById("updBadge"); if(b)b.style.display=av?"block":"none"; }
+  function setUpdate(av){ const b=document.getElementById("updBadge"); if(b)b.style.display=av?"block":"none";
+    const it=document.getElementById("updItem"); if(it)it.textContent=av?"⬆ Atualizar a Kemy (nova versão!)":"⬆ Atualizar a Kemy"; }
+  function toggleMenu(){ document.getElementById("menu").classList.toggle("open"); }
+  function closeMenu(){ document.getElementById("menu").classList.remove("open"); }
+  document.addEventListener("click",function(e){ var w=document.querySelector(".menuwrap");
+    if(w&&!w.contains(e.target)) closeMenu(); });
   // boot — robusto: funciona mesmo se 'pywebviewready' disparar antes do listener
   var _booted=false;
   function boot(){
