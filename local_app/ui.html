@@ -78,6 +78,10 @@
   body.overlay .l2dwrap{width:96vw;height:86vh}
   body.overlay .avatar{width:42vh;height:42vh}
   body.overlay .statelbl{font-size:15px}
+  #exitMini{display:none}
+  body.overlay #exitMini{display:flex;align-items:center;justify-content:center;position:fixed;top:8px;right:8px;z-index:90;
+    width:30px;height:30px;border-radius:8px;background:rgba(0,0,0,.45);border:1px solid var(--line);color:#fff;cursor:pointer}
+  body.overlay #exitMini:hover{background:rgba(255,80,80,.6)}
   .halo{position:absolute;inset:0;border-radius:50%;border:2px solid var(--st);opacity:.5;
     box-shadow:0 0 30px var(--st);animation:breathe 3.5s ease-in-out infinite}
   body.listening .halo,body.speaking .halo{animation:pulse 1.1s ease-in-out infinite}
@@ -200,6 +204,7 @@
           </svg>
         </div>
         <div class="statelbl" id="statelbl">Pronta</div>
+        <button id="exitMini" onclick="api('toggle_overlay')" title="Sair do modo mini"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
       </div>
       <div class="chat" id="chat"></div>
       <div class="composer">
