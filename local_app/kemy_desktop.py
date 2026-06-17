@@ -122,6 +122,18 @@ def config_dir() -> Path:
     return d
 
 
+def cleanup_update_leftovers() -> None:
+    """Remove pastas residuais de updates (kemy_old_* / kemy_new_*) ao lado do app."""
+    try:
+        parent = EXE_DIR.parent
+        for p in parent.glob("kemy_old_*"):
+            shutil.rmtree(p, ignore_errors=True)
+        for p in parent.glob("kemy_new_*"):
+            shutil.rmtree(p, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def build_tag() -> str:
     """Identificador curto da build (sha) para sabermos qual versao esta rodando."""
     try:
@@ -3272,6 +3284,8 @@ class WebApi:
                 f'move "{new_dir}" "{app}" >nul 2>&1\r\n'
                 f'start "" "{exe}"\r\n'
                 f'rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
+                f'if exist "{old_dir}" ( timeout /t 2 /nobreak >nul & rmdir /s /q "{old_dir}" >nul 2>&1 )\r\n'
+                f'if exist "{old_dir}" ( timeout /t 3 /nobreak >nul & rmdir /s /q "{old_dir}" >nul 2>&1 )\r\n'
                 'del "%~f0"\r\n'
                 'goto :eof\r\n'
                 ':fallback\r\n'
@@ -3482,6 +3496,7 @@ def main() -> int:
         run_server(args.host, args.port)
         return 0
     os.chdir(ROOT_DIR)
+    cleanup_update_leftovers()
     # UI moderna (HTML/pywebview); cai para Tkinter se indisponivel ou --classic.
     if not args.classic:
         unblock_bundle()
