@@ -2792,14 +2792,27 @@ class WebApi:
         threading.Thread(target=_run, daemon=True).start()
 
     def toggle_overlay(self) -> None:
-        """Modo overlay: só a VTuber na tela, sempre por cima, ouvindo em tempo real."""
+        """Modo mini: só a VTuber, pequena num canto, sempre por cima, ouvindo em tempo real."""
         self._overlay = not getattr(self, "_overlay", False)
         on = self._overlay
         self._js(f"setOverlay({json.dumps(on)})")
         try:
             if self.window:
                 self.window.on_top = on
-                self.window.resize(360, 560) if on else self.window.resize(1100, 780)
+                if on:
+                    mw, mh = 250, 330
+                    self.window.resize(mw, mh)
+                    try:
+                        x, y = _corner_pos(mw, mh)
+                        self.window.move(x, y)
+                    except Exception:
+                        pass
+                else:
+                    self.window.resize(1100, 780)
+                    try:
+                        self.window.move(120, 80)
+                    except Exception:
+                        pass
         except Exception:
             pass
         if on:
@@ -2808,9 +2821,9 @@ class WebApi:
                 self._js("setToggle('conv',true)")
                 if self.connected and not self.busy:
                     self.listen()
-            self._msg("sys", "🖥️ Modo overlay ligado: só eu na tela, ouvindo você. Clique de novo pra sair.", store=False)
+            self._msg("sys", "🖥️ Modo mini ligado: fico pequena no canto, por cima de tudo, te ouvindo. Pra eu ver sua tela é só pedir 'olha minha tela'. Clique de novo pra voltar ao normal.", store=False)
         else:
-            self._msg("sys", "Modo overlay desligado.", store=False)
+            self._msg("sys", "Modo mini desligado.", store=False)
 
     def preview(self) -> None:
         """Abre o preview do site da conversa atual (index.html mais recente)."""
