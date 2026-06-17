@@ -2621,19 +2621,36 @@ class WebApi:
             return f"Tentei abrir {label} mas deu erro: {exc}"
 
     def _screen_reply(self, prompt: str) -> str:
-        """Tira print da tela e a Kemy analisa (visao)."""
+        """Tira print da tela e a Kemy analisa (visao). Minimiza a janela antes,
+        para capturar o que esta ATRAS do Kemy."""
         if not self.llm.gemini:
             return "Pra ver sua tela eu preciso da chave do Gemini configurada."
         self._msg("sys", "👁️ Olhando sua tela…", store=False)
         try:
             import io
             from PIL import ImageGrab
+            try:
+                if self.window:
+                    self.window.minimize()
+                    time.sleep(0.5)
+            except Exception:
+                pass
             img = ImageGrab.grab()
+            try:
+                if self.window:
+                    self.window.restore()
+            except Exception:
+                pass
             buf = io.BytesIO()
             img.convert("RGB").save(buf, format="JPEG", quality=70)
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            return self.llm.vision(prompt + "\n(Esta e a tela atual do usuario.)", b64, "image/jpeg")
+            return self.llm.vision(prompt + "\n(Esta e a tela atual do usuario, ja sem a janela do Kemy.)", b64, "image/jpeg")
         except Exception as exc:
+            try:
+                if self.window:
+                    self.window.restore()
+            except Exception:
+                pass
             return f"Nao consegui capturar a tela: {exc}"
 
     def see_screen(self) -> None:
@@ -2725,9 +2742,23 @@ class WebApi:
         self.listener.listen_once(
             on_state=lambda s: self._state(s),
             on_text=lambda t: self._handle(t),
-            on_error=lambda e: (self._msg("sys", f"🎤 {e}", store=False), self._state("idle"),
-                                 self._relisten_if_conv()),
+            on_error=self._on_listen_error,
         )
+
+    def _on_listen_error(self, e: str) -> None:
+        self._state("idle")
+        low = (e or "").lower()
+        no_mic = ("input device" in low or "no default" in low or "indisponivel" in low
+                  or "microfone" in low)
+        if no_mic:
+            # Sem microfone: nao adianta insistir (evita spam no modo Conversa).
+            if self.continuous:
+                self.continuous = False
+                self._js("setToggle('conv',false)")
+            self._msg("sys", "🎤 Nenhum microfone disponivel neste PC. Desliguei a Conversa — pode digitar normalmente. (Conecte um microfone e defina como padrao no Windows para falar.)", store=False)
+            return
+        self._msg("sys", f"🎤 {e}", store=False)
+        self._relisten_if_conv()
 
     def _relisten_if_conv(self) -> None:
         # No modo Conversa, se nao ouviu nada, tenta de novo automaticamente.
