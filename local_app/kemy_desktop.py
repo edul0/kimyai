@@ -3243,19 +3243,43 @@ class WebApi:
                         last[0] = pct
                         self._msg("sys", f"… {pct}%", store=False)
 
+            self._msg("sys", "📦 Baixando… (nao feche o app)", store=False)
+            # Extrai a build nova numa pasta IRMA (mesmo disco -> troca atomica, sem misturar arquivos).
+            token = uuid.uuid4().hex[:6]
+            new_dir = EXE_DIR.parent / f"kemy_new_{token}"
+            old_dir = EXE_DIR.parent / f"kemy_old_{token}"
             urllib.request.urlretrieve(url, zp, _progress)
             self._msg("sys", "📦 Download concluido. Extraindo…", store=False)
-            ext = tmp / "new"
             with zipfile.ZipFile(zp) as zf:
-                zf.extractall(ext)
-            self._msg("sys", "🔄 Aplicando e reiniciando a Kemy…", store=False)
-            bat = Path(tempfile.gettempdir()) / "kemy_update.bat"
+                zf.extractall(new_dir)
+            # se o zip tiver uma subpasta unica, usa ela como raiz
+            entries = [p for p in new_dir.iterdir()]
+            if len(entries) == 1 and entries[0].is_dir() and not (new_dir / "KemyDesktop.exe").exists():
+                new_dir = entries[0]
+            self._msg("sys", "🔄 Trocando para a versao nova e reiniciando…", store=False)
+            app = str(EXE_DIR)
             exe = str(EXE_DIR / "KemyDesktop.exe")
-            # /R:15 /W:1 espera os arquivos travados liberarem (o app precisa fechar
-            # totalmente) — evita atualizacao parcial/corrompida. timeout maior tambem.
-            bat.write_text("@echo off\r\ntimeout /t 4 /nobreak >nul\r\n"
-                           f'robocopy "{ext}" "{EXE_DIR}" /E /IS /IT /R:15 /W:1 /NFL /NDL /NJH /NJS >nul\r\n'
-                           f'start "" "{exe}"\r\n', encoding="utf-8")
+            bat = Path(tempfile.gettempdir()) / f"kemy_update_{token}.bat"
+            # Troca de pasta inteira (atomica). Se nao conseguir mover a pasta atual (arquivo
+            # travado), reabre a versao ATUAL intacta em vez de deixar quebrada.
+            script = (
+                "@echo off\r\n"
+                "timeout /t 3 /nobreak >nul\r\n"
+                f'move "{app}" "{old_dir}" >nul 2>&1\r\n'
+                f'if exist "{app}" ( timeout /t 2 /nobreak >nul & move "{app}" "{old_dir}" >nul 2>&1 )\r\n'
+                f'if exist "{app}" ( timeout /t 3 /nobreak >nul & move "{app}" "{old_dir}" >nul 2>&1 )\r\n'
+                f'if exist "{app}" goto fallback\r\n'
+                f'move "{new_dir}" "{app}" >nul 2>&1\r\n'
+                f'start "" "{exe}"\r\n'
+                f'rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
+                'del "%~f0"\r\n'
+                'goto :eof\r\n'
+                ':fallback\r\n'
+                f'rmdir /s /q "{new_dir}" >nul 2>&1\r\n'
+                f'start "" "{exe}"\r\n'
+                'del "%~f0"\r\n'
+            )
+            bat.write_text(script, encoding="utf-8")
             subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x00000008)
             time.sleep(0.6)
             os._exit(0)
