@@ -1159,7 +1159,7 @@ class Speaker:
                            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}).encode("utf-8")
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "xi-api-key": self.el_key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=15) as r:
             audio = r.read()
         if len(audio) < 256:
             raise RuntimeError("elevenlabs vazio")
@@ -1239,6 +1239,9 @@ class Listener:
 
                 self._recognizer = sr.Recognizer()
                 self._recognizer.dynamic_energy_threshold = True
+                # detecta o fim da fala mais rapido (menos espera apos voce parar)
+                self._recognizer.pause_threshold = 0.55
+                self._recognizer.non_speaking_duration = 0.3
                 sr.Microphone.list_microphone_names()
                 self._mic_ok = True
             except Exception:
@@ -1255,8 +1258,8 @@ class Listener:
             try:
                 with sr.Microphone() as source:
                     on_state("listening")
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.25)
-                    audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=15)
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                    audio = self._recognizer.listen(source, timeout=8, phrase_time_limit=10)
                 on_state("thinking")
                 text = self._recognizer.recognize_google(audio, language="pt-BR")
                 on_text(text)
