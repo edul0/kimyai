@@ -625,6 +625,9 @@ class LLMClient:
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
         self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
+        # Modelos RAPIDOS (menores) para bate-papo/voz: respondem um "oi" em ~1-2s.
+        self.cerebras_fast = _list("CEREBRAS_FAST", ["llama-3.3-70b", "gpt-oss-120b"])
+        self.groq_fast = _list("GROQ_FAST", ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
 
@@ -642,24 +645,25 @@ class LLMClient:
             return f"OpenRouter · {self.openrouter_models[0]}"
         return "IA"
 
-    def chat(self, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
+    def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False) -> str:
         errors: list[str] = []
-        # Cerebras e Groq primeiro (rapidos e cota generosa); Gemini/OpenAI/OpenRouter como reserva.
-        # Por provedor, tenta os modelos preferidos (codigo) e cai pro estavel; uma vez que um
-        # modelo funciona, fica travado nele (self._working) para nao gastar chamadas a toa.
+        # fast=True (bate-papo/voz) usa modelos menores e rapidos; senao usa os de codigo.
+        cb_models = self.cerebras_fast if fast else self.cerebras_models
+        gq_models = self.groq_fast if fast else self.groq_models
         attempts: list[tuple[str, str, object]] = []
 
         def add(prov: str, models: list[str], maker) -> None:
-            chosen = [self._working[prov]] if self._working.get(prov) in models else models
+            wk = self._working.get(("fast:" if fast else "") + prov)
+            chosen = [wk] if wk in models else models
             for m in chosen:
                 attempts.append((prov, m, maker(m)))
 
-        # Cerebras/Groq (gratis, modelos de codigo) primeiro; Gemini Flash (free tier) como reserva.
+        # Cerebras/Groq (gratis) primeiro; Gemini Flash (free tier) como reserva.
         if self.cerebras:
-            add("cerebras", self.cerebras_models, lambda m: (lambda: self._openai_compat(
+            add("cerebras", cb_models, lambda m: (lambda: self._openai_compat(
                 "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages, max_tokens)))
         if self.groq:
-            add("groq", self.groq_models, lambda m: (lambda: self._openai_compat(
+            add("groq", gq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
         if self.gemini:
             add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
@@ -672,7 +676,7 @@ class LLMClient:
         for prov, model, fn in attempts:
             try:
                 res = fn()
-                self._working[prov] = model
+                self._working[("fast:" if fast else "") + prov] = model
                 return res
             except Exception as exc:
                 errors.append(f"{prov}/{model}: {exc}")
@@ -2673,7 +2677,7 @@ class WebApi:
         web = self._web_context(text)
         if not build:
             system = CHAT_PROMPT + (web or "")
-            reply = self.llm.chat(system, msgs[-8:], max_tokens=900)
+            reply = self.llm.chat(system, msgs[-8:], max_tokens=600, fast=True)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
             return (chat or reply).strip() or "…", None
