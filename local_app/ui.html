@@ -91,6 +91,22 @@
   .msg.kemy{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
   .msg.sys{align-self:center;background:none;color:var(--muted);font-size:12px;font-style:italic;padding:2px}
   .msg .save{margin-top:8px;font-size:12px;color:var(--accent2);font-weight:700}
+  /* arquivos alterados (chips clicaveis) */
+  .filechips{display:flex!important;flex-wrap:wrap;gap:8px;align-self:flex-start!important;font-style:normal!important;background:none!important}
+  .filechip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
+  .filechip:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .filechip .add{color:#3ddc84;font-weight:800}
+  .filechip .rem{color:#ff5b6e;font-weight:800}
+  /* modal de codigo/diff */
+  #codeModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:70;align-items:center;justify-content:center}
+  .codebox{background:#0b0f17;border:1px solid var(--line);border-radius:14px;width:84%;max-width:940px;height:78vh;display:flex;flex-direction:column;overflow:hidden}
+  .codehead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:700;color:var(--text)}
+  .codehead button{background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer}
+  .codebody{flex:1;overflow:auto;padding:10px 14px;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.55}
+  .dl{white-space:pre-wrap;word-break:break-word}
+  .dl.add{background:rgba(61,220,132,.14);color:#a8efc2}
+  .dl.rem{background:rgba(255,91,110,.14);color:#ffb4bc}
+  .dl.hunk{color:#7c9cff;margin-top:6px}
   /* composer */
   .composer{padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
   .row{display:flex;gap:10px;align-items:center}
@@ -182,6 +198,12 @@
       </div>
     </section>
   </div>
+  <div id="codeModal">
+    <div class="codebox">
+      <div class="codehead"><span id="codeTitle"></span><button onclick="closeCode()">✕</button></div>
+      <div id="codeBody" class="codebody"></div>
+    </div>
+  </div>
   <div id="voiceModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:60;align-items:center;justify-content:center">
     <div style="background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:24px;width:440px;max-width:92%">
       <h3 style="margin:0 0 6px">🎙️ Voz personalizada (ElevenLabs)</h3>
@@ -216,6 +238,38 @@
     c.appendChild(d); c.scrollTop=c.scrollHeight;
   }
   function clearChat(){document.getElementById("chat").innerHTML="";}
+  function showFiles(list){
+    const c=document.getElementById("chat");
+    const d=document.createElement("div"); d.className="msg sys filechips";
+    (list||[]).forEach(function(f){
+      const b=document.createElement("button"); b.className="filechip";
+      b.innerHTML='📄 '+f.path+' <span class="add">+'+f.added+'</span> <span class="rem">-'+f.removed+'</span>';
+      b.onclick=function(){ viewFile(f.key); };
+      d.appendChild(b);
+    });
+    c.appendChild(d); c.scrollTop=c.scrollHeight;
+  }
+  function viewFile(key){
+    if(!(window.pywebview&&pywebview.api&&pywebview.api.get_file_view))return;
+    pywebview.api.get_file_view(key).then(function(v){
+      if(!v||!v.path)return;
+      document.getElementById('codeTitle').textContent=v.path+'  ( +'+v.added+'  -'+v.removed+' )';
+      var body=document.getElementById('codeBody'); body.innerHTML='';
+      var txt=(v.diff&&v.diff.trim())?v.diff:(v.content||'');
+      var showDiff=!!(v.diff&&v.diff.trim());
+      txt.split('\n').forEach(function(ln){
+        var s=document.createElement('div'); s.className='dl'; s.textContent=ln;
+        if(showDiff){
+          if(ln.indexOf('+')===0&&ln.indexOf('+++')!==0) s.className='dl add';
+          else if(ln.indexOf('-')===0&&ln.indexOf('---')!==0) s.className='dl rem';
+          else if(ln.indexOf('@@')===0) s.className='dl hunk';
+        }
+        body.appendChild(s);
+      });
+      document.getElementById('codeModal').style.display='flex';
+    });
+  }
+  function closeCode(){ document.getElementById('codeModal').style.display='none'; }
   function renderConvos(list,active){
     const box=document.getElementById("convos"); box.innerHTML="";
     list.forEach(it=>{

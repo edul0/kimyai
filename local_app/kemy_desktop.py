@@ -2402,6 +2402,7 @@ class WebApi:
         self.mini = None
         self._quitting = False
         self._speaking = False
+        self._file_views: dict[str, dict] = {}
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -3129,31 +3130,59 @@ class WebApi:
         return display, self._save(files, base)
 
     def _save(self, files: list[dict], base: Path) -> str | None:
+        import difflib
         if not files:
             return None
-        n, index = 0, None
+        n, index, changed = 0, None, []
         for f in files:
             rel = str(f.get("path") or "").strip().lstrip("/\\")
             content = f.get("content")
             if not rel or content is None:
                 continue
             dest = base / rel
+            old = ""
+            try:
+                if dest.exists():
+                    old = dest.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                old = ""
+            new = str(content)
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(str(content), encoding="utf-8", errors="ignore")
-                n += 1
-                if index is None and rel.lower().endswith((".html", ".htm")):
-                    index = dest
+                dest.write_text(new, encoding="utf-8", errors="ignore")
             except Exception:
                 continue
+            n += 1
+            if index is None and rel.lower().endswith((".html", ".htm")):
+                index = dest
+            diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                             fromfile="antes", tofile="depois", lineterm=""))
+            added = sum(1 for ln in diff if ln.startswith("+") and not ln.startswith("+++"))
+            removed = sum(1 for ln in diff if ln.startswith("-") and not ln.startswith("---"))
+            key = uuid.uuid4().hex[:8]
+            self._file_views[key] = {"path": rel, "added": added, "removed": removed,
+                                     "diff": "\n".join(diff), "content": new}
+            changed.append({"key": key, "path": rel, "added": added, "removed": removed})
         if not n:
             return None
+        # limita memoria do cache de visualizacao
+        if len(self._file_views) > 80:
+            for k in list(self._file_views)[:-80]:
+                self._file_views.pop(k, None)
+        if changed:
+            try:
+                self._js(f"showFiles({json.dumps(changed)})")
+            except Exception:
+                pass
         if index is not None:
             try:
                 webbrowser.open(index.as_uri())
             except Exception:
                 pass
-        return f"{n} arquivo(s) em: {base}"
+        return None  # os chips ja mostram os arquivos; nao duplica a mensagem "X arquivo(s)"
+
+    def get_file_view(self, key: str) -> dict:
+        return self._file_views.get(key, {})
 
     def _maybe_run(self, commands: list[str], base: Path) -> None:
         if not commands:
