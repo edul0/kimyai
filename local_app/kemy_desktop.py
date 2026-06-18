@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import base64
+import datetime
 import random
 import threading
 import time
@@ -150,6 +151,26 @@ def load_memorias() -> list:
 def save_memorias(mems: list) -> None:
     try:
         memoria_file().write_text(json.dumps(mems[-80:], ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def conhecimento_file() -> Path:
+    return config_dir() / "kemy_conhecimento.json"
+
+
+def load_conhecimento() -> list:
+    """Base de conhecimento (RAG): fatos atomicos verificados, com fonte/data/confianca."""
+    try:
+        d = json.loads(conhecimento_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_conhecimento(facts: list) -> None:
+    try:
+        conhecimento_file().write_text(json.dumps(facts[-600:], ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
 
@@ -988,6 +1009,47 @@ def read_project_files(base: Path, max_total: int = 22000) -> str:
             parts.append(block)
             total += len(block)
     return "".join(parts)
+
+
+def relevant_project_files(base: Path, text: str, max_total: int = 22000) -> str:
+    """RAG de codebase: em projetos grandes, inclui so os arquivos MAIS RELEVANTES ao pedido
+    (por nome/caminho + arquivos de entrada), em vez de despejar tudo."""
+    exts = (".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".json", ".py", ".md", ".txt",
+            ".java", ".c", ".cpp", ".cs", ".php", ".rb", ".go", ".rs", ".sql", ".vue", ".svelte")
+    if not base.exists():
+        return ""
+    files = [p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in exts and not p.name.startswith("_")]
+    if not files:
+        return ""
+    total_size = sum((p.stat().st_size for p in files), 0)
+    if total_size <= max_total:                       # projeto pequeno -> tudo
+        return read_project_files(base, max_total)
+    words = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", (text or "").lower()))
+    entry = {"index.html", "main.py", "app.py", "app.js", "script.js", "styles.css", "package.json"}
+
+    def score(p: Path) -> int:
+        s = 5 if p.name.lower() in entry else 0
+        low = str(p.relative_to(base)).lower()
+        s += sum(1 for w in words if w in low)
+        return s
+    files.sort(key=score, reverse=True)
+    parts, total, included = [], 0, []
+    for p in files:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        block = f"<<<FILE: {p.relative_to(base)}>>>\n{txt}\n<<<END>>>\n"
+        if total + len(block) > max_total:
+            continue
+        parts.append(block)
+        total += len(block)
+        included.append(str(p.relative_to(base)))
+    todos = [str(p.relative_to(base)) for p in files]
+    faltando = [f for f in todos if f not in included]
+    listagem = ("\n[Projeto grande: incluí os arquivos mais relevantes. Outros arquivos existentes: "
+                + ", ".join(faltando[:40]) + ". Peça por um arquivo específico se precisar editá-lo.]\n") if faltando else ""
+    return "".join(parts) + listagem
 
 
 class LLMClient:
@@ -2784,6 +2846,7 @@ class WebApi:
         self._speaking = False
         self._file_views: dict[str, dict] = {}
         self.memories = load_memorias()
+        self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -3373,6 +3436,8 @@ class WebApi:
         if not self.connected:
             self._msg("sys", "Ainda conectando…", store=False)
             return
+        if self._maybe_learn_topic(text):   # "aprenda sobre X / estude X" -> RAG de conhecimento
+            return
         self.busy = True
         self._state("thinking")
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
@@ -3457,6 +3522,112 @@ class WebApi:
                 "(respeite SEMPRE, isso vale mais que regras gerais):\n- "
                 + "\n- ".join(self.memories[-40:]) + "\n\n")
 
+    def _knowledge_prefix(self, text: str) -> str:
+        """Recupera (RAG) os fatos aprendidos mais relevantes para a pergunta."""
+        if not self.knowledge:
+            return ""
+        words = set(re.findall(r"[\wáéíóúâêôãõç]{4,}", (text or "").lower()))
+        if not words:
+            return ""
+        scored = []
+        for k in self.knowledge:
+            fw = set(re.findall(r"[\wáéíóúâêôãõç]{4,}", str(k.get("fato", "")).lower()))
+            s = len(words & fw)
+            if s:
+                scored.append((s, k))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [k for _, k in scored[:6]]
+        if not top:
+            return ""
+        linhas = "\n".join(f"- {k.get('fato','')} (fonte: {k.get('fonte','?')}, confianca: {k.get('confianca','?')}, {k.get('data','?')})"
+                           for k in top)
+        return ("CONHECIMENTO VERIFICADO (fatos que voce aprendeu e guardou — use se relevante, "
+                "citando que tem essa info):\n" + linhas + "\n\n")
+
+    def _maybe_learn_topic(self, text: str) -> bool:
+        """Detecta 'aprenda sobre X / estude X / pesquise e guarde X' e dispara a ingestao."""
+        m = re.match(r"(?i)^(?:aprend[ae]\s+(?:sobre\s+|mais sobre\s+)?|estud[ae]\s+(?:sobre\s+)?|"
+                     r"pesquis[ae]\s+e\s+(?:guarde|salve|aprenda)\s+(?:sobre\s+)?|"
+                     r"guard[ae]\s+(?:informacoes|informações|dados)\s+sobre\s+)(.+)$", text.strip())
+        if not m:
+            return False
+        topic = m.group(1).strip().rstrip("?.!").strip()
+        if len(topic) < 2:
+            return False
+        self._msg("user", text) if False else None
+        self.busy = True
+        self._state("thinking")
+        threading.Thread(target=self._ingest_topic, args=(topic,), daemon=True).start()
+        return True
+
+    def _ingest_topic(self, topic: str) -> None:
+        """Alfandega de dados: pesquisa, valida (fatos atomicos + confianca) e guarda."""
+        try:
+            self._msg("sys", f"📚 Pesquisando e validando sobre: {topic}…", store=False)
+            results = web_search(topic, limit=4)
+            links = re.findall(r"\((https?://[^)]+)\)", results)[:2]
+            blocos = []
+            for u in links:
+                t = fetch_url_text(u, 5000)
+                if t:
+                    blocos.append(f"FONTE: {u}\n{t}")
+            if not blocos:
+                blocos = [f"RESULTADOS DA BUSCA:\n{results}"]
+            raw = "\n\n".join(blocos)[:14000]
+            alf_sys = (
+                "Voce e uma ALFANDEGA DE DADOS rigorosa. Do texto bruto da web, extraia apenas FATOS ATOMICOS, "
+                "verificaveis e uteis sobre o tema. REGRAS: cada fato curto e direto; ignore saudacoes, opinioes, "
+                "anuncios e enrolacao; so inclua o que parece consistente/confiavel; de uma confianca a cada fato: "
+                "'alta' (doc oficial, wikipedia, fonte institucional), 'media', 'baixa' (forum/blog anonimo). "
+                "Responda APENAS um JSON array valido, no maximo 8 itens: "
+                "[{\"fato\":\"...\",\"confianca\":\"alta|media|baixa\"}]. Sem texto fora do JSON.")
+            out = self.llm.chat(alf_sys, [{"role": "user", "content": f"TEMA: {topic}\n\n{raw}"}],
+                                 max_tokens=1500, fast=True)
+            facts = self._parse_facts(out)
+            hoje = datetime.date.today().isoformat()
+            fonte = links[0] if links else "busca web"
+            novos = 0
+            existentes = {str(k.get("fato", "")).lower() for k in self.knowledge}
+            for f in facts:
+                fato = str(f.get("fato", "")).strip()
+                if len(fato) < 5 or fato.lower() in existentes:
+                    continue
+                self.knowledge.append({"fato": fato, "confianca": f.get("confianca", "media"),
+                                       "fonte": fonte, "data": hoje, "tema": topic})
+                existentes.add(fato.lower())
+                novos += 1
+            if novos:
+                save_conhecimento(self.knowledge)
+            self.busy = False
+            if novos:
+                amostra = "\n".join(f"• {k['fato']}" for k in self.knowledge[-min(novos, 5):])
+                self._msg("kemy", f"Aprendi e guardei {novos} fato(s) verificado(s) sobre **{topic}** 🧠📚:\n{amostra}")
+                if self.speaker.available:
+                    self.speaker.say(f"Aprendi {novos} coisas novas sobre {topic}.")
+                    self._state("speaking")
+                    return
+            else:
+                self._msg("kemy", f"Pesquisei sobre {topic}, mas não achei fatos novos e confiáveis pra guardar.")
+            self._after_speak()
+        except Exception as exc:
+            self.busy = False
+            self._msg("kemy", f"Não consegui estudar isso agora: {exc}")
+            self._after_speak()
+
+    def _parse_facts(self, out: str) -> list:
+        try:
+            mt = re.search(r"\[.*\]", out, re.DOTALL)
+            data = json.loads(mt.group(0) if mt else out)
+            return data if isinstance(data, list) else []
+        except Exception:
+            # fallback: linhas com "- fato"
+            facts = []
+            for ln in (out or "").splitlines():
+                ln = ln.strip().lstrip("-•* ").strip()
+                if len(ln) > 8:
+                    facts.append({"fato": ln, "confianca": "media"})
+            return facts[:8]
+
     def _process(self, text: str) -> None:
         try:
             if self.mode == "direct":
@@ -3492,7 +3663,7 @@ class WebApi:
         # Ver a tela do usuario.
         if re.search(r"(?i)(v[eê]j?a?|olh[ae]|enxerg\w+|analis\w+|print).{0,20}(minha )?tela|o que (tem|h[aá]|aparece|esta|tô|to|estou) (na|vendo na|aqui na)?\s*(minha )?tela", text):
             return self._screen_reply(text), None
-        current = read_project_files(base)
+        current = relevant_project_files(base, text)   # RAG de codebase (so o relevante em projetos grandes)
         # Conversa simples -> prompt LEVE e resposta rapida; criar/editar codigo -> prompt completo.
         build = is_build_request(text) or bool(current)
         msgs = []
@@ -3503,7 +3674,7 @@ class WebApi:
         # 🤖 Modo agente autonomo (multi-passo) para tarefas que pedem "ate funcionar/completo".
         if build and self._wants_agent(text):
             return self._agent_loop(text, base), None
-        mem = self._memoria_prefix()
+        mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
             try:
