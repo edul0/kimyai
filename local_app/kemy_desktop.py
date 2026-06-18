@@ -329,7 +329,7 @@ def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
     except Exception:
         pass
     url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:300]) +
-           f"?width={w}&height={h}&nologo=true&seed={random.randint(1, 99999)}")
+           f"?width={w}&height={h}&nologo=true&enhance=true&model=flux&seed={random.randint(1, 99999)}")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "KemyDesktop"})
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -372,40 +372,60 @@ def _wrap_to_width(draw, text: str, font, max_w: int) -> list:
 
 
 def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
-    """Gera uma thumbnail estilo YouTuber: arte chamativa (Pollinations) + titulo GRANDE
-    com contorno, desenhado por cima com fonte nitida."""
+    """Gera uma thumbnail estilo youtuber anime (Miyuta/Saiko): arte Flux + titulo GRANDE
+    branco com contorno preto grosso, eco glitch e aberracao cromatica (cyan/magenta)."""
     from PIL import Image, ImageDraw
-    prompt = ((scene or "").strip() or "exciting dramatic scene") + (
-        ", youtube thumbnail style, ultra vibrant saturated colors, high contrast, dramatic "
-        "cinematic lighting, bold, eye-catching, sharp focus, 4k")
+    prompt = ((scene or "").strip() or "anime character") + (
+        ", clean anime illustration, vibrant, high contrast, sharp lineart, simple light background, "
+        "youtube thumbnail, eye-catching, high quality")
     tmp = dest.parent / ("_bg_" + dest.name)
     if not download_image(prompt, tmp, "1280x720"):
         return False
     try:
-        img = Image.open(tmp).convert("RGB").resize((1280, 720))
+        img = Image.open(tmp).convert("RGBA").resize((1280, 720))
     except Exception:
         return False
-    draw = ImageDraw.Draw(img)
     title = (title or "").strip().upper()
     if title:
-        size, lines, font = 140, [title], None
-        while size >= 46:
+        d0 = ImageDraw.Draw(img)
+        size, lines, font = 160, [title], None
+        while size >= 54:
             font = _thumb_font(size)
-            lines = _wrap_to_width(draw, title, font, 1180)
-            line_h = int(size * 1.06)
-            if len(lines) <= 3 and line_h * len(lines) <= 330:
+            lines = _wrap_to_width(d0, title, font, 1140)
+            if len(lines) <= 2 and int(size * 1.05) * len(lines) <= 300:
                 break
             size -= 8
-        line_h = int(size * 1.06)
-        y = 26
-        stroke = max(6, size // 11)
+        line_h = int(size * 1.05)
+        y = int(720 * 0.16)            # titulo na parte de cima
+        stroke = max(8, size // 8)
+
+        def _layer(dx, dy, fill, alpha=255):
+            lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            dd = ImageDraw.Draw(lay)
+            yy = y + dy
+            for ln in lines:
+                w = dd.textlength(ln, font=font)
+                dd.text(((1280 - w) / 2 + dx, yy), ln, font=font, fill=fill + (alpha,))
+                yy += line_h
+            return lay
+
+        # eco glitch (copias fantasma deslocadas atras)
+        for off, a in ((30, 45), (20, 70), (11, 100)):
+            img.alpha_composite(_layer(-off, -off // 2, (60, 60, 60), a))
+        # aberracao cromatica (cyan a esquerda, magenta a direita)
+        img.alpha_composite(_layer(-6, 0, (0, 220, 255), 170))
+        img.alpha_composite(_layer(6, 0, (255, 0, 110), 170))
+        # texto principal branco com contorno preto grosso
+        draw = ImageDraw.Draw(img)
+        yy = y
         for ln in lines:
             w = draw.textlength(ln, font=font)
-            draw.text(((1280 - w) / 2, y), ln, font=font, fill="#FFE100",
-                      stroke_width=stroke, stroke_fill="black")
-            y += line_h
+            draw.text(((1280 - w) / 2, yy), ln, font=font, fill="#FFFFFF",
+                      stroke_width=stroke, stroke_fill=(8, 8, 8))
+            yy += line_h
+    img = img.convert("RGB")
     try:
-        img.save(dest, quality=92)
+        img.save(dest, quality=94)
         return True
     except Exception:
         return False
@@ -414,6 +434,34 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
             tmp.unlink()
         except Exception:
             pass
+
+
+def _find_browser() -> str | None:
+    for c in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+              r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+              r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"):
+        if Path(c).exists():
+            return c
+    return None
+
+
+def html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
+    """Converte um HTML em PDF de verdade usando o Edge/Chrome headless (sem libs extras)."""
+    browser = _find_browser()
+    if not browser:
+        return False
+    try:
+        subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                        f"--print-to-pdf={pdf_path}", html_path.as_uri()],
+                       timeout=90, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not pdf_path.exists():
+            subprocess.run([browser, "--headless", "--disable-gpu",
+                            f"--print-to-pdf={pdf_path}", html_path.as_uri()],
+                           timeout=90, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return pdf_path.exists()
+    except Exception:
+        return False
 
 
 def fetch_url_text(url: str, limit: int = 4000) -> str:
@@ -630,20 +678,34 @@ SYSTEM_PROMPT = (
     "IMPORTANTE: o gerador NAO sabe o rosto real do usuario nem inclui texto legivel — "
     "se o usuario pedir a propria foto, avise que voce nao tem a foto dele (peca para ele anexar uma "
     "pelo botao 📎) e gere o resto. A Kemy baixa e salva a imagem automaticamente.\n"
-    "13b) THUMBNAIL do YouTube (quando o usuario falar 'thumb', 'thumbnail', 'capa' ou 'miniatura'): "
-    "use um bloco ```kemy-thumb com UMA por linha no formato 'TITULO | cena em INGLES | arquivo.png'. "
-    "O TITULO sai em letra GRANDE com contorno (estilo youtuber br: Miyuta, Saiko, Goulart) — a propria "
-    "Kemy desenha o texto por cima, entao NAO inclua o texto na descricao da cena. A cena descreve so a "
-    "imagem (dramatica, cores fortes, expressao marcante); inclua o visual da Kemy se ela aparecer. "
-    "Ex.: MINHA NOVA IA?! | shocked excited anime vtuber girl with dark purple hair pointing at a glowing "
-    "blue AI hologram, dramatic neon lighting, vibrant | thumb.png\n"
+    "13b) THUMBNAIL do YouTube (quando falar 'thumb', 'thumbnail', 'capa' ou 'miniatura'): "
+    "use um bloco ```kemy-thumb com 'TITULO | cena em INGLES | arquivo.png'. A Kemy desenha o TITULO "
+    "por cima em letra branca GRANDE com contorno preto, eco glitch e aberracao cromatica (estilo "
+    "youtuber anime br: Miyuta, Saiko, Goulart) — entao NAO inclua o texto na cena. A cena descreve so "
+    "a ARTE: de preferencia um personagem ANIME expressivo, lineart nitido, cores vibrantes, fundo claro "
+    "simples (estilo das thumbs de anime). Inclua o visual da Kemy se ela aparecer. "
+    "Ex.: REAGINDO A ISSO?! | expressive anime girl with dark twin-tails, shocked happy face, hands up, "
+    "clean vibrant anime illustration, simple light background | thumb.png\n"
     "14) CONTEUDO COM MUITOS ITENS/DADOS (Pokedex, catalogo grande, lista de filmes, "
     "criptos, etc.): NUNCA escreva os dados na mao (voce trunca e fica incompleto). "
     "Em vez disso, BUSQUE de uma API publica gratuita via fetch no JavaScript e renderize "
     "DINAMICAMENTE (com busca, paginacao ou scroll infinito). Exemplos de APIs gratis e "
     "sem chave: Pokemon -> https://pokeapi.co/api/v2/pokemon?limit=151 (e a sprite em "
     "results[i].url -> sprites.front_default); filmes/series, cripto (CoinGecko), etc. "
-    "Entregue a lista COMPLETA, nunca so 2-3 exemplos."
+    "Entregue a lista COMPLETA, nunca so 2-3 exemplos.\n"
+    "15) DOCUMENTOS, SLIDES e PDF (voce tambem faz isso, capriche):\n"
+    "  - SLIDES/APRESENTACAO -> gere um index.html com reveal.js via CDN "
+    "(<link rel=stylesheet href='https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css'>, um tema "
+    "como '.../theme/night.css', e <script src='https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js'> "
+    "+ Reveal.initialize()). Cada slide numa <section>. Titulos grandes, bullets, imagens Flux.\n"
+    "  - DOCUMENTO/RELATORIO/CURRICULO/CARTA -> gere um HTML bonito e bem formatado com CSS de "
+    "impressao (@page{size:A4;margin:2cm}, fonte legivel, titulos, listas, tabelas). Se o usuario "
+    "pedir PDF, a Kemy converte o HTML em PDF sozinha — voce so precisa entregar o HTML caprichado.\n"
+    "  - PLANILHA -> gere um arquivo .csv (separado por virgula) ou uma tabela HTML.\n"
+    "16) NIVEL DE ENGENHARIA (estilo Codex/Claude Code): aja como um agente senior — leia os arquivos, "
+    "entenda o contexto, planeje a melhor abordagem, edite de forma cirurgica e garanta que o resultado "
+    "RODA e fica completo. Voce e versatil: codigo, sites, apps, jogos, imagens, thumbnails, documentos, "
+    "slides, automacao do PC, visao e voz — seja excelente em tudo."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
@@ -665,6 +727,8 @@ BUILD_HINTS = (
     "melhore", "melhora", "ajuste", "ajusta", "muda", "mude", "mudar", "deixa", "deixe",
     "refaça", "refaca", "refatore", "estilize", "estiliza", "design", "função", "funcao",
     "componente", "tela", "botão", "botao", "formulário", "formulario", "backend", "frontend",
+    "doc", "documento", "pdf", "slide", "slides", "apresentação", "apresentacao", "planilha",
+    "relatório", "relatorio", "currículo", "curriculo", "carta", "contrato", "proposta",
 )
 
 
@@ -3062,7 +3126,34 @@ class WebApi:
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
+        self._maybe_make_pdf(base, text, files)
         return chat or "Feito.", save
+
+    def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
+        """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
+        if "pdf" not in (text or "").lower():
+            return
+        try:
+            htmls = sorted(base.glob("*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            htmls = []
+        if not htmls:
+            return
+        # prefere um html que nao seja 'index' (doc/relatorio), senao usa o mais recente
+        src = next((h for h in htmls if h.stem.lower() != "index"), htmls[0])
+        pdf = src.with_suffix(".pdf")
+        self._msg("sys", "📄 Gerando o PDF…", store=False)
+        if html_to_pdf(src, pdf):
+            self._msg("sys", f"✅ PDF pronto: {pdf.name} (em {base})", store=False)
+            try:
+                if os.name == "nt":
+                    os.startfile(str(pdf))  # type: ignore[attr-defined]
+                else:
+                    webbrowser.open(pdf.as_uri())
+            except Exception:
+                pass
+        else:
+            self._msg("sys", "Gerei o documento em HTML; pra virar PDF abra ele e use Ctrl+P → Salvar como PDF.", store=False)
 
     def _localize_images(self, base: Path) -> None:
         """Baixa as imagens do Pollinations citadas no HTML/CSS e troca por arquivos locais,
