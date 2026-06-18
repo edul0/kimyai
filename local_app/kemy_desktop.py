@@ -3370,6 +3370,9 @@ class WebApi:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
         web = self._web_context(text)
         self._auto_learn(text)            # aprende sozinha com preferencias/correcoes
+        # 🤖 Modo agente autonomo (multi-passo) para tarefas que pedem "ate funcionar/completo".
+        if build and self._wants_agent(text):
+            return self._agent_loop(text, base), None
         mem = self._memoria_prefix()
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
@@ -3509,6 +3512,91 @@ class WebApi:
                 return
             self._apply_edits(parse_edits(r), base)
             self._save(parse_llm_files(r)[0], base)
+
+    def _wants_agent(self, text: str) -> bool:
+        t = (text or "").lower()
+        return any(k in t for k in (
+            "modo agente", "agente", "passo a passo", "ate funcionar", "até funcionar",
+            "rode e ", "monte e ", "crie e teste", "projeto completo", "faca funcionar",
+            "faça funcionar", "complete o projeto", "termine o projeto", "ate concluir", "até concluir"))
+
+    def _run_capture(self, cmds: list, base: Path) -> str:
+        outs = []
+        for cmd in cmds[:6]:
+            self._msg("sys", f"$ {cmd}", store=False)
+            run = cmd
+            if run.strip().lower().startswith(("http://", "https://")):
+                run = f'start "" "{run.strip()}"'
+            try:
+                p = subprocess.run(run, shell=True, cwd=str(base), capture_output=True, text=True, timeout=120)
+                o = ((p.stdout or "") + (p.stderr or "")).strip()
+                if o:
+                    self._msg("sys", o[:600], store=False)
+                outs.append(f"$ {cmd}\n{o[:1500]}")
+            except subprocess.TimeoutExpired:
+                outs.append(f"$ {cmd}\n(demorou demais / timeout)")
+            except Exception as e:
+                outs.append(f"$ {cmd}\n(erro: {e})")
+        return "\n".join(outs)
+
+    def _run_py_capture(self, base: Path):
+        pys = list(base.glob("*.py"))
+        if not pys:
+            return None
+        main = next((p for p in pys if p.name in ("main.py", "app.py", "run.py")), pys[0])
+        for pyexe in ("python", "py", "python3"):
+            try:
+                p = subprocess.run([pyexe, str(main)], cwd=str(base), capture_output=True, text=True, timeout=20)
+                out = ((p.stdout or "") + (p.stderr or "")).strip()
+                self._msg("sys", f"$ python {main.name}\n{(out[:500] or '(sem saída)')}", store=False)
+                return f"python {main.name} (retcode {p.returncode}):\n{out[:1500]}"
+            except FileNotFoundError:
+                continue
+            except Exception:
+                return None
+        return None
+
+    def _agent_loop(self, text: str, base: Path, max_steps: int = 5) -> str:
+        """Agente autonomo (estilo Codex/Claude Code): trabalha em passos — cria, roda, le a
+        saida/erro e corrige — ate concluir a tarefa."""
+        base.mkdir(parents=True, exist_ok=True)
+        self._msg("sys", "🤖 Modo agente ligado — vou trabalhar em passos até terminar.", store=False)
+        last_output = ""
+        for step in range(1, max_steps + 1):
+            self._state("thinking")
+            files_ctx = read_project_files(base)
+            sys_p = (self._memoria_prefix() + SYSTEM_PROMPT + "\n\n=== MODO AGENTE ===\nVoce trabalha em PASSOS "
+                     "ate CONCLUIR a tarefa, como um engenheiro autonomo. A cada passo: crie/edite arquivos "
+                     "(<<<FILE>>>/<<<EDIT>>>) e, se precisar instalar/rodar/testar, use ```kemy-run (voce VE a "
+                     "saida e os erros e continua corrigindo). Avance de verdade a cada passo, nao repita o que ja "
+                     "esta feito. Quando estiver 100% pronto E funcionando, escreva <<<DONE>>> numa linha e um "
+                     "resumo curto do que entregou.")
+            usr = (f"TAREFA: {text}\n\nARQUIVOS ATUAIS DO PROJETO:\n{files_ctx or '(vazio)'}\n\n"
+                   f"SAIDA DO ULTIMO COMANDO/EXECUCAO:\n{last_output[-1600:] or '(nada ainda)'}\n\n"
+                   f"Continue (passo {step}). Se ja concluiu, responda com <<<DONE>>> e o resumo.")
+            try:
+                reply = self.llm.chat(sys_p, [{"role": "user", "content": usr}], max_tokens=16000)
+            except Exception as exc:
+                return f"O agente parou por um erro: {exc}"
+            self._msg("sys", f"🤖 Passo {step}/{max_steps}…", store=False)
+            files, chat = parse_llm_files(reply)
+            edits = parse_edits(reply)
+            self._apply_edits(edits, base)
+            self._save(files, base)
+            self._localize_images(base)
+            cmds = extract_run_commands(reply)
+            if cmds:
+                last_output = self._run_capture(cmds, base)
+            else:
+                pyout = self._run_py_capture(base)
+                last_output = pyout if pyout is not None else ""
+            if "<<<DONE>>>" in reply:
+                summ = reply.split("<<<DONE>>>")[-1].strip() or chat or "Tarefa concluída!"
+                self._msg("sys", f"✅ Agente concluiu em {step} passo(s).", store=False)
+                return summ[:700] or "Pronto, tarefa concluída!"
+            if not files and not edits and not cmds and step >= 2:
+                return (chat or "Acho que terminei — dá uma olhada e me diz se falta algo.")[:700]
+        return "Cheguei no limite de passos. O projeto avançou bastante — me diz o que ainda falta que eu continuo."
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
         """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
