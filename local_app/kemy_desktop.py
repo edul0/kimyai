@@ -993,7 +993,9 @@ class LLMClient:
         self.cerebras = env.get("CEREBRAS_API_KEY")
         self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
         self.openrouter = env.get("OPENROUTER_API_KEY")
-        self.available = bool(self.gemini or self.groq or self.cerebras or self.openai or self.openrouter)
+        self.anthropic = env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_API_KEY")
+        self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
+                              or self.openrouter or self.anthropic)
 
         def _list(key: str, default: list[str]) -> list[str]:
             raw = (env.get(key) or "").strip()
@@ -1015,6 +1017,9 @@ class LLMClient:
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
         self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
+        # Claude (Anthropic API, PAGO) — melhor pra codigo. Use chave ANTHROPIC_API_KEY.
+        self.claude_models = _list("CLAUDE_MODEL", ["claude-sonnet-4-6", "claude-3-5-sonnet-latest"])
+        self.claude_fast = _list("CLAUDE_FAST", ["claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"])
         # Modelos para bate-papo/voz: inteligentes E rapidos (GPT-OSS 120B segura bem o
         # contexto e responde em ~1-2s); Llama so como ultimo fallback.
         self.cerebras_fast = _list("CEREBRAS_FAST", ["gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507", "llama-3.3-70b"])
@@ -2663,6 +2668,7 @@ class WebApi:
         self.busy = False
         self.continuous = False
         self.autonomous = False
+        self.boost = True   # ✨ Capricho: autorrevisao do codigo (qualidade nivel pro, gratis)
         self.convos_file = config_dir() / "conversations.json"
         self.convos, self.active_id = [], None
         self._load_convos()
@@ -2916,6 +2922,11 @@ class WebApi:
                     self.listen()
             else:
                 self._msg("sys", "Modo Conversa desligado.", store=False)
+        elif name == "boost":
+            self.boost = not self.boost
+            self._js(f"setToggle('boost',{json.dumps(self.boost)})")
+            self._msg("sys", ("✨ Capricho ligado: reviso meu codigo 2x pra ficar nivel pro (um pouco mais lento)."
+                              if self.boost else "Capricho desligado (mais rapido, qualidade normal)."), store=False)
         else:
             self.autonomous = not self.autonomous
             self._js(f"setToggle('auto',{json.dumps(self.autonomous)})")
@@ -3297,6 +3308,9 @@ class WebApi:
         if web:
             system += web
         reply = self.llm.chat(system, msgs[-10:], max_tokens=16000)
+        # ✨ Capricho: autorrevisao (self-refine) — a Kemy critica e melhora o proprio codigo.
+        if self.boost:
+            reply = self._refine(system, msgs[-10:], text, reply)
         files, chat = parse_llm_files(reply)
         self._apply_edits(parse_edits(reply), base)  # edicoes cirurgicas (search/replace)
         save = self._save(files, base)
@@ -3306,6 +3320,31 @@ class WebApi:
         self._gen_thumbs(extract_thumb_requests(reply), base)
         self._maybe_make_pdf(base, text, files)
         return chat or "Feito.", save
+
+    def _refine(self, system: str, msgs: list, user_text: str, draft: str) -> str:
+        """Autorrevisao: a Kemy critica seu rascunho (como um sr. engenheiro) e reescreve
+        a versao final corrigida. Tecnica self-refine -> qualidade nivel pro, so com IA gratis."""
+        self._state("thinking")
+        review_sys = (system + "\n\n=== MODO REVISAO ===\nVoce vai REVISAR criticamente o rascunho que "
+                      "voce mesma fez, como um engenheiro SENIOR exigente. Cheque: tem bug ou erro? esta "
+                      "INCOMPLETO ou com placeholder? cada funcao/botao FUNCIONA de verdade? o design esta "
+                      "bonito e profissional? o codigo esta limpo e organizado? falta tratar algum caso? "
+                      "Corrija TODOS os problemas e entregue a VERSAO FINAL impecavel e COMPLETA, no mesmo "
+                      "formato (<<<FILE>>> / <<<EDIT>>> / blocos). Entregue so a versao final, sem falar da revisao.")
+        rmsgs = list(msgs) + [
+            {"role": "user", "content": user_text},
+            {"role": "assistant", "content": draft[:14000]},
+            {"role": "user", "content": "Revise com olhar critico de senior e reentregue a VERSAO FINAL, "
+             "completa, funcional e bonita. Se ja estiver perfeita, devolva igual."},
+        ]
+        try:
+            improved = self.llm.chat(review_sys, rmsgs, max_tokens=16000)
+            # so usa a revisao se veio conteudo util (arquivos/edits); senao mantem o rascunho
+            if improved and (FILE_RE.search(improved) or EDIT_RE.search(improved) or len(improved) > 200):
+                return improved
+        except Exception:
+            pass
+        return draft
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
         """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
