@@ -372,9 +372,8 @@ def _wrap_to_width(draw, text: str, font, max_w: int) -> list:
 
 
 def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
-    """Gera uma thumbnail estilo youtuber anime (Miyuta/Saiko): arte Flux + titulo GRANDE
-    branco com contorno preto grosso, eco glitch e aberracao cromatica (cyan/magenta)."""
-    from PIL import Image, ImageDraw
+    """Thumbnail profissional: arte Flux + texto composto em HTML/CSS (fontes Google + efeitos)
+    renderizado em PNG pelo navegador headless. Cai para o PIL se nao tiver navegador."""
     prompt = ((scene or "").strip() or "anime character") + (
         ", clean anime illustration, vibrant colors, high contrast, sharp lineart, dynamic pose, "
         "character placed on the RIGHT side of the frame looking at viewer, the LEFT side is simple "
@@ -382,6 +381,68 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
     tmp = dest.parent / ("_bg_" + dest.name)
     if not download_image(prompt, tmp, "1280x720"):
         return False
+    ok = False
+    try:
+        art_b64 = base64.b64encode(tmp.read_bytes()).decode("ascii")
+        if art_b64:
+            ok = _thumb_html(title, art_b64, dest)
+    except Exception:
+        ok = False
+    if not ok:
+        ok = _thumb_pil(title, tmp, dest)
+    try:
+        tmp.unlink()
+    except Exception:
+        pass
+    return ok
+
+
+def _thumb_html(title: str, art_b64: str, dest: Path) -> bool:
+    """Compoe a thumbnail em HTML/CSS (fonte Anton, contorno, glitch, aberracao cromatica)
+    e renderiza em PNG via navegador headless. Qualidade nivel designer."""
+    t = (title or "").strip().upper().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    html = """<!doctype html><html><head><meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Anton&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1280px;height:720px;overflow:hidden;background:#000}
+.thumb{width:1280px;height:720px;position:relative;font-family:'Anton',Impact,sans-serif;
+  background:url('data:image/jpeg;base64,__ART__') center/cover no-repeat}
+.shade{position:absolute;inset:0;
+  background:linear-gradient(90deg, rgba(4,4,10,.82) 0%, rgba(4,4,10,.55) 34%, rgba(4,4,10,0) 58%)}
+.wrap{position:absolute;left:54px;top:0;height:720px;width:610px;display:flex;align-items:center}
+.title{color:#fff;text-transform:uppercase;line-height:.96;letter-spacing:1px;font-weight:400;
+  -webkit-text-stroke:8px #0b0b0b;paint-order:stroke fill;
+  text-shadow:6px 0 0 #ff0066,-6px 0 0 #00e0ff,
+    11px 8px 0 rgba(60,60,60,.55),22px 16px 0 rgba(60,60,60,.30),0 0 28px rgba(0,0,0,.45)}
+</style></head><body>
+<div class="thumb"><div class="shade"></div>
+<div class="wrap"><div class="title" id="t">__TITLE__</div></div></div>
+<script>
+var el=document.getElementById('t'),box=el.parentElement,s=180;
+function fit(){el.style.fontSize=s+'px';
+  while((el.scrollHeight>box.clientHeight-20||el.scrollWidth>box.clientWidth-6)&&s>40){s-=4;el.style.fontSize=s+'px';}}
+if(document.fonts&&document.fonts.ready){document.fonts.ready.then(fit);setTimeout(fit,1500);}else{fit();}
+</script></body></html>"""
+    html = html.replace("__ART__", art_b64).replace("__TITLE__", t)
+    hpath = dest.parent / ("_thumb_" + dest.stem + ".html")
+    try:
+        hpath.write_text(html, encoding="utf-8")
+    except Exception:
+        return False
+    try:
+        ok = render_html_to_png(hpath, dest, 1280, 720)
+    finally:
+        try:
+            hpath.unlink()
+        except Exception:
+            pass
+    return ok
+
+
+def _thumb_pil(title: str, tmp: Path, dest: Path) -> bool:
+    """Reserva (sem navegador): desenha o titulo com PIL na esquerda."""
+    from PIL import Image, ImageDraw
     try:
         img = Image.open(tmp).convert("RGBA").resize((1280, 720))
     except Exception:
@@ -434,11 +495,6 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
         return True
     except Exception:
         return False
-    finally:
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
 
 
 def _find_browser() -> str | None:
@@ -465,6 +521,25 @@ def html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
                             f"--print-to-pdf={pdf_path}", html_path.as_uri()],
                            timeout=90, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return pdf_path.exists()
+    except Exception:
+        return False
+
+
+def render_html_to_png(html_path: Path, png_path: Path, w: int = 1280, h: int = 720) -> bool:
+    """Renderiza um HTML em PNG via Edge/Chrome headless (captura na resolucao dada)."""
+    browser = _find_browser()
+    if not browser:
+        return False
+    base = [browser, "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+            "--default-background-color=00000000", f"--window-size={w},{h}",
+            "--virtual-time-budget=3000", f"--screenshot={png_path}", html_path.as_uri()]
+    try:
+        subprocess.run([browser, "--headless=new"] + base[1:], timeout=60,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not png_path.exists():
+            subprocess.run([browser, "--headless"] + base[1:], timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return png_path.exists()
     except Exception:
         return False
 
