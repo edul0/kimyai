@@ -533,6 +533,20 @@ SYSTEM_PROMPT = (
     "pequenos (ex.: um .js por modulo: cadastros.js, financeiro.js, estoque.js...) em vez de um "
     "script.js gigante. Assim cada arquivo cabe na resposta sem truncar e da pra editar um modulo "
     "sem reescrever o app inteiro. Carregue-os no index.html com varios <script src=...>.\n"
+    "3d) EDICAO CIRURGICA (raciocine como um dev: leia os ARQUIVOS ATUAIS e mude SO o necessario). "
+    "Para mexer num arquivo que JA EXISTE, NAO reenvie o arquivo inteiro — mande so o trecho que muda, "
+    "no formato exato:\n"
+    "<<<EDIT: caminho/do/arquivo>>>\n"
+    "<<<SEARCH>>>\n"
+    "trecho EXATO do codigo atual (copie identico, com a mesma indentacao, sem '...')\n"
+    "<<<REPLACE>>>\n"
+    "trecho novo\n"
+    "<<<ENDEDIT>>>\n"
+    "Pode repetir <<<SEARCH>>>/<<<REPLACE>>> varias vezes dentro do mesmo EDIT. O SEARCH precisa "
+    "bater EXATAMENTE com o que esta no arquivo. Use <<<FILE: ...>>> APENAS para arquivos NOVOS. "
+    "Ex.: pediram 'poe funcao no botao Cadastro' -> voce le o codigo, acha o botao Cadastro e o lugar "
+    "dos scripts, faz um EDIT trocando o onclick/adicionando a funcao e, se precisar, um <<<FILE>>> "
+    "para o novo cadastro.js. Nunca reescreva tudo nem quebre o que ja funciona.\n"
     "4) Para EXECUTAR algo no PC (rodar, instalar, ABRIR um site/app), inclua os comandos "
     "Windows num bloco ```kemy-run (um por linha). SEMPRE que o usuario pedir para ABRIR algo, "
     "emita o comando de verdade (nunca so responda que vai abrir). Exemplos:\n"
@@ -660,6 +674,34 @@ def is_build_request(text: str) -> bool:
 
 
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
+EDIT_RE = re.compile(r"<<<EDIT:\s*(.+?)>>>\s*\n(.*?)<<<ENDEDIT>>>", re.DOTALL)
+SR_RE = re.compile(r"<<<SEARCH>>>\s*\n(.*?)\n<<<REPLACE>>>\s*\n(.*?)(?=\n?<<<SEARCH>>>|\Z)", re.DOTALL)
+
+
+def parse_edits(text: str) -> list:
+    """Le blocos de edicao cirurgica:
+    <<<EDIT: caminho>>>
+    <<<SEARCH>>>
+    codigo atual exato
+    <<<REPLACE>>>
+    codigo novo
+    <<<ENDEDIT>>>
+    (pode ter varios SEARCH/REPLACE no mesmo EDIT)."""
+    out = []
+    if not text:
+        return out
+    for m in EDIT_RE.finditer(text):
+        path = m.group(1).strip()
+        body = m.group(2)
+        edits = []
+        for sr in SR_RE.finditer(body):
+            search = sr.group(1).rstrip("\n")
+            replace = sr.group(2).rstrip("\n")
+            if search:
+                edits.append((search, replace))
+        if path and edits:
+            out.append({"path": path, "edits": edits})
+    return out
 _FNAME = r"[\w./\-]+\.(?:html?|css|js|jsx|tsx?|json|py|md|txt)"
 
 
@@ -684,18 +726,21 @@ def parse_loose_files(text: str) -> list[dict]:
 
 
 def _clean_chat(text: str) -> str:
-    """Remove marcadores de arquivo que por acaso vazaram para o texto de conversa."""
+    """Remove marcadores de arquivo/edicao que por acaso vazaram para o texto de conversa."""
+    text = EDIT_RE.sub("", text)
     text = re.sub(r"<<<FILE:.*?>>>", "", text)
-    text = text.replace("<<<END>>>", "")
+    text = text.replace("<<<END>>>", "").replace("<<<ENDEDIT>>>", "")
+    text = re.sub(r"<<<(?:SEARCH|REPLACE)>>>", "", text)
     text = re.sub(rf"^\s*(?:\*\*|`|#{{1,4}}\s*)?{_FNAME}(?:\*\*|`)?\s*:?\s*$", "", text, flags=re.MULTILINE)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def parse_llm_files(text: str) -> tuple[list[dict], str]:
     """Separa os arquivos (formato <<<FILE>>>) do texto de conversa."""
+    text_no_edits = EDIT_RE.sub("", text)  # nao confundir edits com arquivos novos
     files = [{"path": m.group(1).strip(), "content": m.group(2).strip("\n") + "\n"}
-             for m in FILE_RE.finditer(text)]
-    chat = FILE_RE.sub("", text).strip()
+             for m in FILE_RE.finditer(text_no_edits)]
+    chat = FILE_RE.sub("", text_no_edits).strip()
     if not files:  # fallback 1: blocos markdown ```lang
         cf = extract_code_files(text)
         if cf:
@@ -3007,6 +3052,7 @@ class WebApi:
             system += web
         reply = self.llm.chat(system, msgs[-10:], max_tokens=16000)
         files, chat = parse_llm_files(reply)
+        self._apply_edits(parse_edits(reply), base)  # edicoes cirurgicas (search/replace)
         save = self._save(files, base)
         self._localize_images(base)
         self._maybe_run(extract_run_commands(reply), base)
@@ -3171,31 +3217,78 @@ class WebApi:
             n += 1
             if index is None and rel.lower().endswith((".html", ".htm")):
                 index = dest
-            diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(),
-                                             fromfile="antes", tofile="depois", lineterm=""))
-            added = sum(1 for ln in diff if ln.startswith("+") and not ln.startswith("+++"))
-            removed = sum(1 for ln in diff if ln.startswith("-") and not ln.startswith("---"))
-            key = uuid.uuid4().hex[:8]
-            self._file_views[key] = {"path": rel, "added": added, "removed": removed,
-                                     "diff": "\n".join(diff), "content": new}
-            changed.append({"key": key, "path": rel, "added": added, "removed": removed})
+            changed.append(self._register_change(rel, old, new))
         if not n:
             return None
-        # limita memoria do cache de visualizacao
-        if len(self._file_views) > 80:
-            for k in list(self._file_views)[:-80]:
-                self._file_views.pop(k, None)
-        if changed:
-            try:
-                self._js(f"showFiles({json.dumps(changed)})")
-            except Exception:
-                pass
+        self._show_chips(changed)
         if index is not None:
             try:
                 webbrowser.open(index.as_uri())
             except Exception:
                 pass
         return None  # os chips ja mostram os arquivos; nao duplica a mensagem "X arquivo(s)"
+
+    def _register_change(self, rel: str, old: str, new: str) -> dict:
+        import difflib
+        diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                         fromfile="antes", tofile="depois", lineterm=""))
+        added = sum(1 for ln in diff if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in diff if ln.startswith("-") and not ln.startswith("---"))
+        key = uuid.uuid4().hex[:8]
+        self._file_views[key] = {"path": rel, "added": added, "removed": removed,
+                                 "diff": "\n".join(diff), "content": new}
+        return {"key": key, "path": rel, "added": added, "removed": removed}
+
+    def _show_chips(self, changed: list) -> None:
+        if len(self._file_views) > 120:
+            for k in list(self._file_views)[:-120]:
+                self._file_views.pop(k, None)
+        if changed:
+            try:
+                self._js(f"showFiles({json.dumps(changed)})")
+            except Exception:
+                pass
+
+    def _apply_edits(self, edits: list, base: Path) -> None:
+        """Edicao cirurgica: aplica trechos SEARCH->REPLACE nos arquivos existentes."""
+        if not edits:
+            return
+        changed, index = [], None
+        for e in edits:
+            rel = str(e.get("path") or "").strip().lstrip("/\\")
+            dest = base / rel
+            if not rel:
+                continue
+            if not dest.exists():
+                self._msg("sys", f"⚠️ {rel}: arquivo nao existe para editar (peca para criar primeiro).", store=False)
+                continue
+            try:
+                old = dest.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            new, applied, failed = old, 0, 0
+            for search, replace in e.get("edits", []):
+                if search and search in new:
+                    new = new.replace(search, replace, 1)
+                    applied += 1
+                elif search:
+                    failed += 1
+            if applied and new != old:
+                try:
+                    dest.write_text(new, encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                changed.append(self._register_change(rel, old, new))
+                if index is None and rel.lower().endswith((".html", ".htm")):
+                    index = dest
+            if failed:
+                self._msg("sys", f"⚠️ {rel}: {failed} trecho(s) nao bateram com o codigo atual (nao alterei essa parte).", store=False)
+        self._show_chips(changed)
+        if index is not None:
+            try:
+                webbrowser.open(index.as_uri())
+            except Exception:
+                pass
 
     def get_file_view(self, key: str) -> dict:
         return self._file_views.get(key, {})
