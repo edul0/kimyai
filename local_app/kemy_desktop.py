@@ -3010,8 +3010,48 @@ class WebApi:
         threading.Thread(target=self._do_vision, args=(path, mime, prompt), daemon=True).start()
 
     def _do_vision(self, path: Path, mime: str, prompt: str) -> None:
+        # VISAO -> CODIGO: se pediu para recriar/clonar a imagem, ela GERA o site igual.
+        low = (prompt or "").lower()
+        build_img = (is_build_request(prompt) or any(k in low for k in
+                     ("igual", "clona", "clone", "recri", "reproduz", "transforma", "vira", "monta", "copia")))
         try:
             b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        except Exception as exc:
+            self.busy = False
+            self._msg("kemy", f"Falhei ao ler a imagem: {exc}")
+            self._after_speak()
+            return
+        if build_img:
+            self._msg("sys", "🖼️→💻 Recriando a imagem em código…", store=False)
+            it = self._cur()
+            base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+            vprompt = (
+                "Olhe esta imagem (um design/UI/site/tela). Recrie-a o MAIS FIEL possivel em codigo web. "
+                "Responda APENAS com os arquivos no formato EXATO:\n<<<FILE: index.html>>>\n...\n<<<END>>>\n"
+                "<<<FILE: styles.css>>>\n...\n<<<END>>>\n<<<FILE: script.js>>>\n...\n<<<END>>>\n"
+                "Capriche: mesmas cores, layout, fontes, espacamentos e textos visiveis. Se houver imagens, "
+                "use https://image.pollinations.ai/prompt/<descricao>?width=&height=&nologo=true&model=flux. "
+                "Pedido extra do usuario: " + (prompt or "(recrie fielmente)"))
+            try:
+                reply = self.llm.vision(vprompt, b64, mime)
+                if self.boost:
+                    reply = self._refine(SYSTEM_PROMPT, [], "recrie a imagem em codigo", reply)
+                files, chat = parse_llm_files(reply)
+                self._save(files, base)
+                self._localize_images(base)
+                msg = chat.strip() or ("Recriei a imagem em código! Veja o preview." if files
+                                       else "Não consegui extrair o código da imagem, tente de novo.")
+            except Exception as exc:
+                msg = f"Falhei ao recriar a imagem: {exc}"
+            self.busy = False
+            self._msg("kemy", msg)
+            if self.speaker.available:
+                self.speaker.say("Recriei a imagem em código!")
+                self._state("speaking")
+            else:
+                self._after_speak()
+            return
+        try:
             reply = self.llm.vision(prompt, b64, mime)
         except Exception as exc:
             reply = f"Falhei ao ver a imagem: {exc}"
