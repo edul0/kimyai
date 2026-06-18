@@ -134,6 +134,26 @@ def cleanup_update_leftovers() -> None:
         pass
 
 
+def memoria_file() -> Path:
+    return config_dir() / "kemy_memoria.json"
+
+
+def load_memorias() -> list:
+    """Memoria persistente: licoes/preferencias que a Kemy aprendeu com o usuario."""
+    try:
+        d = json.loads(memoria_file().read_text(encoding="utf-8"))
+        return [str(x) for x in d] if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_memorias(mems: list) -> None:
+    try:
+        memoria_file().write_text(json.dumps(mems[-80:], ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def build_tag() -> str:
     """Identificador curto da build (sha) para sabermos qual versao esta rodando."""
     try:
@@ -815,10 +835,15 @@ SYSTEM_PROMPT = (
     "results[i].url -> sprites.front_default); filmes/series, cripto (CoinGecko), etc. "
     "Entregue a lista COMPLETA, nunca so 2-3 exemplos.\n"
     "15) DOCUMENTOS, SLIDES e PDF (voce tambem faz isso, capriche):\n"
-    "  - SLIDES/APRESENTACAO -> gere um index.html com reveal.js via CDN "
-    "(<link rel=stylesheet href='https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css'>, um tema "
-    "como '.../theme/night.css', e <script src='https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js'> "
-    "+ Reveal.initialize()). Cada slide numa <section>. Titulos grandes, bullets, imagens Flux.\n"
+    "  - SLIDES/APRESENTACAO -> index.html com reveal.js@5 (reveal.css + dist/reveal.js + Reveal.initialize"
+    "({hash:true,transition:'slide'})). NAO use o tema cru padrao: escreva um CSS PROPRIO bonito. Padrao de "
+    "qualidade: importe Google Font (Poppins/Sora/Inter); fundo escuro com gradiente "
+    "(.reveal{background:radial-gradient(900px 600px at 80% -10%,#241b4d,#0c0a1a)}); cor de destaque "
+    "(--accent:#7c5cff ou similar). VARIE os layouts entre os slides: (1) CAPA com titulo gigante + "
+    "subtitulo + barra de destaque; (2) bullets com icones/emojis e bastante respiro; (3) DUAS COLUNAS "
+    "(texto | imagem Flux); (4) slide so com numero/estatistica GIGANTE; (5) citacao; (6) slide de "
+    "imagem cheia com overlay; (7) ENCERRAMENTO com CTA. Titulos grandes (clamp), texto legivel, margem "
+    "generosa, transicoes suaves. Use imagens do Flux (pollinations) quando ajudar. Nada de slide cru.\n"
     "  - DOCUMENTO/RELATORIO/CURRICULO/CARTA -> gere um HTML bonito e bem formatado com CSS de "
     "impressao (@page{size:A4;margin:2cm}, fonte legivel, titulos, listas, tabelas). Se o usuario "
     "pedir PDF, a Kemy converte o HTML em PDF sozinha — voce so precisa entregar o HTML caprichado.\n"
@@ -2650,6 +2675,7 @@ class WebApi:
         self._quitting = False
         self._speaking = False
         self._file_views: dict[str, dict] = {}
+        self.memories = load_memorias()
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -3188,12 +3214,42 @@ class WebApi:
             it["title"] = text[:40]
             self._render()
         self._msg("user", text)
+        if self._maybe_learn(text):   # "lembre que ...", "de agora em diante ..."
+            self._state("idle")
+            return
         if not self.connected:
             self._msg("sys", "Ainda conectando…", store=False)
             return
         self.busy = True
         self._state("thinking")
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
+
+    def _maybe_learn(self, text: str) -> bool:
+        """Aprende quando o usuario ensina/corrige (memoria persistente)."""
+        t = (text or "").strip()
+        m = re.match(r"(?i)^(?:lembr[ae]|anota|anote|guarda|memoriza|grava)\s+(?:disso[:,]?\s*|que\s+)?(.+)$", t)
+        if not m:
+            m = re.match(r"(?i)^(?:de agora em diante|da proxima vez|a partir de agora|sempre que voce|toda vez)\b[,:]?\s*(.+)$", t)
+        if not m:
+            return False
+        lesson = m.group(1).strip().rstrip(".!").strip()
+        if len(lesson) < 3:
+            return False
+        if lesson not in self.memories:
+            self.memories.append(lesson)
+            save_memorias(self.memories)
+        self._msg("kemy", f"Anotado! 🧠 Vou lembrar disso: \"{lesson}\".")
+        if self.speaker.available:
+            self.speaker.say("Anotado! Vou lembrar disso.")
+            self._state("speaking")
+        return True
+
+    def _memoria_prefix(self) -> str:
+        if not self.memories:
+            return ""
+        return ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
+                "(respeite SEMPRE, isso vale mais que regras gerais):\n- "
+                + "\n- ".join(self.memories[-40:]) + "\n\n")
 
     def _process(self, text: str) -> None:
         try:
@@ -3228,13 +3284,14 @@ class WebApi:
         for e in (it.get("log") if it else []) or []:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
         web = self._web_context(text)
+        mem = self._memoria_prefix()
         if not build:
-            system = CHAT_PROMPT + (web or "")
+            system = mem + CHAT_PROMPT + (web or "")
             reply = self.llm.chat(system, msgs[-8:], max_tokens=600, fast=True)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
             return (chat or reply).strip() or "…", None
-        system = SYSTEM_PROMPT
+        system = mem + SYSTEM_PROMPT
         if current:
             system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
         if web:
