@@ -535,12 +535,16 @@ SYSTEM_PROMPT = (
     "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
     "secoes, modal/form de agendamento, abrir WhatsApp, etc.) com o JavaScript "
     "necessario. Nunca deixe href='#' sem acao nem botao sem efeito.\n"
-    "7) PROJETO WEB usa SEMPRE estes nomes: index.html, styles.css, script.js. O "
-    "index.html DEVE ter no <head> exatamente <link rel=\"stylesheet\" href=\"styles.css\"> "
-    "e antes de </body> exatamente <script src=\"script.js\"></script>. Nunca use outro "
-    "nome de css/js.\n"
-    "8) Ao alterar QUALQUER coisa de um site, reenvie SEMPRE os 3 arquivos completos "
-    "(index.html, styles.css, script.js) e consistentes entre si, para nada quebrar.\n"
+    "7) LINGUAGEM LIVRE: escolha a linguagem/framework que MELHOR resolve o pedido — "
+    "Python, Node, React, etc. Crie quantos arquivos forem necessarios, com a estrutura e os "
+    "nomes adequados. Se precisar instalar/rodar (npm, pip, python), forneca os comandos num "
+    "bloco ```kemy-run. EXCECAO: para SITE/PAGINA simples (HTML/CSS/JS puro), use SEMPRE "
+    "index.html, styles.css e script.js (com <link rel=\"stylesheet\" href=\"styles.css\"> no <head> "
+    "e <script src=\"script.js\"></script> antes de </body>) para o preview funcionar.\n"
+    "8) CODIGO BONITO e BEM PROGRAMADO (sempre): indentacao consistente, nomes claros, funcoes "
+    "pequenas e coesas, sem repeticao, comentarios curtos onde ajuda, tratamento de erros quando "
+    "fizer sentido, e boas praticas da linguagem. Nada de codigo baguncado ou pela metade. "
+    "Ao alterar um site, reenvie os arquivos afetados COMPLETOS e consistentes entre si.\n"
     "9) DESIGN nivel profissional (OBRIGATORIO, capriche muito):\n"
     "   - Importe um Google Font moderno no <head> (ex.: Poppins, Inter, Plus Jakarta Sans, Sora).\n"
     "   - Defina paleta em :root com variaveis CSS, coerente com o tema do negocio "
@@ -634,6 +638,9 @@ BUILD_HINTS = (
     "monte", "montar", "desenvolva", "construa", "edite", "editar", "altere", "alterar",
     "conserte", "corrija", "abra", "abrir", "instale", "instalar", "rode", "rodar", "execute",
     "thumb", "thumbnail", "capa", "miniatura", "logo", "imagem", "foto", "desenho", "arte",
+    "melhore", "melhora", "ajuste", "ajusta", "muda", "mude", "mudar", "deixa", "deixe",
+    "refaça", "refaca", "refatore", "estilize", "estiliza", "design", "função", "funcao",
+    "componente", "tela", "botão", "botao", "formulário", "formulario", "backend", "frontend",
 )
 
 
@@ -2827,7 +2834,7 @@ class WebApi:
             if self.window:
                 self.window.on_top = on
                 if on:
-                    mw, mh = 250, 330
+                    mw, mh = 300, 400
                     self.window.resize(mw, mh)
                     try:
                         x, y = _corner_pos(mw, mh)
@@ -3461,7 +3468,7 @@ def run_webview(host: str, port: int) -> bool:
         return False
     api = WebApi(host, port)
     win = webview.create_window(f"Kemy - Assistente ({build_tag()})", url=html.as_uri(), js_api=api,
-                                width=1100, height=780, min_size=(900, 640),
+                                width=1100, height=780, min_size=(280, 360),
                                 background_color="#070a12")
     api.window = win
 
