@@ -3306,6 +3306,29 @@ class WebApi:
             self._state("speaking")
         return True
 
+    def _auto_learn(self, text: str) -> None:
+        """Aprende sozinha: salva preferencias/correcoes na memoria, sem precisar dizer 'lembre'."""
+        t = (text or "").strip()
+        if len(t) > 160:
+            return
+        pats = [
+            r"(?i)\b(?:eu )?prefiro\s+(.+)", r"(?i)\b(?:eu )?(?:nao|n[aã]o) gosto de\s+(.+)",
+            r"(?i)\bodeio\s+(.+)", r"(?i)\bevite[a-z]*\s+(.+)", r"(?i)\b(?:nunca|jamais) (?:use|usar|faca|faça)\s+(.+)",
+            r"(?i)\bsempre (?:use|usar|faca|faça)\s+(.+)", r"(?i)\b(?:nao|n[aã]o) (?:use|usar|faca|faça|coloque)\s+(.+)",
+            r"(?i)\bnao e assim\b.*?[:,]?\s*(.+)", r"(?i)\b(?:ta|tá|esta|está) errad[oa]\b[,:]?\s*(.+)",
+        ]
+        for p in pats:
+            m = re.search(p, t)
+            if m:
+                lesson = m.group(1).strip().rstrip(".!?").strip()
+                if 2 < len(lesson) < 120 and lesson not in self.memories:
+                    # reconstrói a licao com o verbo
+                    full = t if t.lower().startswith(("prefiro", "nao", "não", "nunca", "sempre", "evite", "odeio")) else lesson
+                    self.memories.append(full[:140])
+                    save_memorias(self.memories)
+                    self._msg("sys", "🧠 Anotei essa preferência pra próxima.", store=False)
+                return
+
     def _memoria_prefix(self) -> str:
         if not self.memories:
             return ""
@@ -3346,6 +3369,7 @@ class WebApi:
         for e in (it.get("log") if it else []) or []:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
         web = self._web_context(text)
+        self._auto_learn(text)            # aprende sozinha com preferencias/correcoes
         mem = self._memoria_prefix()
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
@@ -3364,9 +3388,9 @@ class WebApi:
             "plataforma", "modulo", "módulo", "apresenta", "varios", "vários"))
         # ✨ Capricho (todas as tecnicas gratis nivel-pro):
         if self.boost:
-            plano = self._plan(text)          # 1) Planejamento
+            plano = self._plan(text)          # 1) Planejamento (raciocinio visivel)
             if plano:
-                self._msg("sys", "🧭 Planejando a melhor abordagem…", store=False)
+                self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
                 system += "\n\nPLANO A SEGUIR:\n" + plano
         if self.boost and complexo and len(self.llm.providers()) >= 2:
             self._msg("sys", "🤝 Gerando com vários modelos e juntando o melhor…", store=False)
@@ -3744,6 +3768,45 @@ class WebApi:
 
     def get_file_view(self, key: str) -> dict:
         return self._file_views.get(key, {})
+
+    def browse_project(self) -> None:
+        """Abre o explorador de código (estilo VS Code): lista os arquivos do projeto atual."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        if not base.exists():
+            self._msg("sys", "Esta conversa ainda não tem um projeto/arquivos.", store=False)
+            return
+        exts = (".html", ".htm", ".css", ".js", ".ts", ".jsx", ".tsx", ".json", ".py", ".md",
+                ".txt", ".csv", ".java", ".c", ".cpp", ".cs", ".php", ".rb", ".go", ".rs", ".sql", ".xml", ".yml")
+        files = []
+        try:
+            for p in sorted(base.rglob("*")):
+                if p.is_file() and p.suffix.lower() in exts and not p.name.startswith("_"):
+                    try:
+                        size = p.stat().st_size
+                    except Exception:
+                        size = 0
+                    files.append({"path": str(p.relative_to(base)).replace("\\", "/"), "size": size})
+                if len(files) >= 200:
+                    break
+        except Exception:
+            pass
+        if not files:
+            self._msg("sys", "Nenhum arquivo de código no projeto ainda.", store=False)
+            return
+        self._js(f"showProjectFiles({json.dumps(files)})")
+
+    def read_project_file(self, rel: str) -> dict:
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        try:
+            p = (base / rel).resolve()
+            if base.resolve() not in p.parents and p != base.resolve():
+                return {}
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            return {"path": rel, "content": content[:200000], "lang": p.suffix.lower().lstrip(".")}
+        except Exception:
+            return {}
 
     def _maybe_run(self, commands: list[str], base: Path) -> None:
         if not commands:

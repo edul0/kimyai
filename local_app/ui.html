@@ -124,6 +124,22 @@
   .dl.add{background:rgba(61,220,132,.14);color:#a8efc2}
   .dl.rem{background:rgba(255,91,110,.14);color:#ffb4bc}
   .dl.hunk{color:#7c9cff;margin-top:6px}
+  /* IDE estilo VS Code */
+  #ideModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:75;align-items:center;justify-content:center}
+  .idebox{background:#0d1117;border:1px solid var(--line);border-radius:12px;width:90%;max-width:1100px;height:82vh;display:flex;flex-direction:column;overflow:hidden}
+  .idehead{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);font-weight:700;color:var(--text);background:#161b22}
+  .idehead button{background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer}
+  .idebody{flex:1;display:flex;min-height:0}
+  .idefiles{width:230px;border-right:1px solid var(--line);overflow:auto;padding:6px;background:#0b0f14}
+  .idefile{padding:7px 10px;border-radius:6px;color:#aeb6c2;font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .idefile:hover{background:#1b2129}
+  .idefile.sel{background:#1f6feb33;color:#fff}
+  .idemain{flex:1;display:flex;flex-direction:column;min-width:0}
+  .idetitle{padding:8px 14px;border-bottom:1px solid var(--line);color:#8b949e;font-size:13px;font-family:Consolas,monospace}
+  .idepre{flex:1;overflow:auto;padding:8px 0;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.5}
+  .cline{display:flex}
+  .cn{width:50px;flex:none;text-align:right;padding-right:14px;color:#4d5566;user-select:none}
+  .cc{white-space:pre;color:#d6deeb}
   /* composer */
   .composer{padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
   .row{display:flex;gap:10px;align-items:center}
@@ -153,6 +169,7 @@
       <button class="newbtn" onclick="api('new_convo')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nova conversa</button>
       <div class="lbl">CONVERSAS</div>
       <div class="convos" id="convos"></div>
+      <button class="iconbtn" style="width:100%;justify-content:center" onclick="api('browse_project')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>Ver código</button>
       <button class="iconbtn" style="width:100%;justify-content:center" onclick="api('choose_workspace')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Escolher pasta</button>
       <button class="iconbtn" style="width:100%;justify-content:center" onclick="api('open_folder')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2"/><path d="M3 9h18l-2 9a2 2 0 0 1-2 1.6H7A2 2 0 0 1 5 18z"/></svg>Abrir pasta</button>
     </aside>
@@ -223,6 +240,15 @@
         </div>
       </div>
     </section>
+  </div>
+  <div id="ideModal">
+    <div class="idebox">
+      <div class="idehead"><span>🗂️ Código do projeto</span><button onclick="closeIde()">✕</button></div>
+      <div class="idebody">
+        <div class="idefiles" id="ideFiles"></div>
+        <div class="idemain"><div class="idetitle" id="ideTitle">selecione um arquivo</div><div class="idepre" id="ideContent"></div></div>
+      </div>
+    </div>
   </div>
   <div id="codeModal">
     <div class="codebox">
@@ -296,6 +322,32 @@
     });
   }
   function closeCode(){ document.getElementById('codeModal').style.display='none'; }
+  function showProjectFiles(list){
+    var box=document.getElementById('ideFiles'); box.innerHTML='';
+    (list||[]).forEach(function(f){
+      var d=document.createElement('div'); d.className='idefile'; d.textContent=f.path; d.title=f.path;
+      d.onclick=function(){ document.querySelectorAll('.idefile').forEach(function(x){x.classList.remove('sel');}); d.classList.add('sel'); viewProjectFile(f.path); };
+      box.appendChild(d);
+    });
+    document.getElementById('ideModal').style.display='flex';
+    if(list&&list.length){ box.firstChild.classList.add('sel'); viewProjectFile(list[0].path); }
+  }
+  function viewProjectFile(rel){
+    if(!(window.pywebview&&pywebview.api&&pywebview.api.read_project_file))return;
+    pywebview.api.read_project_file(rel).then(function(v){
+      if(!v||!v.path)return;
+      document.getElementById('ideTitle').textContent=v.path;
+      var pre=document.getElementById('ideContent'); pre.innerHTML='';
+      (v.content||'').split('\n').forEach(function(ln,i){
+        var row=document.createElement('div'); row.className='cline';
+        var n=document.createElement('span'); n.className='cn'; n.textContent=(i+1);
+        var c=document.createElement('span'); c.className='cc'; c.textContent=(ln!==''?ln:' ');
+        row.appendChild(n); row.appendChild(c); pre.appendChild(row);
+      });
+      pre.scrollTop=0;
+    });
+  }
+  function closeIde(){ document.getElementById('ideModal').style.display='none'; }
   function renderConvos(list,active){
     const box=document.getElementById("convos"); box.innerHTML="";
     list.forEach(it=>{
