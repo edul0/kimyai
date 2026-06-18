@@ -1041,7 +1041,16 @@ class LLMClient:
             return f"OpenRouter · {self.openrouter_models[0]}"
         return "IA"
 
-    def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False) -> str:
+    def providers(self) -> list[str]:
+        out = []
+        for name, key in (("cerebras", self.cerebras), ("groq", self.groq), ("gemini", self.gemini),
+                          ("openrouter", self.openrouter), ("openai", self.openai), ("anthropic", self.anthropic)):
+            if key:
+                out.append(name)
+        return out
+
+    def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False,
+             prefer: str = "") -> str:
         errors: list[str] = []
         # fast=True (bate-papo/voz) usa modelos menores e rapidos; senao usa os de codigo.
         cb_models = self.cerebras_fast if fast else self.cerebras_models
@@ -1075,6 +1084,8 @@ class LLMClient:
         if self.openrouter:
             add("openrouter", self.openrouter_models, lambda m: (lambda: self._openai_compat(
                 "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages, max_tokens)))
+        if prefer:  # revisao cruzada: tenta um provedor diferente primeiro
+            attempts.sort(key=lambda a: 0 if a[0] == prefer else 1)
         for prov, model, fn in attempts:
             try:
                 res = fn()
@@ -3307,13 +3318,29 @@ class WebApi:
             system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
         if web:
             system += web
-        reply = self.llm.chat(system, msgs[-10:], max_tokens=16000)
-        # ✨ Capricho: autorrevisao (self-refine) — a Kemy critica e melhora o proprio codigo.
+        hist = msgs[-10:]
+        complexo = len(text) > 70 or any(k in text.lower() for k in (
+            "app", "sistema", "erp", "jogo", "game", "dashboard", "completo", "crud",
+            "plataforma", "modulo", "módulo", "apresenta", "varios", "vários"))
+        # ✨ Capricho (todas as tecnicas gratis nivel-pro):
         if self.boost:
-            reply = self._refine(system, msgs[-10:], text, reply)
+            plano = self._plan(text)          # 1) Planejamento
+            if plano:
+                self._msg("sys", "🧭 Planejando a melhor abordagem…", store=False)
+                system += "\n\nPLANO A SEGUIR:\n" + plano
+        if self.boost and complexo and len(self.llm.providers()) >= 2:
+            self._msg("sys", "🤝 Gerando com vários modelos e juntando o melhor…", store=False)
+            reply = self._moa(system, hist, text)        # 2) Mixture of Agents
+        else:
+            reply = self.llm.chat(system, hist, max_tokens=16000)
+        if self.boost:
+            self._msg("sys", "🔍 Revisando o código (olhar de sênior)…", store=False)
+            reply = self._refine(system, hist, text, reply)   # 3) Revisao cruzada
         files, chat = parse_llm_files(reply)
         self._apply_edits(parse_edits(reply), base)  # edicoes cirurgicas (search/replace)
         save = self._save(files, base)
+        if self.boost:
+            self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
@@ -3337,14 +3364,87 @@ class WebApi:
             {"role": "user", "content": "Revise com olhar critico de senior e reentregue a VERSAO FINAL, "
              "completa, funcional e bonita. Se ja estiver perfeita, devolva igual."},
         ]
+        provs = self.llm.providers()
+        prefer = provs[1] if len(provs) > 1 else ""   # outro modelo = olhar fresco (revisao cruzada)
         try:
-            improved = self.llm.chat(review_sys, rmsgs, max_tokens=16000)
-            # so usa a revisao se veio conteudo util (arquivos/edits); senao mantem o rascunho
+            improved = self.llm.chat(review_sys, rmsgs, max_tokens=16000, prefer=prefer)
             if improved and (FILE_RE.search(improved) or EDIT_RE.search(improved) or len(improved) > 200):
                 return improved
         except Exception:
             pass
         return draft
+
+    def _plan(self, text: str) -> str:
+        """Planejamento (chain-of-thought): plano objetivo antes de codar."""
+        try:
+            psys = ("Voce e um engenheiro senior. Em ate 8 linhas, faca um PLANO objetivo para atender o "
+                    "pedido: quais arquivos criar/editar, a abordagem/biblioteca e os passos. So o plano, sem codigo.")
+            return self.llm.chat(psys, [{"role": "user", "content": text}], max_tokens=500, fast=True)
+        except Exception:
+            return ""
+
+    def _moa(self, system: str, msgs: list, text: str) -> str:
+        """Mixture of Agents: 2 modelos geram, um terceiro junta o melhor dos dois."""
+        provs = self.llm.providers()
+        drafts = []
+        for prov in provs[:2]:
+            try:
+                d = self.llm.chat(system, msgs, max_tokens=16000, prefer=prov)
+                if d:
+                    drafts.append(d)
+            except Exception:
+                pass
+        if len(drafts) < 2:
+            return drafts[0] if drafts else self.llm.chat(system, msgs, max_tokens=16000)
+        synth_sys = (system + "\n\nVoce recebeu DUAS solucoes de modelos diferentes para o mesmo pedido. "
+                     "Combine o MELHOR de cada uma numa unica VERSAO FINAL superior — mais completa, correta e "
+                     "bonita — no mesmo formato. Nao comente, so entregue a versao final.")
+        smsgs = list(msgs) + [
+            {"role": "user", "content": text},
+            {"role": "assistant", "content": "SOLUCAO A:\n" + drafts[0][:9000]},
+            {"role": "assistant", "content": "SOLUCAO B:\n" + drafts[1][:9000]},
+            {"role": "user", "content": "Junte o melhor das duas e entregue a versao final unica e impecavel."},
+        ]
+        try:
+            return self.llm.chat(synth_sys, smsgs, max_tokens=16000)
+        except Exception:
+            return drafts[0]
+
+    def _run_and_fix(self, base: Path, text: str, max_iters: int = 2) -> None:
+        """Loop agentico: roda o codigo Python, le o erro e conserta sozinha (estilo Codex)."""
+        pys = list(base.glob("*.py"))
+        if not pys:
+            return
+        main = next((p for p in pys if p.name in ("main.py", "app.py", "run.py")), pys[0])
+        for i in range(max_iters):
+            err = None
+            for pyexe in ("python", "py", "python3"):
+                try:
+                    proc = subprocess.run([pyexe, str(main)], cwd=str(base),
+                                          capture_output=True, text=True, timeout=20)
+                    err = (proc.stderr or "").strip()
+                    if proc.returncode == 0 or "Traceback" not in err:
+                        if i > 0:
+                            self._msg("sys", "✅ Testei e corrigi: roda sem erro agora.", store=False)
+                        return
+                    break
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    return
+            if err is None:   # sem Python instalado
+                return
+            self._msg("sys", f"🐞 Testei o código e deu erro — corrigindo sozinha (tentativa {i+1})…", store=False)
+            ctx = read_project_files(base)
+            fsys = SYSTEM_PROMPT + "\n\nO CODIGO DEU ERRO AO RODAR. Conserte de forma cirurgica com <<<EDIT>>>."
+            fmsgs = [{"role": "user", "content": f"Pedido: {text}\n\nARQUIVOS:\n{ctx}\n\nERRO ao rodar "
+                      f"{main.name}:\n{err[-1800:]}\n\nConserte o bug e entregue so as edicoes."}]
+            try:
+                r = self.llm.chat(fsys, fmsgs, max_tokens=12000)
+            except Exception:
+                return
+            self._apply_edits(parse_edits(r), base)
+            self._save(parse_llm_files(r)[0], base)
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
         """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
