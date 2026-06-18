@@ -3438,6 +3438,10 @@ class WebApi:
             return
         if self._maybe_learn_topic(text):   # "aprenda sobre X / estude X" -> RAG de conhecimento
             return
+        if re.match(r"(?i)^(?:desfaz|desfaça|desfaca|desfazer|undo|volta[r]? (?:a|pra|para) (?:versao|versão) anterior|volta atras|volta atrás)\b", text.strip()):
+            self.git_undo()
+            self._state("idle")
+            return
         self.busy = True
         self._state("thinking")
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
@@ -3709,7 +3713,8 @@ class WebApi:
             self._msg("sys", "🔍 Revisando o código (olhar de sênior)…", store=False)
             reply = self._refine(system, hist, text, reply)   # 3) Revisao cruzada
         files, chat = parse_llm_files(reply)
-        self._apply_edits(parse_edits(reply), base)  # edicoes cirurgicas (search/replace)
+        edits0 = parse_edits(reply)
+        self._apply_edits(edits0, base)  # edicoes cirurgicas (search/replace)
         save = self._save(files, base)
         if self.boost:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
@@ -3718,6 +3723,9 @@ class WebApi:
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
         self._maybe_make_pdf(base, text, files)
+        self._maybe_tests(base, text)                    # 5) Testes automaticos
+        if files or edits0:
+            self._git_snapshot(base, "kemy: " + text[:60])   # 6) Git: foto pra desfazer
         return chat or "Feito.", save
 
     def _refine(self, system: str, msgs: list, user_text: str, draft: str) -> str:
@@ -3817,6 +3825,116 @@ class WebApi:
                 return
             self._apply_edits(parse_edits(r), base)
             self._save(parse_llm_files(r)[0], base)
+
+    # ---- Git (versionamento / desfazer) ----
+    def _git(self, base: Path, args: list, timeout: int = 25):
+        try:
+            p = subprocess.run(["git"] + args, cwd=str(base), capture_output=True, text=True, timeout=timeout)
+            return p.returncode, (p.stdout or "") + (p.stderr or "")
+        except Exception:
+            return 1, ""
+
+    def _git_snapshot(self, base: Path, msg: str) -> None:
+        """Salva uma 'foto' (commit) do projeto para dar pra desfazer depois."""
+        if not base.exists():
+            return
+        rc, _ = self._git(base, ["rev-parse", "--is-inside-work-tree"])
+        if rc != 0:
+            if self._git(base, ["init"])[0] != 0:
+                return  # git nao instalado
+            self._git(base, ["config", "user.email", "kemy@local"])
+            self._git(base, ["config", "user.name", "Kemy"])
+        self._git(base, ["add", "-A"])
+        self._git(base, ["commit", "-m", (msg[:80] or "kemy: alteracao")])
+
+    def git_undo(self) -> None:
+        """Desfaz a última alteração (volta ao commit anterior)."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        rc, _ = self._git(base, ["rev-parse", "--is-inside-work-tree"])
+        if rc != 0:
+            self._msg("sys", "Não há histórico (Git) pra desfazer neste projeto ainda.", store=False)
+            return
+        _, cnt = self._git(base, ["rev-list", "--count", "HEAD"])
+        try:
+            n = int(cnt.strip())
+        except Exception:
+            n = 0
+        if n >= 2:
+            self._git(base, ["reset", "--hard", "HEAD~1"])
+            self._msg("sys", "↩️ Desfeito! Voltei o projeto pra versão anterior.", store=False)
+        elif n == 1:
+            self._git(base, ["reset", "--hard", "HEAD"])
+            self._msg("sys", "↩️ Descartei as alterações não salvas.", store=False)
+        else:
+            self._msg("sys", "Sem versão anterior pra voltar.", store=False)
+        idx = base / "index.html"
+        if idx.exists():
+            try:
+                webbrowser.open(idx.as_uri())
+            except Exception:
+                pass
+
+    def _maybe_tests(self, base: Path, text: str) -> None:
+        """Gera e roda testes (pytest/unittest) quando o usuario pede, e tenta corrigir falhas."""
+        if not any(k in text.lower() for k in ("teste", "testes", "unit test", "pytest", "testar o codigo", "testar o código")):
+            return
+        pys = [p for p in base.glob("*.py") if not p.name.lower().startswith("test")]
+        if not pys:
+            return
+        self._msg("sys", "🧪 Escrevendo e rodando testes…", store=False)
+        ctx = read_project_files(base)
+        tsys = (SYSTEM_PROMPT + "\n\nEscreva TESTES automatizados (pytest, ou unittest da stdlib se pytest nao "
+                "existir) cobrindo as funcoes principais. Entregue o arquivo test_app.py completo no formato "
+                "<<<FILE: test_app.py>>>...<<<END>>>. So o arquivo de teste.")
+        try:
+            r = self.llm.chat(tsys, [{"role": "user", "content": f"Pedido: {text}\n\nCODIGO:\n{ctx}\n\n"
+                                      "Escreva testes que cobrem o comportamento principal."}], max_tokens=8000)
+            self._save(parse_llm_files(r)[0], base)
+        except Exception:
+            return
+        out = self._run_tests(base)
+        if out is None:
+            self._msg("sys", "🧪 Testes criados. (Instale o Python/pytest pra eu rodá-los — com Auto eu instalo.)", store=False)
+            return
+        passed = ("passed" in out.lower() or "ok" in out.lower()) and "fail" not in out.lower() and "error" not in out.lower()
+        self._msg("sys", f"🧪 Testes:\n{out[:600]}", store=False)
+        if not passed and self.boost:
+            self._msg("sys", "🐞 Teste falhou — corrigindo…", store=False)
+            ctx2 = read_project_files(base)
+            fsys = SYSTEM_PROMPT + "\n\nOs TESTES FALHARAM. Conserte o codigo (nao os testes) com <<<EDIT>>>."
+            try:
+                r2 = self.llm.chat(fsys, [{"role": "user", "content": f"ARQUIVOS:\n{ctx2}\n\nSAIDA DOS TESTES:\n{out[-1500:]}\n\nConserte."}], max_tokens=10000)
+                self._apply_edits(parse_edits(r2), base)
+                self._save(parse_llm_files(r2)[0], base)
+                out2 = self._run_tests(base)
+                if out2:
+                    self._msg("sys", f"🧪 Após correção:\n{out2[:500]}", store=False)
+            except Exception:
+                pass
+
+    def _run_tests(self, base: Path):
+        for cmd in (["python", "-m", "pytest", "-q"], ["py", "-m", "pytest", "-q"], ["python3", "-m", "pytest", "-q"]):
+            try:
+                p = subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=60)
+                o = ((p.stdout or "") + (p.stderr or "")).strip()
+                if "No module named pytest" in o:
+                    # tenta unittest
+                    break
+                return o or "(sem saída)"
+            except FileNotFoundError:
+                continue
+            except Exception:
+                return None
+        for cmd in (["python", "-m", "unittest", "discover", "-q"], ["py", "-m", "unittest", "discover", "-q"]):
+            try:
+                p = subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=60)
+                return ((p.stdout or "") + (p.stderr or "")).strip() or "(sem saída)"
+            except FileNotFoundError:
+                continue
+            except Exception:
+                return None
+        return None
 
     def _wants_agent(self, text: str) -> bool:
         t = (text or "").lower()
