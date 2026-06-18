@@ -2523,27 +2523,32 @@ class WebApi:
 
     # ----- janela / desktop companion -----
     def show_main(self) -> None:
-        try:
-            if self.window:
-                self.window.show()
-                try:
-                    self.window.restore()  # desminimiza e traz pra frente
-                except Exception:
-                    pass
-                try:
-                    self.window.on_top = True
-                    self.window.on_top = False
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # roda numa thread para nao travar quando chamado de um clique (deadlock)
+        def _do() -> None:
+            try:
+                if self.window:
+                    self.window.show()
+                    try:
+                        self.window.restore()
+                    except Exception:
+                        pass
+                    try:
+                        self.window.on_top = True
+                        self.window.on_top = False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True).start()
 
     def hide_main(self) -> None:
-        try:
-            if self.window:
-                self.window.hide()
-        except Exception:
-            pass
+        def _do() -> None:
+            try:
+                if self.window:
+                    self.window.hide()
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True).start()
 
     def quit_app(self) -> None:
         self._quitting = True
@@ -2881,9 +2886,12 @@ class WebApi:
         threading.Thread(target=_run, daemon=True).start()
 
     def toggle_overlay(self) -> None:
-        """Modo mini: só a VTuber, pequena num canto, sempre por cima, ouvindo em tempo real."""
+        """Modo mini: só a VTuber, pequena num canto, sempre por cima, ouvindo.
+        As operacoes de janela rodam numa THREAD para nao travar a UI (deadlock)."""
         self._overlay = not getattr(self, "_overlay", False)
-        on = self._overlay
+        threading.Thread(target=self._apply_overlay, args=(self._overlay,), daemon=True).start()
+
+    def _apply_overlay(self, on: bool) -> None:
         self._js(f"setOverlay({json.dumps(on)})")
         try:
             if self.window:
@@ -2898,10 +2906,6 @@ class WebApi:
                         pass
                 else:
                     self.window.resize(1100, 780)
-                    try:
-                        self.window.move(120, 80)
-                    except Exception:
-                        pass
         except Exception:
             pass
         if on:
@@ -2910,7 +2914,7 @@ class WebApi:
                 self._js("setToggle('conv',true)")
                 if self.connected and not self.busy:
                     self.listen()
-            self._msg("sys", "🖥️ Modo mini ligado: fico pequena no canto, por cima de tudo, te ouvindo. Pra eu ver sua tela é só pedir 'olha minha tela'. Clique de novo pra voltar ao normal.", store=False)
+            self._msg("sys", "🖥️ Modo mini ligado: fico no canto, por cima, te ouvindo. Clique no X (ou no Mini) pra voltar.", store=False)
         else:
             self._msg("sys", "Modo mini desligado.", store=False)
 
