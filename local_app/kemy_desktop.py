@@ -376,8 +376,9 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
     branco com contorno preto grosso, eco glitch e aberracao cromatica (cyan/magenta)."""
     from PIL import Image, ImageDraw
     prompt = ((scene or "").strip() or "anime character") + (
-        ", clean anime illustration, vibrant, high contrast, sharp lineart, simple light background, "
-        "youtube thumbnail, eye-catching, high quality")
+        ", clean anime illustration, vibrant colors, high contrast, sharp lineart, dynamic pose, "
+        "character placed on the RIGHT side of the frame looking at viewer, the LEFT side is simple "
+        "uncluttered background with empty space for a title, youtube thumbnail, high quality")
     tmp = dest.parent / ("_bg_" + dest.name)
     if not download_image(prompt, tmp, "1280x720"):
         return False
@@ -387,40 +388,44 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
         return False
     title = (title or "").strip().upper()
     if title:
+        # leve escurecimento na ESQUERDA para o texto destacar (gradiente lateral)
+        grad = Image.new("L", (1280, 1), 0)
+        for xx in range(1280):
+            grad.putpixel((xx, 0), int(150 * max(0, (640 - xx) / 640)))
+        grad = grad.resize((1280, 720))
+        img = Image.composite(Image.new("RGBA", img.size, (8, 8, 16, 255)), img, grad)
         d0 = ImageDraw.Draw(img)
-        size, lines, font = 160, [title], None
-        while size >= 54:
+        area_w = 600                      # area de texto na esquerda
+        size, lines, font = 130, [title], None
+        while size >= 44:
             font = _thumb_font(size)
-            lines = _wrap_to_width(d0, title, font, 1140)
-            if len(lines) <= 2 and int(size * 1.05) * len(lines) <= 300:
+            lines = _wrap_to_width(d0, title, font, area_w)
+            if int(size * 1.04) * len(lines) <= 560:
                 break
-            size -= 8
-        line_h = int(size * 1.05)
-        y = int(720 * 0.16)            # titulo na parte de cima
-        stroke = max(8, size // 8)
+            size -= 6
+        line_h = int(size * 1.04)
+        total_h = line_h * len(lines)
+        y0 = (720 - total_h) // 2          # centralizado verticalmente
+        x_left = 52
+        stroke = max(7, size // 9)
 
         def _layer(dx, dy, fill, alpha=255):
             lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
             dd = ImageDraw.Draw(lay)
-            yy = y + dy
+            yy = y0 + dy
             for ln in lines:
-                w = dd.textlength(ln, font=font)
-                dd.text(((1280 - w) / 2 + dx, yy), ln, font=font, fill=fill + (alpha,))
+                dd.text((x_left + dx, yy), ln, font=font, fill=fill + (alpha,))
                 yy += line_h
             return lay
 
-        # eco glitch (copias fantasma deslocadas atras)
-        for off, a in ((30, 45), (20, 70), (11, 100)):
-            img.alpha_composite(_layer(-off, -off // 2, (60, 60, 60), a))
-        # aberracao cromatica (cyan a esquerda, magenta a direita)
+        for off, a in ((26, 45), (16, 70), (9, 100)):
+            img.alpha_composite(_layer(-off, -off // 2, (50, 50, 50), a))
         img.alpha_composite(_layer(-6, 0, (0, 220, 255), 170))
         img.alpha_composite(_layer(6, 0, (255, 0, 110), 170))
-        # texto principal branco com contorno preto grosso
         draw = ImageDraw.Draw(img)
-        yy = y
+        yy = y0
         for ln in lines:
-            w = draw.textlength(ln, font=font)
-            draw.text(((1280 - w) / 2, yy), ln, font=font, fill="#FFFFFF",
+            draw.text((x_left, yy), ln, font=font, fill="#FFFFFF",
                       stroke_width=stroke, stroke_fill=(8, 8, 8))
             yy += line_h
     img = img.convert("RGB")
