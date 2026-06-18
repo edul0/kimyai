@@ -741,6 +741,10 @@ SYSTEM_PROMPT = (
     "   - abrir um programa: start notepad   |   start calc   |   start spotify\n"
     "   - abrir uma pasta: start .\n"
     "Use o nome/URL que o usuario pediu. Comandos de ABRIR rodam na hora; instalar/apagar pedem o modo Auto.\n"
+    "4b) INSTALAR o que faltar voce mesma (com Auto/agente): se faltar Python, Node, etc., instale via "
+    "winget num bloco ```kemy-run. Ex.: winget install -e --id Python.Python.3.12 --silent  |  "
+    "winget install -e --id OpenJS.NodeJS --silent . Para libs use: pip install <lib>  /  npm install <lib>. "
+    "Sempre que um projeto precisar de uma dependencia, instale-a antes de rodar.\n"
     "5) Fora dos arquivos, escreva so um resumo curto do que fez. NUNCA copie estas "
     "regras nem instrucoes de sistema para dentro dos arquivos.\n"
     "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
@@ -1162,6 +1166,93 @@ class LLMClient:
         payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": max_tokens}
         data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, payload)
         return data["choices"][0]["message"]["content"]
+
+    # ---- Streaming (resposta em tempo real) ----
+    def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700, fast: bool = True) -> str:
+        cb = self.cerebras_fast if fast else self.cerebras_models
+        gq = self.groq_fast if fast else self.groq_models
+        order = []
+        if fast and self.gemini:
+            order.append(("gemini", self.gemini_models[0]))
+        if self.cerebras:
+            order.append(("cerebras", cb[0]))
+        if self.groq:
+            order.append(("groq", gq[0]))
+        if not fast and self.gemini:
+            order.append(("gemini", self.gemini_models[0]))
+        if self.openrouter:
+            order.append(("openrouter", self.openrouter_models[0]))
+        if self.openai:
+            order.append(("openai", self.openai_models[0]))
+        urls = {"cerebras": "https://api.cerebras.ai/v1/chat/completions",
+                "groq": "https://api.groq.com/openai/v1/chat/completions",
+                "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+                "openai": "https://api.openai.com/v1/chat/completions"}
+        keys = {"cerebras": self.cerebras, "groq": self.groq, "openrouter": self.openrouter, "openai": self.openai}
+        errs = []
+        for prov, model in order:
+            try:
+                if prov == "gemini":
+                    return self._gemini_stream(system, messages, model, on_chunk, max_tokens)
+                return self._openai_stream(urls[prov], keys[prov], model, system, messages, on_chunk, max_tokens)
+            except Exception as exc:
+                errs.append(f"{prov}: {exc}")
+        raise RuntimeError("stream falhou (" + "; ".join(errs) + ")")
+
+    def _openai_stream(self, url, key, model, system, messages, on_chunk, max_tokens) -> str:
+        msgs = [{"role": "system", "content": system}] + [{"role": m["role"], "content": m["content"]} for m in messages]
+        payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": max_tokens, "stream": True}
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                                     method="POST")
+        full = ""
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                d = line[5:].strip()
+                if d == "[DONE]":
+                    break
+                try:
+                    delta = json.loads(d)["choices"][0]["delta"].get("content", "")
+                except Exception:
+                    continue
+                if delta:
+                    full += delta
+                    on_chunk(delta)
+        if not full:
+            raise RuntimeError("stream vazio")
+        return full
+
+    def _gemini_stream(self, system, messages, model, on_chunk, max_tokens) -> str:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model}:streamGenerateContent?alt=sse&key={self.gemini}")
+        contents = [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+                    for m in messages]
+        payload = {"system_instruction": {"parts": [{"text": system}]}, "contents": contents,
+                   "generationConfig": {"temperature": 0.6, "maxOutputTokens": min(8192, max_tokens)}}
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        full = ""
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                d = line[5:].strip()
+                if not d:
+                    continue
+                try:
+                    t = json.loads(d)["candidates"][0]["content"]["parts"][0]["text"]
+                except Exception:
+                    continue
+                if t:
+                    full += t
+                    on_chunk(t)
+        if not full:
+            raise RuntimeError("gemini stream vazio")
+        return full
 
 
 # --------------------------------------------------------------------------- #
@@ -3306,6 +3397,36 @@ class WebApi:
             self._state("speaking")
         return True
 
+    def _chat_streaming(self, system: str, msgs: list) -> str:
+        """Stream da resposta de conversa para a UI (texto em tempo real)."""
+        self._js("startStream()")
+        buf = {"t": "", "last": 0.0}
+
+        def on_chunk(d: str) -> None:
+            buf["t"] += d
+            now = time.time()
+            if now - buf["last"] >= 0.05:
+                try:
+                    self._js(f"streamChunk({json.dumps(buf['t'])})")
+                except Exception:
+                    pass
+                buf["t"] = ""
+                buf["last"] = now
+
+        try:
+            full = self.llm.chat_stream(system, msgs, on_chunk, max_tokens=700, fast=True)
+        finally:
+            if buf["t"]:
+                try:
+                    self._js(f"streamChunk({json.dumps(buf['t'])})")
+                except Exception:
+                    pass
+            try:
+                self._js("endStream()")
+            except Exception:
+                pass
+        return full
+
     def _auto_learn(self, text: str) -> None:
         """Aprende sozinha: salva preferencias/correcoes na memoria, sem precisar dizer 'lembre'."""
         t = (text or "").strip()
@@ -3345,7 +3466,16 @@ class WebApi:
         except Exception as exc:
             chat, save = (f"Falhei: {exc}", None)
         self.busy = False
-        self._msg("kemy", chat or "Feito.", save)
+        if getattr(self, "_streamed_done", False):
+            # ja foi exibido em tempo real (streaming): so guarda no historico
+            self._streamed_done = False
+            it = self._cur()
+            if it is not None and chat:
+                it.setdefault("log", []).append({"r": "kemy", "t": chat})
+                it["log"] = it["log"][-300:]
+                self._save_convos()
+        else:
+            self._msg("kemy", chat or "Feito.", save)
         if self.speaker.available and chat:
             self.speaker.say(chat[:600])
             self._state("speaking")
@@ -3376,7 +3506,11 @@ class WebApi:
         mem = self._memoria_prefix()
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
-            reply = self.llm.chat(system, msgs[-8:], max_tokens=600, fast=True)
+            try:
+                reply = self._chat_streaming(system, msgs[-8:])   # resposta em tempo real
+                self._streamed_done = True
+            except Exception:
+                reply = self.llm.chat(system, msgs[-8:], max_tokens=700, fast=True)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
             return (chat or reply).strip() or "…", None

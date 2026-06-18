@@ -290,6 +290,13 @@
     c.appendChild(d); c.scrollTop=c.scrollHeight;
   }
   function clearChat(){document.getElementById("chat").innerHTML="";}
+  var _streamEl=null;
+  function startStream(){ var c=document.getElementById("chat");
+    _streamEl=document.createElement("div"); _streamEl.className="msg kemy"; _streamEl.textContent="";
+    c.appendChild(_streamEl); c.scrollTop=c.scrollHeight; }
+  function streamChunk(delta){ if(!_streamEl)startStream();
+    _streamEl.textContent+=delta; var c=document.getElementById("chat"); c.scrollTop=c.scrollHeight; }
+  function endStream(){ _streamEl=null; }
   function showFiles(list){
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg sys filechips";
