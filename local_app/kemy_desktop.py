@@ -290,9 +290,10 @@ def extract_thumb_requests(text: str) -> list[dict]:
             title = parts[0]
             scene = parts[1] if len(parts) > 1 else ""
             fname = parts[2] if len(parts) > 2 and parts[2] else "thumbnail.png"
+            style = (parts[3].lower() if len(parts) > 3 and parts[3] else "anime")
             if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
                 fname += ".png"
-            reqs.append({"title": title, "scene": scene, "file": fname})
+            reqs.append({"title": title, "scene": scene, "file": fname, "style": style})
     return reqs
 
 
@@ -371,13 +372,50 @@ def _wrap_to_width(draw, text: str, font, max_w: int) -> list:
     return lines
 
 
-def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
+# Presets de estilo de thumbnail (fonte + CSS do titulo + estilo de arte).
+THUMB_STYLES = {
+    "anime": {
+        "font": "Anton",
+        "art": "clean anime illustration, vibrant colors, sharp lineart, dynamic expressive pose",
+        "css": ("color:#fff;-webkit-text-stroke:8px #0b0b0b;paint-order:stroke fill;"
+                "text-shadow:6px 0 0 #ff0066,-6px 0 0 #00e0ff,"
+                "11px 8px 0 rgba(60,60,60,.55),22px 16px 0 rgba(60,60,60,.30),0 0 28px rgba(0,0,0,.45)"),
+    },
+    "gamer": {
+        "font": "Anton",
+        "art": "epic gaming scene, dramatic neon lighting, ultra vibrant, high contrast, intense action",
+        "css": ("color:#ffe100;-webkit-text-stroke:9px #0a0a0a;paint-order:stroke fill;"
+                "text-shadow:0 0 18px #00ff6a,5px 5px 0 #b80000,-3px 0 0 #00e0ff,"
+                "14px 12px 0 rgba(0,0,0,.45)"),
+    },
+    "neon": {
+        "font": "Anton",
+        "art": "futuristic cyberpunk neon scene, glowing lights, dark moody background, high contrast",
+        "css": ("color:#fff;-webkit-text-stroke:5px #06000f;paint-order:stroke fill;"
+                "text-shadow:0 0 12px #00e0ff,0 0 24px #00e0ff,0 0 40px #b000ff,4px 0 0 #ff007a"),
+    },
+    "minimal": {
+        "font": "Montserrat",
+        "art": "clean minimal background, soft lighting, lots of negative space, elegant, modern",
+        "css": ("color:#fff;font-weight:900;-webkit-text-stroke:0;"
+                "text-shadow:0 6px 22px rgba(0,0,0,.55)"),
+    },
+}
+THUMB_STYLES["minimalista"] = THUMB_STYLES["minimal"]
+THUMB_STYLES["padrao"] = THUMB_STYLES["anime"]
+THUMB_FONT_IMPORT = {
+    "Anton": "family=Anton",
+    "Montserrat": "family=Montserrat:wght@900",
+}
+
+
+def make_thumbnail(title: str, scene: str, dest: Path, style: str = "anime") -> bool:
     """Thumbnail profissional: arte Flux + texto composto em HTML/CSS (fontes Google + efeitos)
     renderizado em PNG pelo navegador headless. Cai para o PIL se nao tiver navegador."""
-    prompt = ((scene or "").strip() or "anime character") + (
-        ", clean anime illustration, vibrant colors, high contrast, sharp lineart, dynamic pose, "
-        "character placed on the RIGHT side of the frame looking at viewer, the LEFT side is simple "
-        "uncluttered background with empty space for a title, youtube thumbnail, high quality")
+    preset = THUMB_STYLES.get((style or "anime").lower(), THUMB_STYLES["anime"])
+    prompt = ((scene or "").strip() or "anime character") + ", " + preset["art"] + (
+        ", character/subject placed on the RIGHT side of the frame, the LEFT side simple and "
+        "uncluttered with empty space for a title, youtube thumbnail, high quality")
     tmp = dest.parent / ("_bg_" + dest.name)
     if not download_image(prompt, tmp, "1280x720"):
         return False
@@ -385,7 +423,7 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
     try:
         art_b64 = base64.b64encode(tmp.read_bytes()).decode("ascii")
         if art_b64:
-            ok = _thumb_html(title, art_b64, dest)
+            ok = _thumb_html(title, art_b64, dest, preset)
     except Exception:
         ok = False
     if not ok:
@@ -397,24 +435,24 @@ def make_thumbnail(title: str, scene: str, dest: Path) -> bool:
     return ok
 
 
-def _thumb_html(title: str, art_b64: str, dest: Path) -> bool:
-    """Compoe a thumbnail em HTML/CSS (fonte Anton, contorno, glitch, aberracao cromatica)
-    e renderiza em PNG via navegador headless. Qualidade nivel designer."""
+def _thumb_html(title: str, art_b64: str, dest: Path, preset: dict) -> bool:
+    """Compoe a thumbnail em HTML/CSS (fonte + efeitos do preset) e renderiza em PNG
+    via navegador headless. Qualidade nivel designer."""
     t = (title or "").strip().upper().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    font = preset.get("font", "Anton")
+    font_import = THUMB_FONT_IMPORT.get(font, "family=Anton")
+    title_css = preset.get("css", "")
     html = """<!doctype html><html><head><meta charset="utf-8">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Anton&display=swap');
+@import url('https://fonts.googleapis.com/css2?__FONTIMPORT__&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:1280px;height:720px;overflow:hidden;background:#000}
-.thumb{width:1280px;height:720px;position:relative;font-family:'Anton',Impact,sans-serif;
+.thumb{width:1280px;height:720px;position:relative;font-family:'__FONT__',Impact,sans-serif;
   background:url('data:image/jpeg;base64,__ART__') center/cover no-repeat}
 .shade{position:absolute;inset:0;
   background:linear-gradient(90deg, rgba(4,4,10,.82) 0%, rgba(4,4,10,.55) 34%, rgba(4,4,10,0) 58%)}
 .wrap{position:absolute;left:54px;top:0;height:720px;width:610px;display:flex;align-items:center}
-.title{color:#fff;text-transform:uppercase;line-height:.96;letter-spacing:1px;font-weight:400;
-  -webkit-text-stroke:8px #0b0b0b;paint-order:stroke fill;
-  text-shadow:6px 0 0 #ff0066,-6px 0 0 #00e0ff,
-    11px 8px 0 rgba(60,60,60,.55),22px 16px 0 rgba(60,60,60,.30),0 0 28px rgba(0,0,0,.45)}
+.title{text-transform:uppercase;line-height:.96;letter-spacing:1px;font-weight:400;__TITLECSS__}
 </style></head><body>
 <div class="thumb"><div class="shade"></div>
 <div class="wrap"><div class="title" id="t">__TITLE__</div></div></div>
@@ -424,7 +462,8 @@ function fit(){el.style.fontSize=s+'px';
   while((el.scrollHeight>box.clientHeight-20||el.scrollWidth>box.clientWidth-6)&&s>40){s-=4;el.style.fontSize=s+'px';}}
 if(document.fonts&&document.fonts.ready){document.fonts.ready.then(fit);setTimeout(fit,1500);}else{fit();}
 </script></body></html>"""
-    html = html.replace("__ART__", art_b64).replace("__TITLE__", t)
+    html = (html.replace("__FONTIMPORT__", font_import).replace("__FONT__", font)
+            .replace("__TITLECSS__", title_css).replace("__ART__", art_b64).replace("__TITLE__", t))
     hpath = dest.parent / ("_thumb_" + dest.stem + ".html")
     try:
         hpath.write_text(html, encoding="utf-8")
@@ -761,13 +800,13 @@ SYSTEM_PROMPT = (
     "foto pelo 📎 (a Kemy ve a imagem) e descreva uma versao baseada nela, ou avise que sera uma pessoa "
     "generica. A Kemy baixa e salva a imagem automaticamente.\n"
     "13b) THUMBNAIL do YouTube (quando falar 'thumb', 'thumbnail', 'capa' ou 'miniatura'): "
-    "use um bloco ```kemy-thumb com 'TITULO | cena em INGLES | arquivo.png'. A Kemy desenha o TITULO "
-    "por cima em letra branca GRANDE com contorno preto, eco glitch e aberracao cromatica (estilo "
-    "youtuber anime br: Miyuta, Saiko, Goulart) — entao NAO inclua o texto na cena. A cena descreve so "
-    "a ARTE: de preferencia um personagem ANIME expressivo, lineart nitido, cores vibrantes, fundo claro "
-    "simples (estilo das thumbs de anime). Inclua o visual da Kemy se ela aparecer. "
-    "Ex.: REAGINDO A ISSO?! | expressive anime girl with dark twin-tails, shocked happy face, hands up, "
-    "clean vibrant anime illustration, simple light background | thumb.png\n"
+    "use um bloco ```kemy-thumb com 'TITULO | cena em INGLES | arquivo.png | ESTILO'. A Kemy compoe a "
+    "thumb profissional (titulo desenhado por cima com fonte forte, contorno e efeitos) — entao NAO inclua "
+    "o texto na cena, so descreva a ARTE (personagem/cena expressivo, do lado DIREITO). "
+    "ESTILO (4o campo) escolha conforme o video: 'anime' (padrao, glitch+cromatico), 'gamer' (amarelo, "
+    "brilho neon, intenso), 'neon' (cyberpunk brilhante), 'minimal' (limpo e elegante). "
+    "Inclua o visual canonico da Kemy se ela aparecer. "
+    "Ex.: REAGINDO A ISSO?! | expressive anime girl with dark twin-tails, shocked happy face, hands up | thumb.png | anime\n"
     "14) CONTEUDO COM MUITOS ITENS/DADOS (Pokedex, catalogo grande, lista de filmes, "
     "criptos, etc.): NUNCA escreva os dados na mao (voce trunca e fica incompleto). "
     "Em vez disso, BUSQUE de uma API publica gratuita via fetch no JavaScript e renderize "
@@ -3329,7 +3368,7 @@ class WebApi:
         ok: list[str] = []
         for r in reqs[:3]:
             dest = base / r["file"]
-            if make_thumbnail(r.get("title", ""), r.get("scene", ""), dest):
+            if make_thumbnail(r.get("title", ""), r.get("scene", ""), dest, r.get("style", "anime")):
                 ok.append(r["file"])
         if ok:
             self._msg("sys", f"🖼 Thumbnail pronta: {', '.join(ok)} (em {base})", store=False)
