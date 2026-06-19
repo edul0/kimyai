@@ -3252,6 +3252,8 @@ class WebApi:
                 files, chat = parse_llm_files(reply)
                 self._save(files, base)
                 self._localize_images(base)
+                self._ensure_scripts_linked(base)
+                self._open_preview(base)
                 msg = chat.strip() or ("Recriei a imagem em código! Veja o preview." if files
                                        else "Não consegui extrair o código da imagem, tente de novo.")
             except Exception as exc:
@@ -3778,6 +3780,7 @@ class WebApi:
         if self.boost:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
+        self._ensure_scripts_linked(base)                # garante que app.js/css carreguem no index
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
@@ -3785,6 +3788,7 @@ class WebApi:
         self._maybe_tests(base, text)                    # 5) Testes automaticos
         if files or edits0:
             self._git_snapshot(base, "kemy: " + text[:60])   # 6) Git: foto pra desfazer
+        self._open_preview(base)                         # abre o preview SEMPRE no fim
         return chat or "Feito.", save
 
     def _refine(self, system: str, msgs: list, user_text: str, draft: str) -> str:
@@ -4066,6 +4070,7 @@ class WebApi:
             self._apply_edits(edits, base)
             self._save(files, base)
             self._localize_images(base)
+            self._ensure_scripts_linked(base)
             cmds = extract_run_commands(reply)
             if cmds:
                 last_output = self._run_capture(cmds, base)
@@ -4075,9 +4080,12 @@ class WebApi:
             if "<<<DONE>>>" in reply:
                 summ = reply.split("<<<DONE>>>")[-1].strip() or chat or "Tarefa concluída!"
                 self._msg("sys", f"✅ Agente concluiu em {step} passo(s).", store=False)
+                self._open_preview(base)
                 return summ[:700] or "Pronto, tarefa concluída!"
             if not files and not edits and not cmds and step >= 2:
+                self._open_preview(base)
                 return (chat or "Acho que terminei — dá uma olhada e me diz se falta algo.")[:700]
+        self._open_preview(base)
         return "Cheguei no limite de passos. O projeto avançou bastante — me diz o que ainda falta que eu continuo."
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
@@ -4241,7 +4249,7 @@ class WebApi:
         import difflib
         if not files:
             return None
-        n, index, changed = 0, None, []
+        n, changed = 0, []
         for f in files:
             rel = str(f.get("path") or "").strip().lstrip("/\\")
             content = f.get("content")
@@ -4261,18 +4269,47 @@ class WebApi:
             except Exception:
                 continue
             n += 1
-            if index is None and rel.lower().endswith((".html", ".htm")):
-                index = dest
             changed.append(self._register_change(rel, old, new))
         if not n:
             return None
         self._show_chips(changed)
-        if index is not None:
+        return None  # preview e aberto no fim do build; chips mostram os arquivos
+
+    def _ensure_scripts_linked(self, base: Path) -> None:
+        """Garante que o index.html carregue TODOS os .js e .css do projeto (evita 'app.js que nao abre')."""
+        idx = base / "index.html"
+        if not idx.exists():
+            return
+        try:
+            html = idx.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return
+        changed = False
+        for css in sorted(base.glob("*.css")):
+            nm = css.name
+            if f'href="{nm}"' not in html and f"href='{nm}'" not in html:
+                link = f'<link rel="stylesheet" href="{nm}">'
+                html = html.replace("</head>", f"  {link}\n</head>", 1) if "</head>" in html else link + "\n" + html
+                changed = True
+        for js in sorted(base.glob("*.js")):
+            nm = js.name
+            if f'src="{nm}"' not in html and f"src='{nm}'" not in html:
+                tag = f'<script src="{nm}"></script>'
+                html = html.replace("</body>", f"  {tag}\n</body>", 1) if "</body>" in html else html + f"\n{tag}\n"
+                changed = True
+        if changed:
             try:
-                webbrowser.open(index.as_uri())
+                idx.write_text(html, encoding="utf-8")
             except Exception:
                 pass
-        return None  # os chips ja mostram os arquivos; nao duplica a mensagem "X arquivo(s)"
+
+    def _open_preview(self, base: Path) -> None:
+        idx = base / "index.html"
+        if idx.exists():
+            try:
+                webbrowser.open(idx.as_uri())
+            except Exception:
+                pass
 
     def _register_change(self, rel: str, old: str, new: str) -> dict:
         import difflib
@@ -4299,7 +4336,7 @@ class WebApi:
         """Edicao cirurgica: aplica trechos SEARCH->REPLACE nos arquivos existentes."""
         if not edits:
             return
-        changed, index = [], None
+        changed = []
         for e in edits:
             rel = str(e.get("path") or "").strip().lstrip("/\\")
             dest = base / rel
@@ -4325,16 +4362,9 @@ class WebApi:
                 except Exception:
                     continue
                 changed.append(self._register_change(rel, old, new))
-                if index is None and rel.lower().endswith((".html", ".htm")):
-                    index = dest
             if failed:
                 self._msg("sys", f"⚠️ {rel}: {failed} trecho(s) nao bateram com o codigo atual (nao alterei essa parte).", store=False)
         self._show_chips(changed)
-        if index is not None:
-            try:
-                webbrowser.open(index.as_uri())
-            except Exception:
-                pass
 
     def get_file_view(self, key: str) -> dict:
         return self._file_views.get(key, {})
