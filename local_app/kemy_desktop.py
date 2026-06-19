@@ -4272,27 +4272,32 @@ class WebApi:
     def _gen_thumbs(self, reqs: list[dict], base: Path) -> None:
         if not reqs:
             return
-        self._msg("sys", f"🎬 Montando {len(reqs)} thumbnail(s) (arte + titulo)…", store=False)
+        self._msg("sys", "🎬 Montando 2 opções de thumbnail pra você escolher…", store=False)
         ok: list[str] = []
-        for r in reqs[:3]:
-            dest = base / r["file"]
+        for r in reqs[:2]:
+            title = r.get("title", "")
+            style = r.get("style", "anime")
             scene = r.get("scene", "")
-            ref = self._thumb_reference(f"{r.get('title','')} {scene}")   # inspira em referencias reais
+            ref = self._thumb_reference(f"{title} {scene}")   # inspira em referencias reais
             if ref:
                 self._msg("sys", "🔎 Me inspirei em thumbnails reais parecidas.", store=False)
                 scene = (scene + ", visual style inspired by: " + ref)[:420]
-            if make_thumbnail(r.get("title", ""), scene, dest, r.get("style", "anime")):
-                ok.append(r["file"])
+            stem, ext = os.path.splitext(r["file"])
+            for v in range(2):   # 2 variacoes (seeds/arte diferentes)
+                dest = base / (r["file"] if v == 0 else f"{stem}_op{v+1}{ext}")
+                if make_thumbnail(title, scene, dest, style):
+                    ok.append(dest.name)
         if ok:
-            self._msg("sys", f"🖼 Thumbnail pronta: {', '.join(ok)} (em {base})", store=False)
-            try:
-                first = base / ok[0]
-                if os.name == "nt":
-                    os.startfile(str(first))  # type: ignore[attr-defined]
-                else:
-                    webbrowser.open(first.as_uri())
-            except Exception:
-                pass
+            self._msg("sys", f"🖼 {len(ok)} opções prontas: {', '.join(ok)} — escolha a que mais gostou! (em {base})", store=False)
+            for name in ok[:4]:
+                try:
+                    p = base / name
+                    if os.name == "nt":
+                        os.startfile(str(p))  # type: ignore[attr-defined]
+                    else:
+                        webbrowser.open(p.as_uri())
+                except Exception:
+                    pass
         else:
             self._msg("sys", "Nao consegui montar a thumbnail agora (tente de novo).", store=False)
 
