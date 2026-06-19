@@ -663,6 +663,25 @@ def web_search(query: str, limit: int = 6) -> str:
         return ""
 
 
+def web_image_search(query: str, limit: int = 3) -> list:
+    """Busca imagens de referencia no DuckDuckGo (best-effort). Retorna URLs de imagens."""
+    try:
+        h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        q = urllib.parse.quote(query)
+        req = urllib.request.Request("https://duckduckgo.com/?q=" + q + "&iax=images&ia=images", headers=h)
+        page = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
+        m = re.search(r'vqd=["\']?([\w.-]+)', page)
+        if not m:
+            return []
+        vqd = m.group(1)
+        url = f"https://duckduckgo.com/i.js?l=us-en&o=json&q={q}&vqd={vqd}&f=,,,&p=1"
+        req2 = urllib.request.Request(url, headers={**h, "Referer": "https://duckduckgo.com/"})
+        data = json.loads(urllib.request.urlopen(req2, timeout=15).read().decode("utf-8", "ignore"))
+        return [it["image"] for it in (data.get("results") or [])[:limit] if it.get("image")]
+    except Exception:
+        return []
+
+
 def extract_code_files(text: str) -> list[dict]:
     files: list[dict] = []
     if not text:
@@ -3759,8 +3778,16 @@ class WebApi:
         complexo = len(text) > 70 or any(k in text.lower() for k in (
             "app", "sistema", "erp", "jogo", "game", "dashboard", "completo", "crud",
             "plataforma", "modulo", "módulo", "apresenta", "varios", "vários"))
+        design_req = any(k in text.lower() for k in (
+            "site", "página", "pagina", "landing", "app", "dashboard", "ui", "interface",
+            "design", "portfolio", "portfólio", "loja", "ecommerce", "blog", "jogo", "game"))
         # ✨ Capricho (todas as tecnicas gratis nivel-pro):
         if self.boost:
+            if design_req:                    # 0) Pesquisa REFERENCIAS antes (como um pro)
+                self._msg("sys", "🔎 Pesquisando referências e boas práticas…", store=False)
+                refs = self._research_references(text)
+                if refs:
+                    system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + refs
             plano = self._plan(text)          # 1) Planejamento (raciocinio visivel)
             if plano:
                 self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
@@ -4199,6 +4226,49 @@ class WebApi:
         else:
             self._msg("sys", "Nao consegui gerar a imagem agora (tente de novo).", store=False)
 
+    def _thumb_reference(self, topic: str) -> str:
+        """Olha thumbnails reais parecidas e extrai o estilo (como um designer faz)."""
+        if not self.llm.gemini:
+            return ""
+        try:
+            urls = web_image_search((topic or "").strip()[:80] + " youtube thumbnail", 3)
+            for u in urls[:3]:
+                try:
+                    req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                    data = urllib.request.urlopen(req, timeout=12).read()
+                    if len(data) < 2000 or len(data) > 6_000_000:
+                        continue
+                    mime = "image/png" if u.lower().split("?")[0].endswith(".png") else "image/jpeg"
+                    b64 = base64.b64encode(data).decode("ascii")
+                    style = self.llm.vision(
+                        "Esta e uma thumbnail de referencia. Descreva em INGLES, em UMA frase curta, o estilo "
+                        "visual (cores dominantes, composicao, expressao/emocao, energia) para eu recriar algo "
+                        "no mesmo estilo. So a frase, sem rodeios.", b64, mime)
+                    if style and 5 < len(style) < 400:
+                        return style.strip().replace("\n", " ")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return ""
+
+    def _research_references(self, text: str) -> str:
+        """Pesquisa referencias/melhores praticas antes de construir (grounding)."""
+        try:
+            results = web_search(text[:80] + " design inspiration exemplos melhores praticas", 4)
+            if not results:
+                return ""
+            links = re.findall(r"\((https?://[^)]+)\)", results)[:1]
+            extra = fetch_url_text(links[0], 2500) if links else ""
+            ins = self.llm.chat(
+                "Resuma em ate 6 bullets curtos, em portugues, as melhores praticas e ideias de design/estrutura "
+                "RELEVANTES para o pedido (cores, secoes, recursos, libs). Direto, sem enrolar.",
+                [{"role": "user", "content": f"PEDIDO: {text}\n\nREFERENCIAS DA WEB:\n{(results + chr(10) + extra)[:6000]}"}],
+                max_tokens=400, fast=True)
+            return ins.strip() if ins else ""
+        except Exception:
+            return ""
+
     def _gen_thumbs(self, reqs: list[dict], base: Path) -> None:
         if not reqs:
             return
@@ -4206,7 +4276,12 @@ class WebApi:
         ok: list[str] = []
         for r in reqs[:3]:
             dest = base / r["file"]
-            if make_thumbnail(r.get("title", ""), r.get("scene", ""), dest, r.get("style", "anime")):
+            scene = r.get("scene", "")
+            ref = self._thumb_reference(f"{r.get('title','')} {scene}")   # inspira em referencias reais
+            if ref:
+                self._msg("sys", "🔎 Me inspirei em thumbnails reais parecidas.", store=False)
+                scene = (scene + ", visual style inspired by: " + ref)[:420]
+            if make_thumbnail(r.get("title", ""), scene, dest, r.get("style", "anime")):
                 ok.append(r["file"])
         if ok:
             self._msg("sys", f"🖼 Thumbnail pronta: {', '.join(ok)} (em {base})", store=False)
