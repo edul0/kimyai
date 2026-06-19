@@ -4,6 +4,9 @@
 # Sintese de voz (offline, usa SAPI5 no Windows).
 pyttsx3>=2.90
 
+# Leitura de planilhas Excel (.xlsx).
+openpyxl>=3.1
+
 # Reconhecimento de fala (microfone).
 SpeechRecognition>=3.10.0
 

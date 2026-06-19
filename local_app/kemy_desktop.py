@@ -991,6 +991,24 @@ def parse_llm_files(text: str) -> tuple[list[dict], str]:
     return files, chat
 
 
+def extract_excel(path: Path, max_rows: int = 200) -> str:
+    """Extrai os dados de uma planilha .xlsx como texto (tabela)."""
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True, data_only=True)
+        out = []
+        for ws in wb.worksheets[:4]:
+            out.append(f"# Planilha: {ws.title}")
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i >= max_rows:
+                    out.append("… (mais linhas)")
+                    break
+                out.append(" | ".join("" if c is None else str(c) for c in row))
+        return "\n".join(out)[:15000]
+    except Exception as exc:
+        return f"(nao consegui ler a planilha: {exc})"
+
+
 def read_project_files(base: Path, max_total: int = 22000) -> str:
     exts = (".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".json", ".py", ".md", ".txt")
     parts: list[str] = []
@@ -3141,27 +3159,68 @@ class WebApi:
             self._msg("sys", f"Falha ao definir a pasta: {exc}", store=False)
 
     def analyze_image(self, prompt: str = "") -> None:
-        """Deixa o usuario escolher uma imagem e a Kemy 've' e responde (visao multimodal)."""
+        # alias antigo -> agora aceita qualquer arquivo
+        self.attach_file(prompt)
+
+    def attach_file(self, prompt: str = "") -> None:
+        """Anexa QUALQUER arquivo: imagem, PDF, video, Excel, CSV/texto — a Kemy le/ve e responde."""
         try:
-            res = self.window.create_file_dialog(
-                webview_open_dialog(),
-                file_types=("Imagens (*.png;*.jpg;*.jpeg;*.webp)", "Todos (*.*)"))  # type: ignore
-        except Exception:
-            try:
-                res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
-            except Exception as exc:
-                self._msg("sys", f"Nao consegui abrir o seletor: {exc}", store=False)
-                return
+            res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
+        except Exception as exc:
+            self._msg("sys", f"Nao consegui abrir o seletor: {exc}", store=False)
+            return
         if not res:
             return
         path = Path(res[0] if isinstance(res, (list, tuple)) else res)
-        ext = path.suffix.lower().lstrip(".")
-        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                "webp": "image/webp"}.get(ext, "image/png")
-        self._msg("user", f"[imagem: {path.name}] {prompt}".strip())
+        ext = path.suffix.lower()
+        self._msg("user", f"[arquivo: {path.name}] {prompt}".strip())
         self.busy = True
         self._state("thinking")
-        threading.Thread(target=self._do_vision, args=(path, mime, prompt), daemon=True).start()
+        images = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
+        if ext in images:
+            threading.Thread(target=self._do_vision, args=(path, images[ext], prompt), daemon=True).start()
+        else:
+            threading.Thread(target=self._handle_attachment, args=(path, ext, prompt), daemon=True).start()
+
+    def _handle_attachment(self, path: Path, ext: str, prompt: str) -> None:
+        """Roteia PDF/video (Gemini nativo), Excel e texto."""
+        videos = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+                  ".avi": "video/x-msvideo", ".mkv": "video/x-matroska", ".m4v": "video/mp4"}
+        try:
+            size = path.stat().st_size
+            if ext == ".pdf" or ext in videos:
+                if not self.llm.gemini:
+                    reply = "Pra ler PDF/vídeo eu preciso da chave do Gemini configurada."
+                elif size > 18 * 1024 * 1024:
+                    reply = f"Esse arquivo é grande ({size//1024//1024}MB). O limite pra eu analisar direto é ~18MB."
+                else:
+                    mime = "application/pdf" if ext == ".pdf" else videos[ext]
+                    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+                    p = prompt or ("Resuma este documento e os pontos principais." if ext == ".pdf"
+                                   else "Descreva o que acontece neste vídeo.")
+                    reply = self.llm.vision(p, b64, mime)
+            elif ext in (".xlsx", ".xlsm"):
+                data = extract_excel(path)
+                reply = self.llm.chat(CHAT_PROMPT, [{"role": "user", "content":
+                        f"{prompt or 'Analise esta planilha e me dê os principais insights.'}\n\n"
+                        f"DADOS DA PLANILHA ({path.name}):\n{data}"}], max_tokens=2500)
+            elif ext in (".csv", ".txt", ".md", ".json", ".log", ".html", ".css", ".js", ".py", ".xml", ".yml", ".ini"):
+                content = path.read_text(encoding="utf-8", errors="ignore")[:15000]
+                reply = self.llm.chat(CHAT_PROMPT, [{"role": "user", "content":
+                        f"{prompt or 'Analise este arquivo.'}\n\nARQUIVO {path.name}:\n{content}"}], max_tokens=2500)
+            else:
+                reply = (f"Não sei ler o formato {ext or 'desconhecido'} ainda. Eu leio: imagem, PDF, vídeo, "
+                         "Excel (.xlsx), CSV e arquivos de texto/código.")
+        except Exception as exc:
+            reply = f"Não consegui ler o arquivo: {exc}"
+        self.busy = False
+        self._msg("kemy", reply)
+        if self.speaker.available and reply:
+            self.speaker.say(reply[:600])
+            self._state("speaking")
+        else:
+            self._after_speak()
 
     def _do_vision(self, path: Path, mime: str, prompt: str) -> None:
         # VISAO -> CODIGO: se pediu para recriar/clonar a imagem, ela GERA o site igual.
