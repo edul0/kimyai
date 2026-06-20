@@ -895,7 +895,10 @@ SYSTEM_PROMPT = (
     "16) NIVEL DE ENGENHARIA (estilo Codex/Claude Code): aja como um agente senior — leia os arquivos, "
     "entenda o contexto, planeje a melhor abordagem, edite de forma cirurgica e garanta que o resultado "
     "RODA e fica completo. Voce e versatil: codigo, sites, apps, jogos, imagens, thumbnails, documentos, "
-    "slides, automacao do PC, visao e voz — seja excelente em tudo."
+    "slides, automacao do PC, visao e voz — seja excelente em tudo.\n"
+    "17) PROATIVA: ao TERMINAR um projeto/tarefa, no final do resumo sugira 2-3 proximos passos curtos e "
+    "uteis (ex.: 'Quer que eu adicione um formulario de contato? Posso publicar o site no ar? Adiciono modo "
+    "escuro?'). Seja util como um colega senior, sem encher."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
@@ -3426,17 +3429,75 @@ class WebApi:
             self._msg("sys", "Modo mini desligado.", store=False)
 
     def preview(self) -> None:
-        """Abre o preview do site da conversa atual (index.html mais recente)."""
+        """Mostra o preview EMBUTIDO do site da conversa atual."""
         it = self._cur()
         base = Path(it["project"]) if it else (self.workspace_root / "projeto")
-        index = base / "index.html"
-        if not index.exists():
+        if not (base / "index.html").exists():
             self._msg("sys", "Ainda nao ha um site para visualizar nesta conversa.", store=False)
             return
+        self._open_preview(base)
+
+    def open_preview_external(self) -> None:
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        idx = base / "index.html"
+        if idx.exists():
+            try:
+                webbrowser.open(idx.as_uri())
+            except Exception:
+                pass
+
+    def deploy_site(self) -> None:
+        """Publica o site (index.html) num link público grátis (Netlify)."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        if not (base / "index.html").exists():
+            self._msg("sys", "Não há um site (index.html) pra publicar nesta conversa.", store=False)
+            self._state("idle")
+            return
+        token = (self.env_vars.get("KEMY_NETLIFY_TOKEN") or self.env_vars.get("NETLIFY_TOKEN") or "").strip()
+        if not token:
+            self._msg("kemy", "Pra publicar de graça eu uso o Netlify. Crie uma conta grátis em netlify.com → "
+                      "User settings → Applications → 'New access token' → copie. Depois me mande pelo .env: "
+                      "KEMY_NETLIFY_TOKEN=seu_token (ou pelo botão de config). Aí eu publico com 1 clique! 🚀")
+            self._state("idle")
+            return
+        self.busy = True
+        self._state("thinking")
+        threading.Thread(target=self._do_deploy, args=(base, token), daemon=True).start()
+
+    def _do_deploy(self, base: Path, token: str) -> None:
         try:
-            webbrowser.open(index.as_uri())
+            self._msg("sys", "🚀 Publicando o site no Netlify…", store=False)
+            import io
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for p in base.rglob("*"):
+                    if p.is_file() and not p.name.startswith("_") and "_bg_" not in p.name and p.suffix.lower() != ".pdf":
+                        zf.write(p, p.relative_to(base).as_posix())
+            zipdata = buf.getvalue()
+            req = urllib.request.Request("https://api.netlify.com/api/v1/sites", data=b"{}", method="POST",
+                                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            site = json.loads(urllib.request.urlopen(req, timeout=40).read().decode("utf-8"))
+            site_id = site["id"]
+            url = site.get("ssl_url") or site.get("url") or ""
+            req2 = urllib.request.Request(f"https://api.netlify.com/api/v1/sites/{site_id}/deploys",
+                                          data=zipdata, method="POST",
+                                          headers={"Authorization": f"Bearer {token}", "Content-Type": "application/zip"})
+            urllib.request.urlopen(req2, timeout=180).read()
+            self.busy = False
+            self._msg("kemy", f"🚀 Pronto! Seu site está NO AR em:\n{url}\n\nÉ só compartilhar esse link.")
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+            self._after_speak()
         except Exception as exc:
-            self._msg("sys", f"Nao consegui abrir o preview: {exc}", store=False)
+            self.busy = False
+            self._msg("kemy", f"Não consegui publicar: {exc}. Confere se o token do Netlify está certo.")
+            self._after_speak()
+
+    def import_env(self) -> None:
 
     def import_env(self) -> None:
         try:
@@ -3521,6 +3582,9 @@ class WebApi:
         if re.match(r"(?i)^(?:desfaz|desfaça|desfaca|desfazer|undo|volta[r]? (?:a|pra|para) (?:versao|versão) anterior|volta atras|volta atrás)\b", text.strip()):
             self.git_undo()
             self._state("idle")
+            return
+        if re.match(r"(?i)^(?:publi(?:que|car|ca)|deploy|hosped[ae]|coloca[r]? (?:no ar|online)|sobe[r]? o site|p[oõ]e[r]? (?:no ar|online)|coloca[r]? online)\b", text.strip()):
+            self.deploy_site()
             return
         self.busy = True
         self._state("thinking")
@@ -4384,12 +4448,16 @@ class WebApi:
                 pass
 
     def _open_preview(self, base: Path) -> None:
+        """Mostra o preview EMBUTIDO no app (iframe). 'Navegador' abre externo."""
         idx = base / "index.html"
         if idx.exists():
             try:
-                webbrowser.open(idx.as_uri())
+                self._js(f"showPreview({json.dumps(idx.as_uri())})")
             except Exception:
-                pass
+                try:
+                    webbrowser.open(idx.as_uri())
+                except Exception:
+                    pass
 
     def _register_change(self, rel: str, old: str, new: str) -> dict:
         import difflib
