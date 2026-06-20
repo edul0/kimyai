@@ -3498,8 +3498,6 @@ class WebApi:
             self._after_speak()
 
     def import_env(self) -> None:
-
-    def import_env(self) -> None:
         try:
             res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
         except Exception:
