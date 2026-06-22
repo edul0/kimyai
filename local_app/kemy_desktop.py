@@ -1155,9 +1155,11 @@ class LLMClient:
         self.cerebras = env.get("CEREBRAS_API_KEY")
         self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
         self.openrouter = env.get("OPENROUTER_API_KEY")
+        self.nvidia = env.get("NVIDIA_API_KEY") or env.get("NIM_API_KEY")
+        self.mistral = env.get("MISTRAL_API_KEY")
         self.anthropic = env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_API_KEY")
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
-                              or self.openrouter or self.anthropic)
+                              or self.openrouter or self.nvidia or self.mistral or self.anthropic)
 
         def _list(key: str, default: list[str]) -> list[str]:
             raw = (env.get(key) or "").strip()
@@ -1171,9 +1173,15 @@ class LLMClient:
         # Listas preferenciais: modelos de CODIGO/recentes primeiro, fallback estavel no fim.
         # Sobrescreva por env (CEREBRAS_MODEL, GROQ_MODEL, OPENROUTER_MODEL, GEMINI_PRIMARY_MODEL),
         # virgula-separado, na ordem de preferencia.
-        self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "llama-3.3-70b"])
-        self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
-        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct"])
+        self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
+        self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
+        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "deepseek/deepseek-chat-v3.1:free"])
+        # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. Modelos abertos fortes (sem Llama).
+        self.nvidia_models = _list("NVIDIA_MODEL", ["qwen/qwen2.5-coder-32b-instruct", "deepseek-ai/deepseek-v3.1", "qwen/qwen3-235b-a22b"])
+        self.nvidia_fast = _list("NVIDIA_FAST", ["qwen/qwen2.5-coder-32b-instruct", "qwen/qwen3-235b-a22b", "deepseek-ai/deepseek-v3.1"])
+        # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
+        self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
+        self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
         # Padrao GRATIS: Gemini 3 Flash (free tier, sem faturamento) e o melhor flash gratuito;
         # cai para 2.5/2.0 Flash se o ID nao existir na conta. O Gemini 3.1 PRO via API e PAGO
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
@@ -1184,8 +1192,8 @@ class LLMClient:
         self.claude_fast = _list("CLAUDE_FAST", ["claude-haiku-4-5-20251001", "claude-3-5-haiku-latest"])
         # Modelos para bate-papo/voz: inteligentes E rapidos (GPT-OSS 120B segura bem o
         # contexto e responde em ~1-2s); Llama so como ultimo fallback.
-        self.cerebras_fast = _list("CEREBRAS_FAST", ["gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507", "llama-3.3-70b"])
-        self.groq_fast = _list("GROQ_FAST", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile"])
+        self.cerebras_fast = _list("CEREBRAS_FAST", ["gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
+        self.groq_fast = _list("GROQ_FAST", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
 
@@ -1197,6 +1205,10 @@ class LLMClient:
             return f"Groq · {self.groq_models[0]}"
         if self.gemini:
             return f"Gemini · {self.gemini_models[0]}"
+        if self.nvidia:
+            return f"NVIDIA · {self.nvidia_models[0]}"
+        if self.mistral:
+            return f"Mistral · {self.mistral_models[0]}"
         if self.openai:
             return f"OpenAI · {self.openai_models[0]}"
         if self.openrouter:
@@ -1206,7 +1218,9 @@ class LLMClient:
     def providers(self) -> list[str]:
         out = []
         for name, key in (("cerebras", self.cerebras), ("groq", self.groq), ("gemini", self.gemini),
-                          ("openrouter", self.openrouter), ("openai", self.openai), ("anthropic", self.anthropic)):
+                          ("nvidia", self.nvidia), ("mistral", self.mistral),
+                          ("openrouter", self.openrouter),
+                          ("openai", self.openai), ("anthropic", self.anthropic)):
             if key:
                 out.append(name)
         return out
@@ -1217,6 +1231,8 @@ class LLMClient:
         # fast=True (bate-papo/voz) usa modelos menores e rapidos; senao usa os de codigo.
         cb_models = self.cerebras_fast if fast else self.cerebras_models
         gq_models = self.groq_fast if fast else self.groq_models
+        nv_models = self.nvidia_fast if fast else self.nvidia_models
+        ms_models = self.mistral_fast if fast else self.mistral_models
         attempts: list[tuple[str, str, object]] = []
 
         def add(prov: str, models: list[str], maker) -> None:
@@ -1238,6 +1254,12 @@ class LLMClient:
         if self.groq:
             add("groq", gq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
+        if self.nvidia:
+            add("nvidia", nv_models, lambda m: (lambda: self._openai_compat(
+                "https://integrate.api.nvidia.com/v1/chat/completions", self.nvidia, m, system, messages, max_tokens)))
+        if self.mistral:
+            add("mistral", ms_models, lambda m: (lambda: self._openai_compat(
+                "https://api.mistral.ai/v1/chat/completions", self.mistral, m, system, messages, max_tokens)))
         if not fast:
             add_gemini()
         if self.openai:
@@ -1329,6 +1351,8 @@ class LLMClient:
     def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700, fast: bool = True) -> str:
         cb = self.cerebras_fast if fast else self.cerebras_models
         gq = self.groq_fast if fast else self.groq_models
+        nv = self.nvidia_fast if fast else self.nvidia_models
+        ms = self.mistral_fast if fast else self.mistral_models
         order = []
         if fast and self.gemini:
             order.append(("gemini", self.gemini_models[0]))
@@ -1336,6 +1360,10 @@ class LLMClient:
             order.append(("cerebras", cb[0]))
         if self.groq:
             order.append(("groq", gq[0]))
+        if self.nvidia:
+            order.append(("nvidia", nv[0]))
+        if self.mistral:
+            order.append(("mistral", ms[0]))
         if not fast and self.gemini:
             order.append(("gemini", self.gemini_models[0]))
         if self.openrouter:
@@ -1344,9 +1372,12 @@ class LLMClient:
             order.append(("openai", self.openai_models[0]))
         urls = {"cerebras": "https://api.cerebras.ai/v1/chat/completions",
                 "groq": "https://api.groq.com/openai/v1/chat/completions",
+                "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
+                "mistral": "https://api.mistral.ai/v1/chat/completions",
                 "openrouter": "https://openrouter.ai/api/v1/chat/completions",
                 "openai": "https://api.openai.com/v1/chat/completions"}
-        keys = {"cerebras": self.cerebras, "groq": self.groq, "openrouter": self.openrouter, "openai": self.openai}
+        keys = {"cerebras": self.cerebras, "groq": self.groq, "nvidia": self.nvidia,
+                "mistral": self.mistral, "openrouter": self.openrouter, "openai": self.openai}
         errs = []
         for prov, model in order:
             try:
@@ -2061,7 +2092,8 @@ class KemyVoiceApp:
         return next((c for c in self.convos if c["id"] == self.active_id), None)
 
     def _has_ai_keys(self) -> bool:
-        keys = ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+        keys = ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
+                "NVIDIA_API_KEY", "MISTRAL_API_KEY", "OPENAI_API_KEY")
         return any(self.env_file_vars.get(k) for k in keys)
 
     # ----- UI ----- #
