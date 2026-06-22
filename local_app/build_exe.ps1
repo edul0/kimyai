@@ -29,6 +29,7 @@ if (-not (Test-Path kemy_version.txt)) { New-Item -ItemType File kemy_version.tx
   --add-data "kemy_bundled.env;." `
   --add-data "kemy_version.txt;." `
   --add-data "local_app/ui.html;." `
+  --add-data "local_app/avatar.html;." `
   --collect-all "webview" `
   --collect-all "clr_loader" `
   --collect-submodules "app" `

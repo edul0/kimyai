@@ -3113,6 +3113,67 @@ def _find_ui_html() -> Path | None:
     return None
 
 
+def _find_avatar_html() -> Path | None:
+    for cand in (ROOT_DIR / "avatar.html", Path(__file__).resolve().parent / "avatar.html"):
+        try:
+            if cand.is_file():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def start_obs_server(api, port: int = 8777) -> int | None:
+    """Sobe um servidor HTTP local leve que serve o avatar transparente (avatar.html) e o
+    estado da Kemy em /state, pra usar como Browser Source no OBS. Retorna a porta usada."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    avatar = _find_avatar_html()
+    if not avatar:
+        return None
+    try:
+        page = avatar.read_bytes()
+    except Exception:
+        return None
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):  # silencioso
+            return
+
+        def _send(self, code, body, ctype):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path in ("/state", "/state/"):
+                try:
+                    data = json.dumps(api.obs_state()).encode("utf-8")
+                except Exception:
+                    data = b'{"state":"idle","mouth":0}'
+                self._send(200, data, "application/json")
+            else:
+                self._send(200, page, "text/html; charset=utf-8")
+
+    for p in (port, port + 1, port + 2, 0):
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            real = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            return real
+        except Exception:
+            continue
+    return None
+
+
 class VTubeStudio:
     """Conector com o VTube Studio via API WebSocket publica (lip-sync do modelo)."""
 
@@ -3261,6 +3322,8 @@ class WebApi:
         self.vts.mouth_provider = self.speaker.mouth_level
         self.vts.on_connect = lambda: self._js("vtsConnected()")
         self.mini = None
+        self._last_state = "idle"
+        self._obs_port = None
         self._quitting = False
         self._speaking = False
         self._file_views: dict[str, dict] = {}
@@ -3316,12 +3379,19 @@ class WebApi:
             pass
 
     def _state(self, s: str) -> None:
+        self._last_state = s   # lido pelo overlay do OBS (/state)
         self._js(f"kemyState({json.dumps(s)})")
-        if self.mini:
+
+    def obs_state(self) -> dict:
+        """Estado atual pro overlay transparente do OBS (avatar.html)."""
+        sp = bool(getattr(self, "_speaking", False))
+        mouth = 0.0
+        if sp:
             try:
-                self.mini.evaluate_js(f"kemyState({json.dumps(s)})")
+                mouth = float(self.speaker.mouth_level())
             except Exception:
-                pass
+                mouth = -1.0
+        return {"state": getattr(self, "_last_state", "idle"), "mouth": mouth}
 
     # ----- janela / desktop companion -----
     def show_main(self) -> None:
@@ -3419,6 +3489,7 @@ class WebApi:
             self.connected = True
         threading.Thread(target=self._connect, daemon=True).start()
         threading.Thread(target=self._update_flag, daemon=True).start()
+        threading.Thread(target=self._start_obs, daemon=True).start()
         it = self._cur() or {}
         return {"state": "idle" if self.connected else "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
@@ -3427,6 +3498,29 @@ class WebApi:
     def get_state(self) -> str:
         """Consultado pela UI como rede de seguranca (caso o push de estado falhe)."""
         return "idle" if self.connected else ("offline" if self.mode == "online" else "idle")
+
+    def _start_obs(self) -> None:
+        try:
+            port = int(os.environ.get("KEMY_OBS_PORT", "8777"))
+        except Exception:
+            port = 8777
+        self._obs_port = start_obs_server(self, port)
+
+    def obs_url(self) -> str:
+        """URL do overlay transparente pro OBS (botao/menu pode mostrar/copiar)."""
+        if not self._obs_port:
+            return ""
+        return f"http://127.0.0.1:{self._obs_port}/"
+
+    def show_obs_url(self) -> None:
+        url = self.obs_url()
+        if url:
+            self._msg("kemy", "🎥 **Overlay pro OBS** (fundo transparente): no OBS adicione uma "
+                      f"**Fonte → Navegador** e cole esta URL:\n\n{url}\n\nDicas: marque "
+                      "'Atualizar quando não visível' desligado; use `?nolabel=1` no fim da URL pra "
+                      "esconder o texto de estado. A Kemy fala em sincronia automaticamente.")
+        else:
+            self._msg("sys", "Não consegui subir o overlay do OBS agora (avatar.html ausente?).", store=False)
 
     def _update_flag(self) -> None:
         try:

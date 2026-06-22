@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kemy — Avatar (OBS)</title>
+<style>
+  /* Fundo TRANSPARENTE para usar como Browser Source no OBS. */
+  html,body{margin:0;height:100%;background:transparent;overflow:hidden}
+  *{box-sizing:border-box}
+  .stage{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+  .avatar{width:62vh;height:62vh;max-width:92vw;max-height:92vw;position:relative;
+    animation:bob 4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.2%)}}
+  .halo{position:absolute;inset:-6%;border-radius:50%;
+    background:radial-gradient(circle, rgba(60,231,200,.30), rgba(60,231,200,0) 68%);
+    filter:blur(8px);opacity:.6;transition:opacity .3s}
+  body.speaking .halo{opacity:1;animation:pulse 1.1s ease-in-out infinite}
+  body.thinking .halo{opacity:.85;animation:pulse 2.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.05);opacity:1}}
+  .avatar svg{position:absolute;inset:0;width:100%;height:100%}
+  .iris{fill:#1fd6c8}
+  .gem{fill:#3ce7c8;filter:drop-shadow(0 0 5px rgba(60,231,200,.9))}
+  /* piscar */
+  .eye{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
+  @keyframes blink{0%,94%,100%{transform:scaleY(1)}97%{transform:scaleY(.08)}}
+  body.thinking .iris{animation:look 2.6s ease-in-out infinite}
+  @keyframes look{0%,100%{transform:translateX(0)}30%{transform:translateX(2px)}60%{transform:translateX(-2px)}}
+  .mouth{transform-box:fill-box;transform-origin:center;transition:transform .05s linear}
+  .statelbl{font-family:'Segoe UI',system-ui,sans-serif;font-weight:700;letter-spacing:.5px;
+    color:#eafff9;text-shadow:0 2px 10px rgba(0,0,0,.6),0 0 18px rgba(60,231,200,.4);
+    font-size:clamp(14px,3.4vh,26px);opacity:.92}
+  body.hidelbl .statelbl{display:none}
+</style>
+</head>
+<body class="idle">
+  <div class="stage">
+    <div class="avatar" id="av">
+      <div class="halo"></div>
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <path d="M40 96 Q28 180 70 168 Q100 182 130 168 Q172 180 160 96 Q150 30 100 26 Q50 30 40 96Z" fill="#1a1030"/>
+        <ellipse cx="100" cy="104" rx="42" ry="50" fill="#ece1f2"/>
+        <rect x="48" y="96" width="14" height="34" rx="7" fill="#120a1f"/>
+        <rect x="138" y="96" width="14" height="34" rx="7" fill="#120a1f"/>
+        <circle cx="55" cy="113" r="5" class="iris"/><circle cx="145" cy="113" r="5" class="iris"/>
+        <path d="M55 96 Q44 36 100 30 Q156 36 145 96 Q132 70 116 78 Q100 104 84 78 Q68 70 55 96Z" fill="#211433"/>
+        <path d="M100 64 l6 7 l-6 8 l-6 -8 Z" class="gem"/>
+        <path d="M74 100 q10 -7 22 -2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M104 98 q12 -5 22 2" stroke="#120a1f" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <g class="eye"><ellipse cx="85" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="85" cy="110" r="5.5"/><circle cx="87" cy="108" r="1.8" fill="#fff"/></g>
+        <g class="eye"><ellipse cx="115" cy="110" rx="9" ry="10" fill="#f3ecff"/><circle class="iris" cx="115" cy="110" r="5.5"/><circle cx="117" cy="108" r="1.8" fill="#fff"/></g>
+        <ellipse cx="80" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+        <ellipse cx="120" cy="126" rx="6" ry="3" fill="#b06a8f" opacity=".6"/>
+        <ellipse class="mouth" id="mouth" cx="100" cy="136" rx="7" ry="5" fill="#6e2440"/>
+      </svg>
+    </div>
+    <div class="statelbl" id="lbl">Pronta</div>
+  </div>
+<script>
+  // ?nolabel=1 esconde o texto de estado;  ?label=Oi muda o texto fixo.
+  var qs = new URLSearchParams(location.search);
+  if (qs.get('nolabel') === '1') document.body.classList.add('hidelbl');
+  var LABELS = {idle:'Pronta', thinking:'Pensando…', speaking:'Falando…', offline:'Offline'};
+  var mouth = document.getElementById('mouth'), lbl = document.getElementById('lbl');
+  var curState = 'idle';
+  function setState(s){
+    if(!s) s = 'idle';
+    if(s !== curState){
+      document.body.className = (qs.get('nolabel')==='1' ? 'hidelbl ' : '') + s;
+      curState = s;
+      lbl.textContent = qs.get('label') || LABELS[s] || 'Pronta';
+    }
+  }
+  function setMouth(v){
+    v = Math.max(0, Math.min(1, +v || 0));
+    // boca abre esticando no eixo Y (lip-sync simples)
+    mouth.style.transform = 'scaleY(' + (1 + v*1.8) + ') scaleX(' + (1 - v*0.15) + ')';
+  }
+  // fallback de "boca falando" caso /state não traga mouth: oscila enquanto speaking
+  var t = 0;
+  function tick(){
+    t += 0.35;
+    if(curState === 'speaking' && lastMouth < 0){
+      setMouth(0.5 + 0.5*Math.sin(t*6)); // boca animada
+    }
+    requestAnimationFrame(tick);
+  }
+  var lastMouth = -1;
+  // Poll do estado da Kemy (servido pelo app em /state).
+  function poll(){
+    fetch('/state', {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      setState(d.state);
+      if(typeof d.mouth === 'number'){ lastMouth = d.mouth; if(curState==='speaking') setMouth(d.mouth); else setMouth(0); }
+      else { lastMouth = -1; if(curState!=='speaking') setMouth(0); }
+    }).catch(function(){ /* app fechado: mantém idle */ });
+  }
+  setInterval(poll, 120);
+  poll(); tick();
+</script>
+</body>
+</html>
