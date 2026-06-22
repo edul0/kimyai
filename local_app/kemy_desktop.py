@@ -1155,7 +1155,12 @@ class LLMClient:
         self.cerebras = env.get("CEREBRAS_API_KEY")
         self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
         self.openrouter = env.get("OPENROUTER_API_KEY")
-        self.nvidia = env.get("NVIDIA_API_KEY") or env.get("NIM_API_KEY")
+        # NVIDIA: aceita VARIAS chaves (separadas por virgula/espaco/; ou em NVIDIA_API_KEY2..9).
+        # Quando uma esgota os creditos, a Kemy roda pra proxima sozinha.
+        nv_raw = " ".join(filter(None, [env.get("NVIDIA_API_KEY") or env.get("NIM_API_KEY") or ""]
+                                 + [env.get(f"NVIDIA_API_KEY{i}") or "" for i in range(2, 10)]))
+        self.nvidia_keys = [k for k in re.split(r"[\s,;]+", nv_raw) if k.startswith("nvapi-")]
+        self.nvidia = self.nvidia_keys[0] if self.nvidia_keys else None
         self.mistral = env.get("MISTRAL_API_KEY")
         self.anthropic = env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_API_KEY")
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
@@ -1252,9 +1257,8 @@ class LLMClient:
                 add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
 
         def add_nvidia() -> None:
-            if self.nvidia:
-                add("nvidia", nv_models, lambda m: (lambda: self._openai_compat(
-                    "https://integrate.api.nvidia.com/v1/chat/completions", self.nvidia, m, system, messages, max_tokens)))
+            if self.nvidia_keys:
+                add("nvidia", nv_models, lambda m: (lambda: self._nvidia_compat(m, system, messages, max_tokens)))
 
         # Conversa (fast): Gemini Flash primeiro (rapido, segura contexto); cai pro Cerebras.
         # Codigo/build (nao-fast): NVIDIA primeiro (modelos de fronteira = melhor qualidade);
@@ -1322,6 +1326,23 @@ class LLMClient:
                     continue
                 raise
         raise last_err or RuntimeError("falha desconhecida")
+
+    def _nvidia_compat(self, model: str, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
+        """Chama a NVIDIA NIM rodando entre TODAS as chaves: se uma estiver sem credito
+        (401/402/403/429), tenta a proxima. Lembra qual funcionou pra usar primeiro."""
+        url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        wk = self._working.get("nvidia_key")
+        order = ([wk] if wk in self.nvidia_keys else []) + [k for k in self.nvidia_keys if k != wk]
+        last_err: Exception | None = None
+        for key in order:
+            try:
+                res = self._openai_compat(url, key, model, system, messages, max_tokens)
+                self._working["nvidia_key"] = key
+                return res
+            except Exception as exc:
+                last_err = exc
+                continue
+        raise last_err or RuntimeError("sem chave NVIDIA")
 
     def _gemini(self, system: str, messages: list[dict], model: str | None = None, max_tokens: int = 16000) -> str:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
