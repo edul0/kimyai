@@ -1206,9 +1206,9 @@ class LLMClient:
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
-        # GitHub Models (models.github.ai) — GPT-4o/o3/Grok/DeepSeek de graca via PAT do GitHub.
-        self.github_models = _list("GITHUB_MODEL", ["openai/gpt-4o", "openai/o3-mini", "deepseek/DeepSeek-V3-0324"])
-        self.github_fast = _list("GITHUB_FAST", ["openai/gpt-4o-mini", "openai/gpt-4o"])
+        # GitHub Models (models.github.ai) — GPT-5/GPT-4o/o3/DeepSeek de graca via PAT do GitHub.
+        self.github_models = _list("GITHUB_MODEL", ["openai/gpt-5", "openai/gpt-4o", "openai/o3-mini", "deepseek/DeepSeek-V3-0324"])
+        self.github_fast = _list("GITHUB_FAST", ["openai/gpt-5-mini", "openai/gpt-4o-mini", "openai/gpt-4o"])
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
