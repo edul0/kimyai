@@ -346,6 +346,34 @@ def extract_thumb_requests(text: str) -> list[dict]:
     return reqs
 
 
+def extract_graphic_requests(text: str) -> list[dict]:
+    """Le blocos ```kemy-graphic (TEXTO NITIDO em qualquer formato).
+    Por linha: 'TITULO | subtitulo | arte em INGLES | arquivo.png | estilo | formato'.
+    estilo: anime|gamer|neon|modern|editorial . formato: post|story|banner|poster|thumb|wide."""
+    reqs: list[dict] = []
+    if not text:
+        return reqs
+    for match in re.finditer(r"```kemy-(?:graphic|design|arte)\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        for line in match.group(1).splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if not parts[0]:
+                continue
+            title = parts[0]
+            subtitle = parts[1] if len(parts) > 1 else ""
+            scene = parts[2] if len(parts) > 2 else ""
+            fname = parts[3] if len(parts) > 3 and parts[3] else f"arte{len(reqs)+1}.png"
+            style = (parts[4].lower() if len(parts) > 4 and parts[4] else "modern")
+            fmt = (parts[5].lower() if len(parts) > 5 and parts[5] else "post")
+            if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
+                fname += ".png"
+            reqs.append({"title": title, "subtitle": subtitle, "scene": scene,
+                         "file": fname, "style": style, "fmt": fmt})
+    return reqs
+
+
 def extract_image_requests(text: str) -> list[dict]:
     """Le blocos ```kemy-image (uma imagem por linha: 'descricao | arquivo.png | LARGxALT')."""
     reqs: list[dict] = []
@@ -452,9 +480,44 @@ THUMB_STYLES = {
 }
 THUMB_STYLES["minimalista"] = THUMB_STYLES["minimal"]
 THUMB_STYLES["padrao"] = THUMB_STYLES["anime"]
+THUMB_STYLES["glitch"] = THUMB_STYLES["anime"]
+# Estilos novos pedidos: moderno/clean (corporativo) e editorial (revista/elegante).
+THUMB_STYLES["modern"] = {
+    "font": "Poppins",
+    "art": ("clean modern minimal composition, premium brand aesthetic, soft studio lighting, "
+            "lots of negative space, subtle gradient, sophisticated"),
+    "css": ("color:#ffffff;font-weight:800;-webkit-text-stroke:0;letter-spacing:-1px;"
+            "text-shadow:0 4px 26px rgba(0,0,0,.45)"),
+    "sub": "color:#e9ecf5;font-weight:500;text-shadow:0 2px 12px rgba(0,0,0,.5)",
+}
+THUMB_STYLES["clean"] = THUMB_STYLES["modern"]
+THUMB_STYLES["moderno"] = THUMB_STYLES["modern"]
+THUMB_STYLES["corporativo"] = THUMB_STYLES["modern"]
+THUMB_STYLES["editorial"] = {
+    "font": "Playfair Display",
+    "art": ("elegant editorial magazine photography, sophisticated refined composition, "
+            "soft natural tones, luxury feel, fine art lighting"),
+    "css": ("color:#ffffff;font-weight:700;-webkit-text-stroke:0;letter-spacing:.3px;"
+            "text-shadow:0 3px 20px rgba(0,0,0,.55)"),
+    "sub": "color:#efeae0;font-weight:400;font-style:italic;text-shadow:0 2px 12px rgba(0,0,0,.5)",
+}
+THUMB_STYLES["elegante"] = THUMB_STYLES["editorial"]
+THUMB_STYLES["revista"] = THUMB_STYLES["editorial"]
 THUMB_FONT_IMPORT = {
     "Anton": "family=Anton",
     "Montserrat": "family=Montserrat:wght@900",
+    "Poppins": "family=Poppins:wght@500;800",
+    "Playfair Display": "family=Playfair+Display:ital,wght@0,700;0,900;1,400",
+}
+
+# Formatos de arte (largura x altura). Cobre YouTube, social e impressao.
+GRAPHIC_SIZES = {
+    "thumb": (1280, 720), "thumbnail": (1280, 720), "youtube": (1280, 720), "yt": (1280, 720),
+    "wide": (1920, 1080), "wallpaper": (1920, 1080), "16:9": (1920, 1080),
+    "post": (1080, 1080), "quadrado": (1080, 1080), "square": (1080, 1080), "feed": (1080, 1080),
+    "story": (1080, 1920), "stories": (1080, 1920), "reels": (1080, 1920), "vertical": (1080, 1920),
+    "poster": (1080, 1350), "cartaz": (1080, 1350), "retrato": (1080, 1350),
+    "banner": (1500, 500), "capa": (1500, 500), "cover": (1500, 500),
 }
 
 
@@ -520,6 +583,112 @@ if(document.fonts&&document.fonts.ready){document.fonts.ready.then(fit);setTimeo
         return False
     try:
         ok = render_html_to_png(hpath, dest, 1280, 720)
+    finally:
+        try:
+            hpath.unlink()
+        except Exception:
+            pass
+    return ok
+
+
+def make_graphic(title: str, subtitle: str, scene: str, dest: Path,
+                 style: str = "modern", fmt: str = "post") -> bool:
+    """Arte profissional com TEXTO NITIDO em qualquer formato (post, story, banner, poster,
+    thumb): gera a arte no Flux SEM TEXTO e escreve titulo/subtitulo por cima em HTML/CSS,
+    renderizado em PNG pelo navegador headless. Resolve o 'texto lixoso' do gerador."""
+    preset = THUMB_STYLES.get((style or "modern").lower(), THUMB_STYLES["modern"])
+    w, h = GRAPHIC_SIZES.get((fmt or "post").lower(), (1080, 1080))
+    portrait = h >= w
+    side = ("composition with the main subject kept to one side and clear empty space "
+            "for a title" if not portrait else
+            "composition with clear empty space at the top and bottom for a title")
+    prompt = ((scene or "").strip() or "abstract premium background") + ", " + preset["art"] + (
+        f", {side}, NO TEXT, no letters, no words, no typography, no watermark, high quality")
+    tmp = dest.parent / ("_bg_" + dest.name)
+    if not download_image(prompt, tmp, f"{w}x{h}"):
+        return False
+    ok = False
+    try:
+        art_b64 = base64.b64encode(tmp.read_bytes()).decode("ascii")
+        if art_b64:
+            ok = _graphic_html(title, subtitle, art_b64, dest, preset, w, h)
+    except Exception:
+        ok = False
+    if not ok:
+        ok = _thumb_pil(title, tmp, dest)
+    try:
+        tmp.unlink()
+    except Exception:
+        pass
+    return ok
+
+
+def _graphic_html(title: str, subtitle: str, art_b64: str, dest: Path, preset: dict,
+                  w: int, h: int) -> bool:
+    """Compoe titulo + subtitulo sobre a arte, com layout adaptado ao formato (paisagem =
+    texto a esquerda; quadrado/retrato = texto embaixo), e renderiza em PNG."""
+    def esc(s):
+        return (s or "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    portrait = h >= w
+    t = esc(title)
+    sub = esc(subtitle)
+    font = preset.get("font", "Poppins")
+    font_import = THUMB_FONT_IMPORT.get(font, "family=Poppins:wght@500;800")
+    title_css = preset.get("css", "")
+    sub_css = preset.get("sub", "color:#fff;font-weight:600;text-shadow:0 2px 12px rgba(0,0,0,.5)")
+    if portrait:
+        shade = ("linear-gradient(180deg, rgba(4,4,10,.62) 0%, rgba(4,4,10,0) 30%,"
+                 " rgba(4,4,10,0) 52%, rgba(4,4,10,.86) 100%)")
+        wrap = (f"position:absolute;left:6%;right:6%;bottom:6%;display:flex;flex-direction:column;"
+                f"gap:{max(10,h//70)}px;align-items:flex-start;text-align:left")
+        base_fs = int(w * 0.13)
+        box_w = int(w * 0.88)
+        box_h = int(h * 0.42)
+    else:
+        shade = ("linear-gradient(90deg, rgba(4,4,10,.84) 0%, rgba(4,4,10,.55) 36%,"
+                 " rgba(4,4,10,0) 62%)")
+        wrap = (f"position:absolute;left:5%;top:0;height:{h}px;width:52%;display:flex;"
+                f"flex-direction:column;justify-content:center;gap:{max(10,h//50)}px;text-align:left")
+        base_fs = int(h * 0.22)
+        box_w = int(w * 0.52) - 20
+        box_h = int(h * 0.8)
+    sub_html = f'<div class="sub" id="s">{sub}</div>' if sub else ""
+    html = """<!doctype html><html><head><meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?__FI__&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:__W__px;height:__H__px;overflow:hidden;background:#000}
+.c{width:__W__px;height:__H__px;position:relative;font-family:'__FONT__',Impact,sans-serif;
+  background:url('data:image/jpeg;base64,__ART__') center/cover no-repeat}
+.shade{position:absolute;inset:0;background:__SHADE__}
+.wrap{__WRAP__}
+.title{text-transform:none;line-height:1.0;__TCSS__}
+.sub{line-height:1.2;font-size:__SUBFS__px;__SCSS__}
+</style></head><body>
+<div class="c"><div class="shade"></div>
+<div class="wrap"><div class="title" id="t">__TITLE__</div>__SUBHTML__</div></div>
+<script>
+var el=document.getElementById('t'),s=__FS__;
+function fit(){el.style.fontSize=s+'px';
+  while((el.scrollHeight>__BH__||el.scrollWidth>__BW__)&&s>22){s-=4;el.style.fontSize=s+'px';}}
+if(document.fonts&&document.fonts.ready){document.fonts.ready.then(fit);setTimeout(fit,1500);}else{fit();}
+</script></body></html>"""
+    repl = {
+        "__FI__": font_import, "__W__": str(w), "__H__": str(h), "__FONT__": font,
+        "__ART__": art_b64, "__SHADE__": shade, "__WRAP__": wrap, "__TCSS__": title_css,
+        "__SCSS__": sub_css, "__SUBFS__": str(max(20, base_fs // 3)),
+        "__TITLE__": t, "__SUBHTML__": sub_html, "__FS__": str(base_fs),
+        "__BH__": str(int(box_h * 0.72)), "__BW__": str(box_w),
+    }
+    for k, v in repl.items():
+        html = html.replace(k, v)
+    hpath = dest.parent / ("_gfx_" + dest.stem + ".html")
+    try:
+        hpath.write_text(html, encoding="utf-8")
+    except Exception:
+        return False
+    try:
+        ok = render_html_to_png(hpath, dest, w, h)
     finally:
         try:
             hpath.unlink()
@@ -915,6 +1084,15 @@ SYSTEM_PROMPT = (
     "brilho neon, intenso), 'neon' (cyberpunk brilhante), 'minimal' (limpo e elegante). "
     "Inclua o visual canonico da Kemy se ela aparecer. "
     "Ex.: REAGINDO A ISSO?! | expressive anime girl with dark twin-tails, shocked happy face, hands up | thumb.png | anime\n"
+    "13c) ARTE/DESIGN GRAFICO COM TEXTO (poster, banner, capa, post de social, story, flyer, "
+    "anuncio) — REGRA DE OURO: o gerador de imagem NAO sabe escrever (sai texto borrado). Entao "
+    "NUNCA peca o texto dentro da arte. Use um bloco ```kemy-graphic com "
+    "'TITULO | subtitulo | ARTE em INGLES (sem texto) | arquivo.png | estilo | formato'. A Kemy gera a "
+    "arte limpa no Flux e escreve o TITULO/SUBTITULO por cima com tipografia nitida. "
+    "estilo: anime (glitch/cromatico), gamer, neon, modern (clean/corporativo), editorial (revista/elegante). "
+    "formato: post (1080x1080), story (1080x1920), banner (1500x500), poster (1080x1350), thumb (1280x720), wide (1920x1080). "
+    "Descreva so a ARTE/cena/atmosfera (cores, estilo, elementos), deixando espaco pro texto. "
+    "Ex.: BLACK FRIDAY | ate 70% OFF | premium shopping bags and gold confetti on dark gradient, luxury | promo.png | modern | post\n"
     "14) CONTEUDO COM MUITOS ITENS/DADOS (Pokedex, catalogo grande, lista de filmes, "
     "criptos, etc.): NUNCA escreva os dados na mao (voce trunca e fica incompleto). "
     "Em vez disso, BUSQUE de uma API publica gratuita via fetch no JavaScript e renderize "
@@ -973,6 +1151,31 @@ CHAT_PROMPT = (
     "programa, voce tambem faz isso normalmente."
 )
 
+# Camada de DESIGN dedicada (estilo Claude artifacts). Anexada quando o pedido e claramente
+# de UI/visual, pra elevar de "site simples" para design nivel produto/premiado.
+DESIGN_PROMPT = (
+    "\n\n=== MODO DESIGN (capriche como um DESIGNER DE PRODUTO SENIOR / site premiado Awwwards) ===\n"
+    "Trate isto como um trabalho de design de verdade, com SISTEMA DE DESIGN, nao um HTML qualquer.\n"
+    "1) DESIGN TOKENS em :root — paleta completa (bg, surface, surface-2, primary, primary-600, "
+    "accent, text, text-muted, border, success/warn/danger), com tema coerente ao negocio e bom contraste "
+    "(WCAG AA). Ofereca modo claro E escuro quando fizer sentido (prefers-color-scheme).\n"
+    "2) ESCALA tipografica e de espacamento consistentes (base 4/8px: --space-1..8; --fs-1..7 com clamp() "
+    "fluido). Use 1-2 Google Fonts modernas (ex.: Sora/Space Grotesk pra titulo + Inter pra corpo).\n"
+    "3) GRID e ritmo: container max-width ~1200px, secoes com respiro generoso (80-120px), alinhamento "
+    "impecavel, nada amontoado nem solto demais. Hierarquia visual CLARA (o olho sabe pra onde ir).\n"
+    "4) COMPONENTES caprichados e CONSISTENTES: botoes (primario/secundario/ghost) com estados "
+    "hover/active/focus-visible; cards com elevacao sutil e borda 1px translucida; inputs bonitos; "
+    "navbar translucida (backdrop-filter blur); badges, tabs; bordas 12-20px; sombras suaves em camadas.\n"
+    "5) DETALHES PRO: micro-interacoes (transition 150-250ms ease), hover que eleva/realca, gradientes ricos "
+    "e/ou malha de cor (mesh), glassmorphism com parcimonia, ruido/grain sutil, scroll-reveal (IntersectionObserver), "
+    "estados de foco acessiveis. Nada de efeito brega/exagerado.\n"
+    "6) CONTEUDO real e convincente (copy boa em PT-BR, numeros plausiveis, depoimentos), nunca 'lorem ipsum' "
+    "nem 'Item 1/2/3'. Imagens contextuais via Flux (pollinations) quando ajudar.\n"
+    "7) RESPONSIVO de verdade (mobile-first, breakpoints 640/768/1024), e impecavel no mobile.\n"
+    "8) O resultado tem que dar a sensacao de 'uau, parece um produto real de empresa top'. Capriche no "
+    "acabamento como se fosse pro portfolio.\n"
+)
+
 # Palavras que indicam pedido de criar/editar codigo ou executar algo (usa o prompt completo).
 BUILD_HINTS = (
     "site", "página", "pagina", "landing", "app", "aplicativo", "programa", "código",
@@ -986,6 +1189,8 @@ BUILD_HINTS = (
     "componente", "tela", "botão", "botao", "formulário", "formulario", "backend", "frontend",
     "doc", "documento", "pdf", "slide", "slides", "apresentação", "apresentacao", "planilha",
     "relatório", "relatorio", "currículo", "curriculo", "carta", "contrato", "proposta",
+    "poster", "pôster", "banner", "flyer", "panfleto", "anúncio", "anuncio", "post",
+    "story", "stories", "cartaz", "feed", "criativo", "identidade visual",
 )
 
 
@@ -4103,6 +4308,11 @@ class WebApi:
         design_req = any(k in text.lower() for k in (
             "site", "página", "pagina", "landing", "app", "dashboard", "ui", "interface",
             "design", "portfolio", "portfólio", "loja", "ecommerce", "blog", "jogo", "game"))
+        # 🎨 Modo Design dedicado: pedido claramente de UI/visual ganha o design-system premium
+        # e SEMPRE usa o melhor modelo disponivel (NVIDIA frontier / GPT-5).
+        if design_req:
+            system += DESIGN_PROMPT
+            self._msg("sys", "🎨 Modo Design ligado — caprichando no visual (design system).", store=False)
         # ✨ Capricho (todas as tecnicas gratis nivel-pro):
         if self.boost:
             if design_req:                    # 0) Pesquisa REFERENCIAS antes (como um pro)
@@ -4133,6 +4343,7 @@ class WebApi:
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
+        self._gen_graphics(extract_graphic_requests(reply), base)
         self._maybe_make_pdf(base, text, files)
         self._maybe_tests(base, text)                    # 5) Testes automaticos
         if files or edits0:
@@ -4622,6 +4833,34 @@ class WebApi:
                     pass
         else:
             self._msg("sys", "Nao consegui montar a thumbnail agora (tente de novo).", store=False)
+
+    def _gen_graphics(self, reqs: list[dict], base: Path) -> None:
+        """Gera artes (post/story/banner/poster/thumb) com TEXTO NITIDO sobre arte Flux."""
+        if not reqs:
+            return
+        self._msg("sys", f"🎨 Criando {min(len(reqs),6)} arte(s) com texto nítido…", store=False)
+        ok: list[str] = []
+        for r in reqs[:6]:
+            title = r.get("title", "")
+            subtitle = r.get("subtitle", "")
+            scene = r.get("scene", "")
+            style = r.get("style", "modern")
+            fmt = r.get("fmt", "post")
+            if make_graphic(title, subtitle, scene, base / r["file"], style, fmt):
+                ok.append(r["file"])
+        if ok:
+            self._msg("sys", f"🖼 Pronto: {', '.join(ok)} (em {base})", store=False)
+            for name in ok[:4]:
+                try:
+                    p = base / name
+                    if os.name == "nt":
+                        os.startfile(str(p))  # type: ignore[attr-defined]
+                    else:
+                        webbrowser.open(p.as_uri())
+                except Exception:
+                    pass
+        else:
+            self._msg("sys", "Nao consegui criar a arte agora (tente de novo).", store=False)
 
     def _process_online(self, text: str):
         it = self._cur()
