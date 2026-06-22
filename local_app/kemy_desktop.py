@@ -3763,37 +3763,10 @@ class WebApi:
         threading.Thread(target=_run, daemon=True).start()
 
     def toggle_overlay(self) -> None:
-        """Modo mini: só a VTuber, pequena num canto, sempre por cima, ouvindo.
-        As operacoes de janela rodam numa THREAD para nao travar a UI (deadlock)."""
-        self._overlay = not getattr(self, "_overlay", False)
-        threading.Thread(target=self._apply_overlay, args=(self._overlay,), daemon=True).start()
-
-    def _apply_overlay(self, on: bool) -> None:
-        self._js(f"setOverlay({json.dumps(on)})")
-        try:
-            if self.window:
-                self.window.on_top = on
-                if on:
-                    mw, mh = 300, 400
-                    self.window.resize(mw, mh)
-                    try:
-                        x, y = _corner_pos(mw, mh)
-                        self.window.move(x, y)
-                    except Exception:
-                        pass
-                else:
-                    self.window.resize(1100, 780)
-        except Exception:
-            pass
-        if on:
-            if not self.continuous:
-                self.continuous = True
-                self._js("setToggle('conv',true)")
-                if self.connected and not self.busy:
-                    self.listen()
-            self._msg("sys", "🖥️ Modo mini ligado: fico no canto, por cima, te ouvindo. Clique no X (ou no Mini) pra voltar.", store=False)
-        else:
-            self._msg("sys", "Modo mini desligado.", store=False)
+        """Modo mini foi REMOVIDO (era a principal causa de travamento). Para overlay de
+        stream, use o OBS: Window Capture na janela da Kemy (recorte no avatar)."""
+        self._msg("sys", "O modo Mini foi removido (deixava o app travado). Pra stream, "
+                  "use o OBS → Window Capture na janela da Kemy e recorte no avatar. 🎥", store=False)
 
     def preview(self) -> None:
         """Abre o preview do site da conversa atual no navegador."""
@@ -4018,14 +3991,8 @@ class WebApi:
         return f"Abri a busca de '{q}' no YouTube."
 
     def _app_command(self, text: str) -> bool:
-        """Comandos de controle do app por voz/texto (mini, print, silenciar, atualizar...)."""
+        """Comandos de controle do app por voz/texto (print, silenciar, atualizar...)."""
         t = (text or "").strip().lower().rstrip("!.")
-        if re.fullmatch(r"(?:modo mini|fica(?:r)? mini|janela mini|mini mode|vira mini)", t):
-            self.toggle_overlay(); return True
-        if re.fullmatch(r"(?:sair do mini|fecha(?:r)? o mini|janela normal|volta(?:r)? (?:ao )?normal)", t):
-            if getattr(self, "_overlay", False):
-                self.toggle_overlay()
-            self._state("idle"); return True
         if re.fullmatch(r"(?:para de falar|silenci\w*|cala a boca|fica quieta|shh+|quieta|cala)", t):
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
         if re.fullmatch(r"(?:tira(?:r)? (?:um )?print|screenshot|captura(?:r)? a tela|print da tela|printa)", t):
@@ -5437,26 +5404,12 @@ def run_webview(host: str, port: int) -> bool:
     except Exception:
         pass
 
-    # O mini avatar e a bandeja sao criados SO depois que a janela principal
-    # termina de carregar. Criar duas janelas WebView2 ao mesmo tempo trava a
-    # inicializacao (conflito na pasta de dados do WebView2).
+    # A bandeja e criada SO depois que a janela principal termina de carregar.
+    # (O modo Mini foi removido — era a causa principal de travamento.)
     def _setup_companion():
         if getattr(api, "_companion_done", False):
             return
         api._companion_done = True
-        # A carinha flutuante generica fica DESLIGADA por padrao (o rosto e o VTube Studio).
-        # Para reativar a bolinha local: defina KEMY_MINI=1
-        if os.environ.get("KEMY_MINI") == "1":
-            mw, mh = 150, 168
-            mx, my = _corner_pos(mw, mh)
-            try:
-                mini = webview.create_window("Kemy", html=MINI_HTML, js_api=api,
-                                             width=mw, height=mh, x=mx, y=my,
-                                             frameless=True, easy_drag=True, on_top=True,
-                                             background_color="#070a12")
-                api.mini = mini
-            except Exception:
-                api.mini = None
         try:
             _start_tray(api, win)
         except Exception:
