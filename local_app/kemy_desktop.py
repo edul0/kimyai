@@ -3353,6 +3353,8 @@ class WebApi:
         self.vts.mouth_provider = self.speaker.mouth_level
         self.vts.on_connect = lambda: self._js("vtsConnected()")
         self.mini = None
+        self.pet_win = None
+        self._pet_visible = True
         self._last_state = "idle"
         self._obs_port = None
         self._quitting = False
@@ -3531,6 +3533,8 @@ class WebApi:
         return "idle" if self.connected else ("offline" if self.mode == "online" else "idle")
 
     def _start_obs(self) -> None:
+        if self._obs_port:   # ja iniciado
+            return
         try:
             port = int(os.environ.get("KEMY_OBS_PORT", "8777"))
         except Exception:
@@ -3552,6 +3556,24 @@ class WebApi:
                       "esconder o texto de estado. A Kemy fala em sincronia automaticamente.")
         else:
             self._msg("sys", "Não consegui subir o overlay do OBS agora (avatar.html ausente?).", store=False)
+
+    def toggle_pet(self) -> None:
+        """Mostra/esconde o mascote flutuante (janela transparente sempre no topo)."""
+        win = getattr(self, "pet_win", None)
+        if not win:
+            self._msg("sys", "O mascote flutuante não está disponível nesta versão.", store=False)
+            return
+        self._pet_visible = not getattr(self, "_pet_visible", True)
+        vis = self._pet_visible
+
+        def _do():
+            try:
+                win.show() if vis else win.hide()
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True).start()
+        self._msg("sys", "🪄 Mascote flutuante " + ("ligado (arraste pra onde quiser)." if vis
+                  else "escondido."), store=False)
 
     def _update_flag(self) -> None:
         try:
@@ -5600,6 +5622,7 @@ def run_webview(host: str, port: int) -> bool:
         _record_webview_error("ui.html nao encontrado no bundle")
         return False
     api = WebApi(host, port)
+    api._start_obs()   # sobe o servidor do avatar ANTES, pro mascote/OBS ja terem a URL
     win = webview.create_window(f"Kemy - Assistente ({build_tag()})", url=html.as_uri(), js_api=api,
                                 width=1100, height=780, min_size=(280, 360),
                                 background_color="#070a12")
@@ -5623,6 +5646,23 @@ def run_webview(host: str, port: int) -> bool:
         if getattr(api, "_companion_done", False):
             return
         api._companion_done = True
+        # Mascote flutuante no desktop: janela transparente, sem moldura, sempre no topo,
+        # carregando a MESMA pagina do avatar (sincroniza fala). Criada UMA vez, apos a
+        # janela principal carregar (evita o conflito de 2 janelas WebView2 no boot).
+        url = api.obs_url()
+        if url and os.environ.get("KEMY_PET", "1") != "0":
+            try:
+                mw, mh = 260, 320
+                mx, my = _corner_pos(mw, mh)
+                pet = webview.create_window(
+                    "Kemy", url=url + "?nolabel=1",
+                    width=mw, height=mh, x=mx, y=my,
+                    frameless=True, easy_drag=True, on_top=True, transparent=True,
+                    background_color="#000000")
+                api.pet_win = pet
+                api._pet_visible = True
+            except Exception:
+                api.pet_win = None
         try:
             _start_tray(api, win)
         except Exception:
