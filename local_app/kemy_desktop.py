@@ -217,13 +217,16 @@ def _record_webview_error(reason: str) -> None:
 
 
 def find_env_file() -> Path | None:
-    for cand in (EXE_DIR / ".env", config_dir() / ".env", ROOT_DIR / ".env",
-                 ROOT_DIR / "kemy_bundled.env", Path.cwd() / ".env"):
-        try:
-            if cand.is_file() and cand.read_text(encoding="utf-8", errors="ignore").strip():
-                return cand
-        except Exception:
-            continue
+    names = (".env", "kemy.env", "kemy_bundled.env")
+    dirs = (EXE_DIR, config_dir(), ROOT_DIR, Path.cwd())
+    for d in dirs:
+        for nm in names:
+            cand = d / nm
+            try:
+                if cand.is_file() and cand.read_text(encoding="utf-8", errors="ignore").strip():
+                    return cand
+            except Exception:
+                continue
     return None
 
 
@@ -249,8 +252,13 @@ def load_merged_env() -> dict[str, str]:
     (config_dir, com voz/workspace) por cima. Evita que o .env do usuario apague
     as chaves da IA embutidas (bug do 'modo online / 404')."""
     merged: dict[str, str] = {}
-    for cand in (ROOT_DIR / "kemy_bundled.env", ROOT_DIR / ".env",
-                 EXE_DIR / ".env", Path.cwd() / ".env", config_dir() / ".env"):
+    # Embutidos primeiro (base), depois os do usuario por cima (sobrescrevem).
+    # Aceita .env, kemy.env e kemy_bundled.env em qualquer pasta conhecida.
+    cands = [ROOT_DIR / "kemy_bundled.env"]
+    for d in (ROOT_DIR, EXE_DIR, Path.cwd(), config_dir()):
+        for nm in (".env", "kemy.env"):
+            cands.append(d / nm)
+    for cand in cands:
         try:
             if cand.is_file():
                 merged.update(parse_env_file(cand))
