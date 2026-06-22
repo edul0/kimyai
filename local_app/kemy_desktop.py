@@ -123,6 +123,16 @@ def config_dir() -> Path:
     return d
 
 
+def proc_quiet(**extra) -> dict:
+    """kwargs pra subprocess que NAO abre janela de console nem trava num app --windowed
+    (sem console): redireciona stdin e usa CREATE_NO_WINDOW no Windows."""
+    kw: dict = {"stdin": subprocess.DEVNULL}
+    if os.name == "nt":
+        kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    kw.update(extra)
+    return kw
+
+
 def cleanup_update_leftovers() -> None:
     """Remove pastas residuais de updates (kemy_old_* / kemy_new_*) ao lado do app."""
     try:
@@ -4947,7 +4957,7 @@ class WebApi:
     def _python_exe(self) -> str | None:
         for exe in ("python", "py", "python3"):
             try:
-                subprocess.run([exe, "--version"], capture_output=True, timeout=8)
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet())
                 return exe
             except Exception:
                 continue
@@ -5000,19 +5010,20 @@ class WebApi:
     def _serve_project(self, base: Path, kind: str, target: Path) -> None:
         """Sobe o servidor de dev do projeto em background e abre o navegador no localhost."""
         try:
+            srv = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
             if kind == "node":
                 node = None
                 for exe in ("npm", "npm.cmd"):
                     try:
-                        subprocess.run([exe, "--version"], capture_output=True, timeout=8); node = exe; break
+                        subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet()); node = exe; break
                     except Exception:
                         continue
                 if not node:
                     self._msg("sys", "📦 É um projeto Node. Instale o Node.js e rode: npm install && npm start", store=False)
                     return
                 self._msg("sys", "🚀 Projeto Node — instalando deps e subindo o servidor…", store=False)
-                subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=300)
-                p = subprocess.Popen([node, "start"], cwd=str(base))
+                subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
+                p = subprocess.Popen([node, "start"], cwd=str(base), **proc_quiet(**srv))
                 self._servers.append(p)
                 time.sleep(5); webbrowser.open("http://127.0.0.1:3000")
                 self._msg("sys", "Servidor Node rodando — abri http://127.0.0.1:3000 (ajuste a porta se for outra).", store=False)
@@ -5026,29 +5037,29 @@ class WebApi:
             req = base / "requirements.txt"
             if req.exists():
                 subprocess.run([py, "-m", "pip", "install", "-r", "requirements.txt"], cwd=str(base),
-                               capture_output=True, timeout=300)
+                               capture_output=True, timeout=300, **proc_quiet())
 
             if kind == "django":
                 self._msg("sys", "🚀 Projeto Django — migrando o banco e subindo o servidor…", store=False)
-                subprocess.run([py, "-m", "pip", "install", "django"], cwd=str(base), capture_output=True, timeout=300)
-                subprocess.run([py, "manage.py", "migrate"], cwd=str(base), capture_output=True, timeout=120)
-                p = subprocess.Popen([py, "manage.py", "runserver", "127.0.0.1:8000"], cwd=str(base))
+                subprocess.run([py, "-m", "pip", "install", "django"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
+                subprocess.run([py, "manage.py", "migrate"], cwd=str(base), capture_output=True, timeout=120, **proc_quiet())
+                p = subprocess.Popen([py, "manage.py", "runserver", "127.0.0.1:8000"], cwd=str(base), **proc_quiet(**srv))
                 self._servers.append(p)
                 time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
                 self._msg("sys", "✅ Django no ar: http://127.0.0.1:8000", store=False)
             elif kind == "fastapi":
                 self._msg("sys", "🚀 Projeto FastAPI — subindo com uvicorn…", store=False)
-                subprocess.run([py, "-m", "pip", "install", "fastapi", "uvicorn"], cwd=str(base), capture_output=True, timeout=300)
+                subprocess.run([py, "-m", "pip", "install", "fastapi", "uvicorn"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
                 mod = target.stem
-                p = subprocess.Popen([py, "-m", "uvicorn", f"{mod}:app", "--port", "8000"], cwd=str(base))
+                p = subprocess.Popen([py, "-m", "uvicorn", f"{mod}:app", "--port", "8000"], cwd=str(base), **proc_quiet(**srv))
                 self._servers.append(p)
                 time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
                 self._msg("sys", "✅ FastAPI no ar: http://127.0.0.1:8000", store=False)
             else:  # flask
                 self._msg("sys", "🚀 Projeto Flask — subindo o servidor…", store=False)
-                subprocess.run([py, "-m", "pip", "install", "flask"], cwd=str(base), capture_output=True, timeout=300)
+                subprocess.run([py, "-m", "pip", "install", "flask"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
                 env = dict(os.environ); env["FLASK_APP"] = target.name
-                p = subprocess.Popen([py, str(target.name)], cwd=str(base), env=env)
+                p = subprocess.Popen([py, str(target.name)], cwd=str(base), env=env, **proc_quiet(**srv))
                 self._servers.append(p)
                 time.sleep(4); webbrowser.open("http://127.0.0.1:5000")
                 self._msg("sys", "✅ Flask no ar: http://127.0.0.1:5000 (se não abrir, veja a porta no terminal).", store=False)
