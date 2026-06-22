@@ -1176,9 +1176,15 @@ class LLMClient:
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
         self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
         self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "deepseek/deepseek-chat-v3.1:free"])
-        # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. Modelos abertos fortes (sem Llama).
-        self.nvidia_models = _list("NVIDIA_MODEL", ["qwen/qwen2.5-coder-32b-instruct", "deepseek-ai/deepseek-v3.1", "qwen/qwen3-235b-a22b"])
-        self.nvidia_fast = _list("NVIDIA_FAST", ["qwen/qwen2.5-coder-32b-instruct", "qwen/qwen3-235b-a22b", "deepseek-ai/deepseek-v3.1"])
+        # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
+        # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
+        # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
+        self.nvidia_models = _list("NVIDIA_MODEL", [
+            "deepseek-ai/deepseek-v4-pro", "mistralai/mistral-large-3-675b-instruct-2512",
+            "zai-org/glm-5.1", "z-ai/glm-5.1", "qwen/qwen2.5-coder-32b-instruct"])
+        self.nvidia_fast = _list("NVIDIA_FAST", [
+            "zai-org/glm-5.1", "z-ai/glm-5.1", "qwen/qwen2.5-coder-32b-instruct",
+            "mistralai/mistral-large-3-675b-instruct-2512"])
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
@@ -1245,18 +1251,26 @@ class LLMClient:
             if self.gemini:
                 add("gemini", self.gemini_models, lambda m: (lambda: self._gemini(system, messages, m, max_tokens)))
 
-        # Conversa (fast): Gemini 3 Flash primeiro (segura bem o contexto); cai pro Cerebras.
+        def add_nvidia() -> None:
+            if self.nvidia:
+                add("nvidia", nv_models, lambda m: (lambda: self._openai_compat(
+                    "https://integrate.api.nvidia.com/v1/chat/completions", self.nvidia, m, system, messages, max_tokens)))
+
+        # Conversa (fast): Gemini Flash primeiro (rapido, segura contexto); cai pro Cerebras.
+        # Codigo/build (nao-fast): NVIDIA primeiro (modelos de fronteira = melhor qualidade);
+        # quando os creditos NVIDIA esgotarem, cai pro Cerebras/Groq (gratis e sem expirar).
         if fast:
             add_gemini()
+        else:
+            add_nvidia()
         if self.cerebras:
             add("cerebras", cb_models, lambda m: (lambda: self._openai_compat(
                 "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages, max_tokens)))
         if self.groq:
             add("groq", gq_models, lambda m: (lambda: self._openai_compat(
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
-        if self.nvidia:
-            add("nvidia", nv_models, lambda m: (lambda: self._openai_compat(
-                "https://integrate.api.nvidia.com/v1/chat/completions", self.nvidia, m, system, messages, max_tokens)))
+        if fast:
+            add_nvidia()
         if self.mistral:
             add("mistral", ms_models, lambda m: (lambda: self._openai_compat(
                 "https://api.mistral.ai/v1/chat/completions", self.mistral, m, system, messages, max_tokens)))
