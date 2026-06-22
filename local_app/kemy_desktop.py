@@ -663,6 +663,42 @@ def web_search(query: str, limit: int = 6) -> str:
         return ""
 
 
+def youtube_first_video(query: str):
+    """Acha o ID do primeiro video do YouTube para a busca (pra tocar com autoplay).
+
+    Tenta varios padroes/endpoints pra quase nunca cair na busca crua.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+    q = urllib.parse.quote(query)
+    # &sp=EgIQAQ%3D%3D filtra so videos (evita pegar canal/playlist como 1o resultado).
+    urls = [
+        "https://www.youtube.com/results?search_query=" + q + "&sp=EgIQAQ%3D%3D",
+        "https://www.youtube.com/results?search_query=" + q,
+        "https://m.youtube.com/results?search_query=" + q,
+    ]
+    patterns = [
+        r'"videoRenderer":\{"videoId":"([\w-]{11})"',
+        r'"videoId":"([\w-]{11})"',
+        r'watch\?v=([\w-]{11})',
+        r'"url":"/watch\?v=([\w-]{11})',
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
+            for pat in patterns:
+                m = re.search(pat, html)
+                if m:
+                    return m.group(1)
+        except Exception:
+            continue
+    return None
+
+
 def web_image_search(query: str, limit: int = 3) -> list:
     """Busca imagens de referencia no DuckDuckGo (best-effort). Retorna URLs de imagens."""
     try:
@@ -898,7 +934,27 @@ SYSTEM_PROMPT = (
     "slides, automacao do PC, visao e voz — seja excelente em tudo.\n"
     "17) PROATIVA: ao TERMINAR um projeto/tarefa, no final do resumo sugira 2-3 proximos passos curtos e "
     "uteis (ex.: 'Quer que eu adicione um formulario de contato? Posso publicar o site no ar? Adiciono modo "
-    "escuro?'). Seja util como um colega senior, sem encher."
+    "escuro?'). Seja util como um colega senior, sem encher.\n"
+    "18) SISTEMA COMPLETO / ERP / PLATAFORMA / CRUD / DASHBOARD (regra CRITICA, leia com atencao): "
+    "quando o pedido for um SISTEMA de verdade (ERP, plataforma, painel admin, app com login, CRUD, "
+    "estoque, vendas, financeiro, agendamento, etc.), e PROIBIDO entregar um unico index.html simples ou "
+    "uma tela 'feia' de exemplo. Entregue uma APLICACAO REAL, MULTI-ARQUIVO e ARQUITETADA:\n"
+    "   - Respeite a LINGUAGEM/STACK que o usuario pediu. Se ele disse 'em Python' -> Flask ou FastAPI "
+    "(app.py + templates/ + static/ + models + rotas + persistencia em SQLite ou JSON); 'em Node' -> "
+    "Express; 'em React/Next' -> componentes reais. Se NAO especificou a stack, escolha a melhor e diga qual.\n"
+    "   - SEPARE em arquivos coerentes (models, rotas/controllers, services, templates/componentes, "
+    "static/css, static/js, db). Nada de tudo amontoado num arquivo so.\n"
+    "   - Implemente os MODULOS de verdade, funcionando ponta a ponta: listar, criar, editar, excluir, "
+    "buscar/filtrar, e PERSISTIR os dados (SQLite/JSON/arquivo). Nada de botao que nao faz nada nem "
+    "'// TODO implementar'. Inclua dados de exemplo (seed) para abrir e ja ver funcionando.\n"
+    "   - UI de PAINEL profissional: sidebar de navegacao entre modulos, topbar, area de conteudo com "
+    "tabelas/cards, formularios em modal ou pagina, estados de vazio/carregando, e o MESMO nivel de capricho "
+    "visual da regra 9 (fonte boa, paleta coerente, espacamento, responsivo). Um ERP deve PARECER um ERP.\n"
+    "   - Forneca os comandos para instalar e rodar num bloco ```kemy-run (ex.: pip install flask; "
+    "python app.py) e um README curto com como usar.\n"
+    "   - Se for grande demais para uma resposta, ENTREGUE O ESQUELETO COMPLETO E FUNCIONAL (todos os "
+    "arquivos, rodando, com 1-2 modulos prontos de exemplo) e diga claramente o que falta — NUNCA um stub "
+    "vazio e feio. O criterio e: o usuario abre, roda o comando, e ja tem um sistema utilizavel na cara dele."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
@@ -3429,7 +3485,7 @@ class WebApi:
             self._msg("sys", "Modo mini desligado.", store=False)
 
     def preview(self) -> None:
-        """Mostra o preview EMBUTIDO do site da conversa atual."""
+        """Abre o preview do site da conversa atual no navegador."""
         it = self._cur()
         base = Path(it["project"]) if it else (self.workspace_root / "projeto")
         if not (base / "index.html").exists():
@@ -3572,6 +3628,16 @@ class WebApi:
         if self._maybe_learn(text):   # "lembre que ...", "de agora em diante ..."
             self._state("idle")
             return
+        if self._app_command(text):   # comandos de controle do app (voz ou texto)
+            return
+        played = self._try_play_intent(text)   # "toque <musica>" -> toca no YouTube
+        if played is not None:
+            self._msg("kemy", played)
+            if self.speaker.available:
+                self.speaker.say(played[:200]); self._state("speaking")
+            else:
+                self._state("idle")
+            return
         if not self.connected:
             self._msg("sys", "Ainda conectando…", store=False)
             return
@@ -3607,6 +3673,91 @@ class WebApi:
             self.speaker.say("Anotado! Vou lembrar disso.")
             self._state("speaking")
         return True
+
+    def _try_play_intent(self, text: str):
+        """'toque/toca/play <musica>' -> toca de verdade (YouTube autoplay); Spotify abre a busca."""
+        t = (text or "").strip()
+        m = re.search(r"(?i)\b(?:toc(?:a|ar|que)|play|bota pra tocar|p[oõ]e pra tocar|coloca pra tocar|"
+                      r"quero ouvir|quero escutar|escuta(?:r)?)\s+(.+)", t)
+        if not m:
+            return None
+        q = m.group(1).strip()
+        wants_spotify = bool(re.search(r"(?i)spotify", t))
+        q = re.sub(r"(?i)\s*\b(?:n[oa]|pelo|pela|via)\s+(spotify|youtube|yt|deezer).*$", "", q).strip()
+        q = q.strip(" ?.!\"'")
+        if len(q) < 2:
+            return None
+        if wants_spotify:
+            try:
+                subprocess.Popen(f'start spotify:search:{urllib.parse.quote(q)}', shell=True)
+            except Exception:
+                pass
+        vid = youtube_first_video(q + " audio")
+        if vid:
+            try:
+                subprocess.Popen(f'start "" "https://www.youtube.com/watch?v={vid}"', shell=True)
+            except Exception:
+                pass
+            extra = " (e abri no Spotify pra você dar play lá também)" if wants_spotify else ""
+            return f"🎵 Tocando '{q}' no YouTube{extra}!"
+        try:
+            subprocess.Popen(f'start "" "https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"', shell=True)
+        except Exception:
+            pass
+        return f"Abri a busca de '{q}' no YouTube."
+
+    def _app_command(self, text: str) -> bool:
+        """Comandos de controle do app por voz/texto (mini, print, silenciar, atualizar...)."""
+        t = (text or "").strip().lower().rstrip("!.")
+        if re.fullmatch(r"(?:modo mini|fica(?:r)? mini|janela mini|mini mode|vira mini)", t):
+            self.toggle_overlay(); return True
+        if re.fullmatch(r"(?:sair do mini|fecha(?:r)? o mini|janela normal|volta(?:r)? (?:ao )?normal)", t):
+            if getattr(self, "_overlay", False):
+                self.toggle_overlay()
+            self._state("idle"); return True
+        if re.fullmatch(r"(?:para de falar|silenci\w*|cala a boca|fica quieta|shh+|quieta|cala)", t):
+            self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
+        if re.fullmatch(r"(?:tira(?:r)? (?:um )?print|screenshot|captura(?:r)? a tela|print da tela|printa)", t):
+            self.busy = True; self._state("thinking")
+            threading.Thread(target=self._do_screenshot, daemon=True).start(); return True
+        if re.fullmatch(r"(?:atualiz(?:a|ar)(?: a kemy)?|checa(?:r)? atualiza\w*|tem atualiza\w*)", t):
+            self._msg("sys", "Procurando atualização…", store=False); self.check_update(); self._state("idle"); return True
+        if re.fullmatch(r"(?:nova conversa|limpa(?:r)? (?:a )?conversa|comeca(?:r)? de novo)", t):
+            self.new_convo(); self._state("idle"); return True
+        if re.fullmatch(r"(?:abr(?:e|ir) o c[oó]digo|ver (?:o )?c[oó]digo|mostra(?:r)? o c[oó]digo)", t):
+            self.browse_project(); self._state("idle"); return True
+        return False
+
+    def _do_screenshot(self) -> None:
+        try:
+            from PIL import ImageGrab
+            try:
+                if self.window:
+                    self.window.minimize(); time.sleep(0.5)
+            except Exception:
+                pass
+            img = ImageGrab.grab()
+            try:
+                if self.window:
+                    self.window.restore()
+            except Exception:
+                pass
+            folder = Path.home() / "Pictures"
+            folder.mkdir(parents=True, exist_ok=True)
+            dest = folder / f"kemy_print_{int(time.time())}.png"
+            img.save(dest)
+            self.busy = False
+            self._msg("kemy", f"📸 Print salvo em: {dest}")
+            try:
+                if os.name == "nt":
+                    os.startfile(str(dest))  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            self._after_speak()
+        except Exception as exc:
+            self.busy = False
+            self._msg("kemy", f"Não consegui tirar o print: {exc}")
+            self._after_speak()
 
     def _chat_streaming(self, system: str, msgs: list) -> str:
         """Stream da resposta de conversa para a UI (texto em tempo real)."""
@@ -4446,16 +4597,17 @@ class WebApi:
                 pass
 
     def _open_preview(self, base: Path) -> None:
-        """Mostra o preview EMBUTIDO no app (iframe). 'Navegador' abre externo."""
+        """Abre o preview no navegador (confiavel: carrega .js/.css/imagens sem bug de iframe)."""
         idx = base / "index.html"
-        if idx.exists():
+        if not idx.exists():
+            return
+        try:
+            webbrowser.open(idx.as_uri())
+        except Exception:
             try:
-                self._js(f"showPreview({json.dumps(idx.as_uri())})")
+                subprocess.Popen(f'start "" "{idx}"', shell=True)
             except Exception:
-                try:
-                    webbrowser.open(idx.as_uri())
-                except Exception:
-                    pass
+                pass
 
     def _register_change(self, rel: str, old: str, new: str) -> dict:
         import difflib
