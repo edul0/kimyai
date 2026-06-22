@@ -3049,6 +3049,7 @@ class WebApi:
         self._quitting = False
         self._speaking = False
         self._file_views: dict[str, dict] = {}
+        self._servers: list = []   # processos de servidor de dev (Django/Flask/Node) em execucao
         self.memories = load_memorias()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
@@ -4704,18 +4705,117 @@ class WebApi:
             except Exception:
                 pass
 
-    def _open_preview(self, base: Path) -> None:
-        """Abre o preview no navegador (confiavel: carrega .js/.css/imagens sem bug de iframe)."""
-        idx = base / "index.html"
-        if not idx.exists():
-            return
-        try:
-            webbrowser.open(idx.as_uri())
-        except Exception:
+    def _python_exe(self) -> str | None:
+        for exe in ("python", "py", "python3"):
             try:
-                subprocess.Popen(f'start "" "{idx}"', shell=True)
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8)
+                return exe
             except Exception:
-                pass
+                continue
+        return None
+
+    def _detect_backend(self, base: Path):
+        """Retorna ('django'|'flask'|'node'|None, alvo) pra saber como rodar o projeto."""
+        if (base / "manage.py").exists():
+            return "django", base / "manage.py"
+        for py in base.glob("*.py"):
+            try:
+                txt = py.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if "Flask(" in txt or "from flask" in txt or "import flask" in txt:
+                return "flask", py
+            if "FastAPI(" in txt or "from fastapi" in txt:
+                return "fastapi", py
+        if (base / "package.json").exists():
+            return "node", base / "package.json"
+        return None, None
+
+    def _open_preview(self, base: Path) -> None:
+        """Preview inteligente: site estatico abre no navegador; projeto backend
+        (Django/Flask/FastAPI/Node) SOBE O SERVIDOR e abre o localhost — nunca abre
+        um template cru (que mostraria {% %} na tela)."""
+        kind, target = self._detect_backend(base)
+        idx = base / "index.html"
+        # Site estatico de verdade: index.html sem tags de template e sem backend.
+        if not kind and idx.exists():
+            try:
+                txt = idx.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                txt = ""
+            if "{%" in txt or "{{" in txt:
+                self._msg("sys", "⚠️ Esse index.html é um template (tem {% %}). Precisa de um servidor "
+                          "pra renderizar — me diga o framework ou rode o servidor do projeto.", store=False)
+                return
+            try:
+                webbrowser.open(idx.as_uri())
+            except Exception:
+                try:
+                    subprocess.Popen(f'start "" "{idx}"', shell=True)
+                except Exception:
+                    pass
+            return
+        if kind:
+            threading.Thread(target=self._serve_project, args=(base, kind, target), daemon=True).start()
+
+    def _serve_project(self, base: Path, kind: str, target: Path) -> None:
+        """Sobe o servidor de dev do projeto em background e abre o navegador no localhost."""
+        try:
+            if kind == "node":
+                node = None
+                for exe in ("npm", "npm.cmd"):
+                    try:
+                        subprocess.run([exe, "--version"], capture_output=True, timeout=8); node = exe; break
+                    except Exception:
+                        continue
+                if not node:
+                    self._msg("sys", "📦 É um projeto Node. Instale o Node.js e rode: npm install && npm start", store=False)
+                    return
+                self._msg("sys", "🚀 Projeto Node — instalando deps e subindo o servidor…", store=False)
+                subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=300)
+                p = subprocess.Popen([node, "start"], cwd=str(base))
+                self._servers.append(p)
+                time.sleep(5); webbrowser.open("http://127.0.0.1:3000")
+                self._msg("sys", "Servidor Node rodando — abri http://127.0.0.1:3000 (ajuste a porta se for outra).", store=False)
+                return
+
+            py = self._python_exe()
+            if not py:
+                self._msg("sys", "🐍 É um projeto Python. Instale o Python e rode os comandos do README.", store=False)
+                return
+            # Garante dependencias.
+            req = base / "requirements.txt"
+            if req.exists():
+                subprocess.run([py, "-m", "pip", "install", "-r", "requirements.txt"], cwd=str(base),
+                               capture_output=True, timeout=300)
+
+            if kind == "django":
+                self._msg("sys", "🚀 Projeto Django — migrando o banco e subindo o servidor…", store=False)
+                subprocess.run([py, "-m", "pip", "install", "django"], cwd=str(base), capture_output=True, timeout=300)
+                subprocess.run([py, "manage.py", "migrate"], cwd=str(base), capture_output=True, timeout=120)
+                p = subprocess.Popen([py, "manage.py", "runserver", "127.0.0.1:8000"], cwd=str(base))
+                self._servers.append(p)
+                time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
+                self._msg("sys", "✅ Django no ar: http://127.0.0.1:8000", store=False)
+            elif kind == "fastapi":
+                self._msg("sys", "🚀 Projeto FastAPI — subindo com uvicorn…", store=False)
+                subprocess.run([py, "-m", "pip", "install", "fastapi", "uvicorn"], cwd=str(base), capture_output=True, timeout=300)
+                mod = target.stem
+                p = subprocess.Popen([py, "-m", "uvicorn", f"{mod}:app", "--port", "8000"], cwd=str(base))
+                self._servers.append(p)
+                time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
+                self._msg("sys", "✅ FastAPI no ar: http://127.0.0.1:8000", store=False)
+            else:  # flask
+                self._msg("sys", "🚀 Projeto Flask — subindo o servidor…", store=False)
+                subprocess.run([py, "-m", "pip", "install", "flask"], cwd=str(base), capture_output=True, timeout=300)
+                env = dict(os.environ); env["FLASK_APP"] = target.name
+                p = subprocess.Popen([py, str(target.name)], cwd=str(base), env=env)
+                self._servers.append(p)
+                time.sleep(4); webbrowser.open("http://127.0.0.1:5000")
+                self._msg("sys", "✅ Flask no ar: http://127.0.0.1:5000 (se não abrir, veja a porta no terminal).", store=False)
+        except Exception as exc:
+            self._msg("sys", f"Não consegui subir o servidor automaticamente ({exc}). "
+                      "Rode os comandos do README na pasta do projeto.", store=False)
 
     def _register_change(self, rel: str, old: str, new: str) -> dict:
         import difflib
