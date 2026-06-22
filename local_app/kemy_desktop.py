@@ -1404,23 +1404,36 @@ def relevant_project_files(base: Path, text: str, max_total: int = 22000) -> str
 
 class LLMClient:
     def __init__(self, env: dict[str, str]) -> None:
-        self.gemini = env.get("GEMINI_API_KEY")
-        self.groq = env.get("GROQ_API_KEY")
-        self.cerebras = env.get("CEREBRAS_API_KEY")
-        self.openai = env.get("OPENAI_API_KEY") or env.get("CHATGPT_API_KEY")
-        self.openrouter = env.get("OPENROUTER_API_KEY")
-        # NVIDIA: aceita VARIAS chaves (separadas por virgula/espaco/; ou em NVIDIA_API_KEY2..9).
-        # Quando uma esgota os creditos, a Kemy roda pra proxima sozinha.
-        nv_raw = " ".join(filter(None, [env.get("NVIDIA_API_KEY") or env.get("NIM_API_KEY") or ""]
-                                 + [env.get(f"NVIDIA_API_KEY{i}") or "" for i in range(2, 10)]))
-        self.nvidia_keys = [k for k in re.split(r"[\s,;]+", nv_raw) if k.startswith("nvapi-")]
+        # Uma chave NVIDIA comeca SEMPRE com 'nvapi-'. Se ela for colada no campo errado
+        # (ex.: MISTRAL_API_KEY=nvapi-...), nao serve pra aquele provedor — ignoramos ali e
+        # recolhemos pra NVIDIA. Assim a configuracao fica a prova de erro.
+        def _nonnv(*vals):
+            for v in vals:
+                if v and not str(v).strip().startswith("nvapi-"):
+                    return v
+            return None
+
+        self.gemini = _nonnv(env.get("GEMINI_API_KEY"))
+        self.groq = _nonnv(env.get("GROQ_API_KEY"))
+        self.cerebras = _nonnv(env.get("CEREBRAS_API_KEY"))
+        self.openai = _nonnv(env.get("OPENAI_API_KEY"), env.get("CHATGPT_API_KEY"))
+        self.openrouter = _nonnv(env.get("OPENROUTER_API_KEY"))
+        self.mistral = _nonnv(env.get("MISTRAL_API_KEY"))
+        self.github = _nonnv(env.get("GITHUB_MODELS_TOKEN"), env.get("GITHUB_TOKEN"), env.get("GH_TOKEN"))
+        self.sambanova = _nonnv(env.get("SAMBANOVA_API_KEY"), env.get("SAMBA_API_KEY"))
+        self.anthropic = _nonnv(env.get("ANTHROPIC_API_KEY"), env.get("CLAUDE_API_KEY"))
+        # NVIDIA: recolhe TODA chave 'nvapi-' de QUALQUER variavel do ambiente (mesmo se posta
+        # no campo errado) + NVIDIA_API_KEY/NIM_API_KEY/NVIDIA_API_KEY2..9. Roda entre elas.
+        pool: list[str] = []
+        for v in env.values():
+            if isinstance(v, str) and "nvapi-" in v:
+                pool += [t for t in re.split(r"[\s,;]+", v) if t.startswith("nvapi-")]
+        seen: set = set()
+        self.nvidia_keys = [k for k in pool if not (k in seen or seen.add(k))]
         self.nvidia = self.nvidia_keys[0] if self.nvidia_keys else None
-        self.mistral = env.get("MISTRAL_API_KEY")
-        # GitHub Models — gratis (sem cartao), unico caminho gratis pra GPT-4o/o3/Grok-3. Usa um PAT do GitHub.
-        self.github = env.get("GITHUB_MODELS_TOKEN") or env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
-        # SambaNova — tier gratis (sem cartao), rapido. OpenAI-compatible.
-        self.sambanova = env.get("SAMBANOVA_API_KEY") or env.get("SAMBA_API_KEY")
-        self.anthropic = env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_API_KEY")
+        self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
+                              or self.openrouter or self.nvidia or self.mistral
+                              or self.github or self.sambanova or self.anthropic)
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
                               or self.openrouter or self.nvidia or self.mistral
                               or self.github or self.sambanova or self.anthropic)
