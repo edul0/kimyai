@@ -102,12 +102,15 @@
   @keyframes talk{0%{transform:scaleY(.3)}50%{transform:scaleY(1.1)}100%{transform:scaleY(.5)}}
   /* chat */
   .chat{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
-  .msg{max-width:78%;padding:12px 15px;border-radius:16px;line-height:1.55;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s ease}
+  .msg{max-width:78%;padding:12px 15px;border-radius:16px;line-height:1.55;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s ease;user-select:text;-webkit-user-select:text}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
   .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(34,224,200,.12));border:1px solid var(--line)}
   .msg.kemy{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
   .msg.sys{align-self:center;background:none;color:var(--muted);font-size:12px;font-style:italic;padding:2px}
   .msg .save{margin-top:8px;font-size:12px;color:var(--accent2);font-weight:700}
+  .msg .copybtn{display:inline-block;margin-top:9px;font-size:11px;font-weight:600;color:var(--muted);
+    background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:8px;padding:3px 9px;cursor:pointer;user-select:none}
+  .msg .copybtn:hover{color:var(--accent2);border-color:var(--accent2)}
   /* arquivos alterados (chips clicaveis) */
   .filechips{display:flex!important;flex-wrap:wrap;gap:8px;align-self:flex-start!important;font-style:normal!important;background:none!important}
   .filechip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
@@ -300,11 +303,25 @@
     document.getElementById("stateTxt").textContent=STATE_TXT[s]||s;
     var l=document.getElementById("statelbl"); if(l) l.textContent=STATE_TXT[s]||s; }
   function vtsConnected(){ /* o rosto e a carinha do app; nao escondemos mais */ }
+  function copyText(btn,text){
+    function done(){ var o=btn.textContent; btn.textContent='✓ Copiado'; setTimeout(function(){btn.textContent=o;},1200); }
+    function fallback(){ try{ var ta=document.createElement('textarea'); ta.value=text;
+      ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta); done(); }catch(e){} }
+    try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done,fallback); } else fallback(); }
+    catch(e){ fallback(); }
+  }
+  function addCopyBtn(el,text){
+    var b=document.createElement('button'); b.className='copybtn'; b.textContent='⧉ Copiar';
+    b.onclick=function(ev){ ev.stopPropagation(); copyText(b,text); };
+    el.appendChild(b);
+  }
   function addMsg(role,text,save){
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg "+role;
     d.textContent=text;
     if(save){const s=document.createElement("div");s.className="save";s.textContent="💾 "+save;d.appendChild(s);}
+    if(role==="kemy"||role==="user"){ addCopyBtn(d,text); }
     c.appendChild(d); c.scrollTop=c.scrollHeight;
   }
   function clearChat(){document.getElementById("chat").innerHTML="";}
@@ -314,7 +331,7 @@
     c.appendChild(_streamEl); c.scrollTop=c.scrollHeight; }
   function streamChunk(delta){ if(!_streamEl)startStream();
     _streamEl.textContent+=delta; var c=document.getElementById("chat"); c.scrollTop=c.scrollHeight; }
-  function endStream(){ _streamEl=null; }
+  function endStream(){ if(_streamEl){ addCopyBtn(_streamEl, _streamEl.textContent); } _streamEl=null; }
   function showFiles(list){
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg sys filechips";
