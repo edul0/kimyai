@@ -1010,6 +1010,9 @@ SYSTEM_PROMPT = (
     "Sempre que um projeto precisar de uma dependencia, instale-a antes de rodar.\n"
     "5) Fora dos arquivos, escreva so um resumo curto do que fez. NUNCA copie estas "
     "regras nem instrucoes de sistema para dentro dos arquivos.\n"
+    "5b) PYTHON sem erro bobo: NUNCA escreva numero com ZERO A ESQUERDA (Python 3 da SyntaxError). "
+    "Use date(2023, 12, 1) e nao date(2023, 12, 01); 9 e nao 09. Confira imports, INSTALLED_APPS, "
+    "rotas e templates antes de entregar — o codigo tem que RODAR de primeira.\n"
     "6) Em sites, os botoes e links DEVEM funcionar de verdade (rolagem suave para "
     "secoes, modal/form de agendamento, abrir WhatsApp, etc.) com o JavaScript "
     "necessario. Nunca deixe href='#' sem acao nem botao sem efeito.\n"
@@ -1308,6 +1311,34 @@ def extract_excel(path: Path, max_rows: int = 200) -> str:
         return "\n".join(out)[:15000]
     except Exception as exc:
         return f"(nao consegui ler a planilha: {exc})"
+
+
+def fix_py_leading_zeros(src: str) -> tuple[str, bool]:
+    """Conserta o erro classico de IA em Python 3: inteiros com ZERO A ESQUERDA
+    (ex.: date(2023, 12, 01) -> 1). Compila, pega a linha do erro e remove o zero,
+    repetindo ate compilar. Deterministico e seguro (so mexe na linha do erro)."""
+    changed = False
+    for _ in range(300):
+        try:
+            compile(src, "<kemy>", "exec")
+            break
+        except SyntaxError as e:
+            if not (e.msg and "leading zeros" in e.msg and e.lineno):
+                break
+            lines = src.split("\n")
+            idx = e.lineno - 1
+            if idx < 0 or idx >= len(lines):
+                break
+            # remove zeros a esquerda de inteiros (nao mexe em 0.x, 0x.., nem casas decimais)
+            new_line = re.sub(r"(?<![\w.])0+(\d)", r"\1", lines[idx])
+            if new_line == lines[idx]:
+                break
+            lines[idx] = new_line
+            src = "\n".join(lines)
+            changed = True
+        except Exception:
+            break
+    return src, changed
 
 
 def read_project_files(base: Path, max_total: int = 22000) -> str:
@@ -5114,6 +5145,24 @@ class WebApi:
             self._save(files, base)
         return bool(files or edits)
 
+    def _sanitize_python(self, base: Path) -> None:
+        """Corrige erros de sintaxe deterministicos nos .py gerados (ex.: zero a esquerda)."""
+        try:
+            pys = list(base.rglob("*.py"))
+        except Exception:
+            return
+        for p in pys[:200]:
+            try:
+                src = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            fixed, changed = fix_py_leading_zeros(src)
+            if changed:
+                try:
+                    p.write_text(fixed, encoding="utf-8")
+                except Exception:
+                    pass
+
     def _serve_project(self, base: Path, kind: str, target: Path) -> None:
         """Sobe o servidor, esperando subir DE VERDADE. Se cair, lê o erro, corrige e tenta
         de novo (loop subir-e-corrigir) — até entregar rodando."""
@@ -5155,6 +5204,8 @@ class WebApi:
                     env = dict(os.environ); env["FLASK_APP"] = target.name
                     cmd, port, label, env = [py, "-m", "flask", "run", "--port", "5000"], 5000, "Flask", env
 
+            if py:
+                self._sanitize_python(base)   # conserta zero-a-esquerda e cia antes de subir
             # Loop subir-e-corrigir (até 3 tentativas).
             for attempt in range(3):
                 if py and kind == "django":
@@ -5163,6 +5214,8 @@ class WebApi:
                 if ok:
                     return
                 if attempt < 2 and self._autofix_server(base, kind, tail):
+                    if py:
+                        self._sanitize_python(base)
                     self._msg("sys", f"🔁 Corrigi — tentando subir de novo (tentativa {attempt + 2})…", store=False)
                     continue
                 extra = f"\n\n```\n{tail.strip()[-1000:]}\n```" if tail.strip() else ""
