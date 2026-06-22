@@ -5047,10 +5047,49 @@ class WebApi:
         if kind:
             threading.Thread(target=self._serve_project, args=(base, kind, target), daemon=True).start()
 
-    def _serve_project(self, base: Path, kind: str, target: Path) -> None:
-        """Sobe o servidor de dev do projeto em background e abre o navegador no localhost."""
+    def _wait_port(self, host: str, port: int, timeout: float, proc=None) -> bool:
+        """Espera a porta responder de verdade (ou o processo morrer)."""
+        import socket
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                with socket.create_connection((host, port), timeout=1):
+                    return True
+            except Exception:
+                if proc is not None and proc.poll() is not None:
+                    return False   # o servidor morreu antes de subir
+                time.sleep(0.4)
+        return False
+
+    def _serve_and_open(self, cmd: list, base: Path, port: int, label: str, env=None) -> None:
+        """Sobe um servidor, ESPERA a porta abrir e só então abre o navegador. Se não subir,
+        mostra o erro real (capturado no log) em vez de mentir um '✅ no ar'."""
+        log = base / "_kemy_server.log"
         try:
-            srv = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            fh = open(log, "wb")
+        except Exception:
+            fh = subprocess.DEVNULL
+        p = subprocess.Popen(cmd, cwd=str(base), stdout=fh, stderr=subprocess.STDOUT,
+                             env=env, **proc_quiet())
+        self._servers.append(p)
+        url = f"http://127.0.0.1:{port}"
+        if self._wait_port("127.0.0.1", port, 30, p):
+            webbrowser.open(url)
+            self._msg("sys", f"✅ {label} no ar: {url}", store=False)
+        else:
+            tail = ""
+            try:
+                tail = log.read_text(encoding="utf-8", errors="ignore")[-1200:]
+            except Exception:
+                pass
+            extra = f"\n\n```\n{tail.strip()}\n```" if tail.strip() else ""
+            self._msg("kemy", f"⚠️ Não consegui subir o {label} (a porta {port} não respondeu). "
+                      f"Geralmente é um erro no código do projeto.{extra}\n\nQuer que eu analise o erro "
+                      f"e corrija?", )
+
+    def _serve_project(self, base: Path, kind: str, target: Path) -> None:
+        """Sobe o servidor de dev do projeto, espera subir de verdade e abre o navegador."""
+        try:
             if kind == "node":
                 node = None
                 for exe in ("npm", "npm.cmd"):
@@ -5062,47 +5101,37 @@ class WebApi:
                     self._msg("sys", "📦 É um projeto Node. Instale o Node.js e rode: npm install && npm start", store=False)
                     return
                 self._msg("sys", "🚀 Projeto Node — instalando deps e subindo o servidor…", store=False)
-                subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
-                p = subprocess.Popen([node, "start"], cwd=str(base), **proc_quiet(**srv))
-                self._servers.append(p)
-                time.sleep(5); webbrowser.open("http://127.0.0.1:3000")
-                self._msg("sys", "Servidor Node rodando — abri http://127.0.0.1:3000 (ajuste a porta se for outra).", store=False)
+                subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=400, **proc_quiet())
+                self._serve_and_open([node, "start"], base, 3000, "servidor Node")
                 return
 
             py = self._python_exe()
             if not py:
                 self._msg("sys", "🐍 É um projeto Python. Instale o Python e rode os comandos do README.", store=False)
                 return
-            # Garante dependencias.
             req = base / "requirements.txt"
             if req.exists():
                 subprocess.run([py, "-m", "pip", "install", "-r", "requirements.txt"], cwd=str(base),
-                               capture_output=True, timeout=300, **proc_quiet())
+                               capture_output=True, timeout=400, **proc_quiet())
 
             if kind == "django":
                 self._msg("sys", "🚀 Projeto Django — migrando o banco e subindo o servidor…", store=False)
                 subprocess.run([py, "-m", "pip", "install", "django"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
                 subprocess.run([py, "manage.py", "migrate"], cwd=str(base), capture_output=True, timeout=120, **proc_quiet())
-                p = subprocess.Popen([py, "manage.py", "runserver", "127.0.0.1:8000"], cwd=str(base), **proc_quiet(**srv))
-                self._servers.append(p)
-                time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
-                self._msg("sys", "✅ Django no ar: http://127.0.0.1:8000", store=False)
+                # --noreload: 1 processo só (falha fica detectável e o erro vai pro log).
+                self._serve_and_open([py, "manage.py", "runserver", "--noreload", "127.0.0.1:8000"],
+                                     base, 8000, "Django")
             elif kind == "fastapi":
                 self._msg("sys", "🚀 Projeto FastAPI — subindo com uvicorn…", store=False)
                 subprocess.run([py, "-m", "pip", "install", "fastapi", "uvicorn"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
                 mod = target.stem
-                p = subprocess.Popen([py, "-m", "uvicorn", f"{mod}:app", "--port", "8000"], cwd=str(base), **proc_quiet(**srv))
-                self._servers.append(p)
-                time.sleep(4); webbrowser.open("http://127.0.0.1:8000")
-                self._msg("sys", "✅ FastAPI no ar: http://127.0.0.1:8000", store=False)
+                self._serve_and_open([py, "-m", "uvicorn", f"{mod}:app", "--port", "8000"],
+                                     base, 8000, "FastAPI")
             else:  # flask
                 self._msg("sys", "🚀 Projeto Flask — subindo o servidor…", store=False)
                 subprocess.run([py, "-m", "pip", "install", "flask"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
-                env = dict(os.environ); env["FLASK_APP"] = target.name
-                p = subprocess.Popen([py, str(target.name)], cwd=str(base), env=env, **proc_quiet(**srv))
-                self._servers.append(p)
-                time.sleep(4); webbrowser.open("http://127.0.0.1:5000")
-                self._msg("sys", "✅ Flask no ar: http://127.0.0.1:5000 (se não abrir, veja a porta no terminal).", store=False)
+                env = dict(os.environ); env["FLASK_APP"] = target.name; env["FLASK_RUN_PORT"] = "5000"
+                self._serve_and_open([py, "-m", "flask", "run", "--port", "5000"], base, 5000, "Flask", env=env)
         except Exception as exc:
             self._msg("sys", f"Não consegui subir o servidor automaticamente ({exc}). "
                       "Rode os comandos do README na pasta do projeto.", store=False)
