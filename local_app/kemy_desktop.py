@@ -3731,28 +3731,15 @@ class WebApi:
         try:
             import io
             from PIL import ImageGrab
-            try:
-                if self.window:
-                    self.window.minimize()
-                    time.sleep(0.5)
-            except Exception:
-                pass
+            # NAO usar window.minimize()/restore() aqui: operacao de janela vinda de uma
+            # thread trava o app (mesmo deadlock do modo Mini). Capturo a tela como esta.
+            time.sleep(0.2)
             img = ImageGrab.grab()
-            try:
-                if self.window:
-                    self.window.restore()
-            except Exception:
-                pass
             buf = io.BytesIO()
             img.convert("RGB").save(buf, format="JPEG", quality=70)
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            return self.llm.vision(prompt + "\n(Esta e a tela atual do usuario, ja sem a janela do Kemy.)", b64, "image/jpeg")
+            return self.llm.vision(prompt + "\n(Esta e a tela atual do usuario.)", b64, "image/jpeg")
         except Exception as exc:
-            try:
-                if self.window:
-                    self.window.restore()
-            except Exception:
-                pass
             return f"Nao consegui capturar a tela: {exc}"
 
     def see_screen(self) -> None:
@@ -4055,17 +4042,9 @@ class WebApi:
     def _do_screenshot(self) -> None:
         try:
             from PIL import ImageGrab
-            try:
-                if self.window:
-                    self.window.minimize(); time.sleep(0.5)
-            except Exception:
-                pass
+            # Sem window.minimize()/restore() (operacao de janela em thread trava o app).
+            time.sleep(0.2)
             img = ImageGrab.grab()
-            try:
-                if self.window:
-                    self.window.restore()
-            except Exception:
-                pass
             folder = Path.home() / "Pictures"
             folder.mkdir(parents=True, exist_ok=True)
             dest = folder / f"kemy_print_{int(time.time())}.png"
