@@ -1170,9 +1170,14 @@ class LLMClient:
         self.nvidia_keys = [k for k in re.split(r"[\s,;]+", nv_raw) if k.startswith("nvapi-")]
         self.nvidia = self.nvidia_keys[0] if self.nvidia_keys else None
         self.mistral = env.get("MISTRAL_API_KEY")
+        # GitHub Models — gratis (sem cartao), unico caminho gratis pra GPT-4o/o3/Grok-3. Usa um PAT do GitHub.
+        self.github = env.get("GITHUB_MODELS_TOKEN") or env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
+        # SambaNova — tier gratis (sem cartao), rapido. OpenAI-compatible.
+        self.sambanova = env.get("SAMBANOVA_API_KEY") or env.get("SAMBA_API_KEY")
         self.anthropic = env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_API_KEY")
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
-                              or self.openrouter or self.nvidia or self.mistral or self.anthropic)
+                              or self.openrouter or self.nvidia or self.mistral
+                              or self.github or self.sambanova or self.anthropic)
 
         def _list(key: str, default: list[str]) -> list[str]:
             raw = (env.get(key) or "").strip()
@@ -1201,6 +1206,12 @@ class LLMClient:
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
+        # GitHub Models (models.github.ai) — GPT-4o/o3/Grok/DeepSeek de graca via PAT do GitHub.
+        self.github_models = _list("GITHUB_MODEL", ["openai/gpt-4o", "openai/o3-mini", "deepseek/DeepSeek-V3-0324"])
+        self.github_fast = _list("GITHUB_FAST", ["openai/gpt-4o-mini", "openai/gpt-4o"])
+        # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
+        self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
+        self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
         # Padrao GRATIS: Gemini 3 Flash (free tier, sem faturamento) e o melhor flash gratuito;
         # cai para 2.5/2.0 Flash se o ID nao existir na conta. O Gemini 3.1 PRO via API e PAGO
         # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
@@ -1226,6 +1237,10 @@ class LLMClient:
             return f"Gemini · {self.gemini_models[0]}"
         if self.nvidia:
             return f"NVIDIA · {self.nvidia_models[0]}"
+        if self.github:
+            return f"GitHub · {self.github_models[0]}"
+        if self.sambanova:
+            return f"SambaNova · {self.sambanova_models[0]}"
         if self.mistral:
             return f"Mistral · {self.mistral_models[0]}"
         if self.openai:
@@ -1237,8 +1252,8 @@ class LLMClient:
     def providers(self) -> list[str]:
         out = []
         for name, key in (("cerebras", self.cerebras), ("groq", self.groq), ("gemini", self.gemini),
-                          ("nvidia", self.nvidia), ("mistral", self.mistral),
-                          ("openrouter", self.openrouter),
+                          ("nvidia", self.nvidia), ("github", self.github), ("sambanova", self.sambanova),
+                          ("mistral", self.mistral), ("openrouter", self.openrouter),
                           ("openai", self.openai), ("anthropic", self.anthropic)):
             if key:
                 out.append(name)
@@ -1252,6 +1267,8 @@ class LLMClient:
         gq_models = self.groq_fast if fast else self.groq_models
         nv_models = self.nvidia_fast if fast else self.nvidia_models
         ms_models = self.mistral_fast if fast else self.mistral_models
+        gh_models = self.github_fast if fast else self.github_models
+        sn_models = self.sambanova_fast if fast else self.sambanova_models
         attempts: list[tuple[str, str, object]] = []
 
         def add(prov: str, models: list[str], maker) -> None:
@@ -1283,6 +1300,12 @@ class LLMClient:
                 "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
         if fast:
             add_nvidia()
+        if self.sambanova:
+            add("sambanova", sn_models, lambda m: (lambda: self._openai_compat(
+                "https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, system, messages, max_tokens)))
+        if self.github:
+            add("github", gh_models, lambda m: (lambda: self._openai_compat(
+                "https://models.github.ai/inference/chat/completions", self.github, m, system, messages, max_tokens)))
         if self.mistral:
             add("mistral", ms_models, lambda m: (lambda: self._openai_compat(
                 "https://api.mistral.ai/v1/chat/completions", self.mistral, m, system, messages, max_tokens)))
@@ -1396,6 +1419,8 @@ class LLMClient:
         gq = self.groq_fast if fast else self.groq_models
         nv = self.nvidia_fast if fast else self.nvidia_models
         ms = self.mistral_fast if fast else self.mistral_models
+        gh = self.github_fast if fast else self.github_models
+        sn = self.sambanova_fast if fast else self.sambanova_models
         order = []
         if fast and self.gemini:
             order.append(("gemini", self.gemini_models[0]))
@@ -1405,6 +1430,10 @@ class LLMClient:
             order.append(("groq", gq[0]))
         if self.nvidia:
             order.append(("nvidia", nv[0]))
+        if self.sambanova:
+            order.append(("sambanova", sn[0]))
+        if self.github:
+            order.append(("github", gh[0]))
         if self.mistral:
             order.append(("mistral", ms[0]))
         if not fast and self.gemini:
@@ -1416,10 +1445,13 @@ class LLMClient:
         urls = {"cerebras": "https://api.cerebras.ai/v1/chat/completions",
                 "groq": "https://api.groq.com/openai/v1/chat/completions",
                 "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
+                "sambanova": "https://api.sambanova.ai/v1/chat/completions",
+                "github": "https://models.github.ai/inference/chat/completions",
                 "mistral": "https://api.mistral.ai/v1/chat/completions",
                 "openrouter": "https://openrouter.ai/api/v1/chat/completions",
                 "openai": "https://api.openai.com/v1/chat/completions"}
         keys = {"cerebras": self.cerebras, "groq": self.groq, "nvidia": self.nvidia,
+                "sambanova": self.sambanova, "github": self.github,
                 "mistral": self.mistral, "openrouter": self.openrouter, "openai": self.openai}
         errs = []
         for prov, model in order:
@@ -2136,7 +2168,8 @@ class KemyVoiceApp:
 
     def _has_ai_keys(self) -> bool:
         keys = ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
-                "NVIDIA_API_KEY", "MISTRAL_API_KEY", "OPENAI_API_KEY")
+                "NVIDIA_API_KEY", "MISTRAL_API_KEY", "GITHUB_MODELS_TOKEN", "GITHUB_TOKEN",
+                "SAMBANOVA_API_KEY", "OPENAI_API_KEY")
         return any(self.env_file_vars.get(k) for k in keys)
 
     # ----- UI ----- #
