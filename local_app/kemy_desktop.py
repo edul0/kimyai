@@ -1193,7 +1193,7 @@ class LLMClient:
         # virgula-separado, na ordem de preferencia.
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
         self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
-        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free", "deepseek/deepseek-chat-v3.1:free"])
+        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "qwen/qwen-2.5-coder-32b-instruct:free"])
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
         # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
@@ -1212,10 +1212,10 @@ class LLMClient:
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
-        # Padrao GRATIS: Gemini 3 Flash (free tier, sem faturamento) e o melhor flash gratuito;
-        # cai para 2.5/2.0 Flash se o ID nao existir na conta. O Gemini 3.1 PRO via API e PAGO
-        # e fica opt-in: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-3-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
+        # Padrao GRATIS: lidera com os flash AMPLAMENTE disponiveis (2.5/2.0); gemini-3-flash
+        # so existe em algumas contas (da 404 nas demais), entao fica por ultimo como opt-in.
+        # O Gemini 3.1 PRO via API e PAGO: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-3-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         # Claude (Anthropic API, PAGO) — melhor pra codigo. Use chave ANTHROPIC_API_KEY.
         self.claude_models = _list("CLAUDE_MODEL", ["claude-sonnet-4-6", "claude-3-5-sonnet-latest"])
