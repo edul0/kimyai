@@ -4507,11 +4507,16 @@ class WebApi:
             if plano:
                 self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
                 system += "\n\nPLANO A SEGUIR:\n" + plano
+        # 🧠 Roteador: escolhe a MELHOR IA pra esse tipo de tarefa (especialista primeiro).
+        route = self._route(text)
+        prefer = route[0] if route else ""
+        if prefer:
+            self._msg("sys", f"🧠 Melhor IA pra essa tarefa: {self._spec_label(text, prefer)}.", store=False)
         if self.boost and complexo and len(self.llm.providers()) >= 2:
-            self._msg("sys", "🤝 Gerando com vários modelos e juntando o melhor…", store=False)
-            reply = self._moa(system, hist, text)        # 2) Mixture of Agents
+            self._msg("sys", "🤝 Especialistas gerando e um modelo forte juntando o melhor…", store=False)
+            reply = self._moa(system, hist, text, route)  # 2) Mixture of Agents (especialistas)
         else:
-            reply = self.llm.chat(system, hist, max_tokens=16000)
+            reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer)
         if self.boost:
             self._msg("sys", "🔍 Revisando o código (olhar de sênior)…", store=False)
             reply = self._refine(system, hist, text, reply)   # 3) Revisao cruzada
@@ -4569,9 +4574,43 @@ class WebApi:
         except Exception:
             return ""
 
-    def _moa(self, system: str, msgs: list, text: str) -> str:
-        """Mixture of Agents: 2 modelos geram, um terceiro junta o melhor dos dois."""
+    def _route(self, text: str) -> list:
+        """Roteia a tarefa pra MELHOR IA: classifica o pedido e ordena os provedores por
+        especialidade (cada IA boa no que faz). Retorna a lista de provedores em ordem."""
+        t = (text or "").lower()
         provs = self.llm.providers()
+
+        def order(pref):
+            out = [p for p in pref if p in provs]
+            out += [p for p in provs if p not in out]
+            return out
+
+        code = ("erp", "sistema", "backend", "api", "servidor", "django", "flask", "fastapi",
+                "node", "sql", "banco", "codigo", "código", "funcao", "função", "bug", "corrig",
+                "script", "app", "crud", "classe", "refator")
+        design = ("site", "landing", "design", "ui", "interface", "pagina", "página", "portfolio",
+                  "portfólio", "loja", "tema", "layout", "thumb", "poster", "banner", "css", "visual")
+        writing = ("explica", "resuma", "resumo", "escreve", "escreva", "texto", "redaç", "artigo",
+                   "ideia", "planeje", "plano", "estrateg", "estratég", "analise", "análise", "traduz")
+        if any(k in t for k in code):
+            return order(["nvidia", "cerebras", "mistral", "sambanova", "groq", "github"])
+        if any(k in t for k in design):
+            return order(["nvidia", "github", "gemini", "cerebras", "groq"])
+        if any(k in t for k in writing):
+            return order(["gemini", "github", "nvidia", "groq", "cerebras"])
+        return order(["nvidia", "cerebras", "groq", "gemini"])
+
+    def _spec_label(self, text: str, prov: str) -> str:
+        names = {"nvidia": "NVIDIA (DeepSeek/GLM)", "cerebras": "Cerebras (Qwen-Coder)",
+                 "groq": "Groq (GPT-OSS/Kimi)", "gemini": "Gemini", "mistral": "Mistral (Codestral)",
+                 "github": "GitHub (GPT-5)", "sambanova": "SambaNova", "openai": "OpenAI",
+                 "openrouter": "OpenRouter"}
+        return names.get(prov, prov)
+
+    def _moa(self, system: str, msgs: list, text: str, route: list | None = None) -> str:
+        """Mixture of Agents: 2 ESPECIALISTAS (modelos diferentes, escolhidos pela tarefa)
+        geram, e um modelo forte junta o melhor dos dois."""
+        provs = route or self.llm.providers()
         drafts = []
         for prov in provs[:2]:
             try:
