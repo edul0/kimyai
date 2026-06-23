@@ -31,5 +31,9 @@ websocket-client>=1.7
 pystray>=0.19
 Pillow>=10.0
 
+# Modo jogo: enviar teclas pro jogo/emulador (SendInput; funciona em DirectX).
+pydirectinput>=1.0.4
+pyautogui>=0.9.54
+
 # Empacotamento do .exe.
 pyinstaller>=6.0

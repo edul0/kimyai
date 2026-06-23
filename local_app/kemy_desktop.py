@@ -4037,6 +4037,132 @@ class WebApi:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    # ---------------- MODO JOGO (agente que joga por visão) ----------------
+    def _key_presser(self):
+        """Retorna uma funcao press(key, hold) que envia teclas pro jogo. Prefere
+        pydirectinput (funciona em jogos/emuladores); cai pro pyautogui."""
+        try:
+            import pydirectinput as pdi
+            pdi.FAILSAFE = False
+            pdi.PAUSE = 0.04
+
+            def press(k, hold=0.06):
+                try:
+                    pdi.keyDown(k); time.sleep(max(0.03, hold)); pdi.keyUp(k)
+                except Exception:
+                    pass
+            return press
+        except Exception:
+            pass
+        try:
+            import pyautogui as pg
+            pg.FAILSAFE = False
+
+            def press(k, hold=0.06):
+                try:
+                    pg.keyDown(k); time.sleep(max(0.03, hold)); pg.keyUp(k)
+                except Exception:
+                    pass
+            return press
+        except Exception:
+            return None
+
+    def play_game(self, goal: str = "") -> None:
+        """Modo jogo: a Kemy olha a tela, entende o jogo e joga sozinha (loop visão→tecla)."""
+        if not self.llm.gemini:
+            self._msg("kemy", "Pra jogar eu preciso enxergar a tela — configure a chave do Gemini (GEMINI_API_KEY).")
+            return
+        if getattr(self, "_game_running", False):
+            self._msg("sys", "Já estou jogando. Diga 'parar jogo' pra eu parar.", store=False)
+            return
+        if not self._key_presser():
+            self._msg("kemy", "Pra apertar as teclas do jogo eu preciso da biblioteca pydirectinput. "
+                      "No modo Auto eu instalo: pip install pydirectinput")
+            return
+        self._game_running = True
+        self._game_stop = False
+        goal = (goal or "").strip() or "avançar no objetivo principal do jogo"
+        self._msg("kemy", f"🎮 Modo jogo ligado! Objetivo: **{goal}**.\nClique na janela do jogo pra deixar "
+                  "ela em foco. Diga ou digite **'parar jogo'** quando quiser que eu pare.")
+        threading.Thread(target=self._game_loop, args=(goal,), daemon=True).start()
+
+    def stop_game(self) -> None:
+        if getattr(self, "_game_running", False):
+            self._game_stop = True
+            self._msg("sys", "🎮 Parando o modo jogo…", store=False)
+
+    def _game_loop(self, goal: str, max_steps: int = 600) -> None:
+        import io
+        from PIL import ImageGrab
+        press = self._key_presser()
+        self._state("thinking")
+        hist: list[str] = []
+        prompt_base = (
+            "Voce e uma IA que JOGA videogame olhando a tela. OBJETIVO: " + goal + ".\n"
+            "Mapeamento tipico de emulador (GBA/SNES): setas = direcao; z = A (confirmar/avancar texto); "
+            "x = B (voltar/cancelar); enter = Start; backspace = Select. Em outros jogos use as teclas "
+            "obvias (wasd/setas/espaco/e).\n"
+            "Olhe o estado atual e decida as PROXIMAS teclas. Responda SO um JSON: "
+            '{\"reason\":\"o que esta vendo e o plano em 1 frase\",\"keys\":[\"z\"],\"hold\":0.06,\"done\":false}. '
+            "keys = lista de teclas a apertar em sequencia (1 a 4). Para andar bastante, repita a tecla. "
+            "done=true so quando o objetivo for cumprido.")
+        for step in range(max_steps):
+            if self._game_stop:
+                break
+            try:
+                img = ImageGrab.grab()
+                img.thumbnail((900, 600))  # menor = mais rapido/barato
+                buf = io.BytesIO(); img.convert("RGB").save(buf, format="JPEG", quality=65)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                time.sleep(0.6); continue
+            ctx = prompt_base + ("\n\nUltimas acoes: " + " | ".join(hist[-5:]) if hist else "")
+            try:
+                out = self.llm.vision(ctx, b64, "image/jpeg")
+            except Exception as e:
+                self._msg("sys", f"(visão falhou: {e})", store=False); time.sleep(1.0); continue
+            action = self._parse_game_action(out)
+            reason = (action.get("reason") or "").strip()
+            if reason:
+                self._msg("sys", f"🎮 {reason}", store=False)
+                hist.append(reason[:60])
+            if action.get("done"):
+                self._msg("kemy", "🏆 Cheguei no objetivo! (ou foi o que entendi). Parando.")
+                break
+            keys = action.get("keys") or []
+            hold = action.get("hold", 0.06)
+            for k in keys[:4]:
+                if self._game_stop:
+                    break
+                kk = self._norm_key(k)
+                if kk and press:
+                    press(kk, hold)
+                    time.sleep(0.12)
+            time.sleep(0.5)
+        self._game_running = False
+        self._state("idle")
+        if not self._game_stop:
+            self._msg("kemy", "Parei o modo jogo (limite de passos). É só pedir de novo. 🎮")
+        else:
+            self._msg("kemy", "Parei o jogo. 🎮")
+
+    def _parse_game_action(self, out: str) -> dict:
+        try:
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            if m:
+                return json.loads(m.group(0))
+        except Exception:
+            pass
+        # fallback: tenta achar teclas mencionadas
+        keys = re.findall(r"(?i)\b(up|down|left|right|cima|baixo|esquerda|direita|z|x|enter|space|a|b|w|s|d|e)\b", out or "")
+        return {"reason": (out or "")[:80], "keys": keys[:3], "done": "done" in (out or "").lower()}
+
+    def _norm_key(self, k: str) -> str:
+        k = (k or "").strip().lower()
+        tr = {"cima": "up", "baixo": "down", "esquerda": "left", "direita": "right",
+              "espaco": "space", "espaço": "space", "start": "enter", "select": "backspace"}
+        return tr.get(k, k)
+
     def toggle_overlay(self) -> None:
         """Modo mini foi REMOVIDO (era a principal causa de travamento). Para overlay de
         stream, use o OBS: Window Capture na janela da Kemy (recorte no avatar)."""
@@ -4270,6 +4396,13 @@ class WebApi:
         t = (text or "").strip().lower().rstrip("!.")
         if re.fullmatch(r"(?:para de falar|silenci\w*|cala a boca|fica quieta|shh+|quieta|cala)", t):
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
+        # Modo jogo: "joga <jogo>", "zera <jogo>", "modo jogo", "para o jogo"
+        if re.fullmatch(r"(?:para(?:r)?(?: o)?(?: modo)? jogo|stop game|para de jogar|sai do jogo)", t):
+            self.stop_game(); self._state("idle"); return True
+        mjogo = re.match(r"(?i)^(?:modo jogo|joga(?:r)?|zera(?:r)?|jogue|complete o jogo|passe? (?:de |o )?fase)\b(.*)", t)
+        if mjogo:
+            goal = mjogo.group(1).strip(" :,-") or ""
+            self.play_game(goal); return True
         if re.fullmatch(r"(?:tira(?:r)? (?:um )?print|screenshot|captura(?:r)? a tela|print da tela|printa)", t):
             self.busy = True; self._state("thinking")
             threading.Thread(target=self._do_screenshot, daemon=True).start(); return True
