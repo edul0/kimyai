@@ -3489,6 +3489,9 @@ class WebApi:
         self._speaking = False
         self._file_views: dict[str, dict] = {}
         self._servers: list = []   # processos de servidor de dev (Django/Flask/Node) em execucao
+        self._mc_sock = None       # Minecraft (Mineflayer) — socket da ponte
+        self._mc_proc = None
+        self._mc_mode = False
         self.memories = load_memorias()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
@@ -4182,6 +4185,176 @@ class WebApi:
               "espaco": "space", "espaço": "space", "start": "enter", "select": "backspace"}
         return tr.get(k, k)
 
+    # ---------------- MINECRAFT (player inteligente via Mineflayer) ----------------
+    def _find_minecraft_dir(self) -> Path | None:
+        for cand in (ROOT_DIR / "minecraft", Path(__file__).resolve().parent / "minecraft"):
+            try:
+                if (cand / "kemy_bot.js").is_file():
+                    return cand
+            except Exception:
+                continue
+        return None
+
+    def mc_start(self) -> None:
+        """Conecta a Kemy no Minecraft (sobe o bot Mineflayer e liga a ponte)."""
+        if getattr(self, "_mc_sock", None):
+            self._msg("sys", "Já estou no Minecraft. Diga 'sai do minecraft' pra sair.", store=False)
+            return
+        mdir = self._find_minecraft_dir()
+        if not mdir:
+            self._msg("kemy", "Não achei o módulo do Minecraft no app.")
+            return
+        node = None
+        for exe in ("node", "node.exe"):
+            try:
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet()); node = exe; break
+            except Exception:
+                continue
+        if not node:
+            self._msg("kemy", "Pra jogar Minecraft eu preciso do Node.js instalado. No modo Auto eu instalo: "
+                      "winget install -e --id OpenJS.NodeJS")
+            return
+        ev = dict(os.environ)
+        for k in ("MC_HOST", "MC_PORT", "MC_USER", "MC_AUTH", "MC_VERSION"):
+            v = (self.env_vars.get(k) if hasattr(self, "env_vars") else None)
+            if v:
+                ev[k] = v
+        port = ev.get("KEMY_MC_PORT", "8079"); ev["KEMY_MC_PORT"] = port
+        host = ev.get("MC_HOST", "localhost")
+        self._msg("kemy", f"🎮 Entrando no Minecraft ({host})… (na 1ª vez instalo as libs, demora um pouco)")
+        self._mc_resp = __import__("queue").Queue()
+
+        def boot():
+            try:
+                if not (mdir / "node_modules").exists():
+                    self._msg("sys", "📦 Instalando libs do Minecraft (mineflayer)…", store=False)
+                    subprocess.run([node.replace("node", "npm"), "install"], cwd=str(mdir),
+                                   capture_output=True, timeout=600, **proc_quiet())
+                log = open(mdir / "_mc.log", "wb")
+                self._mc_proc = subprocess.Popen([node, "kemy_bot.js"], cwd=str(mdir), env=ev,
+                                                 stdout=log, stderr=subprocess.STDOUT, **proc_quiet())
+                time.sleep(2.5)
+                import socket
+                for _ in range(20):
+                    try:
+                        s = socket.create_connection(("127.0.0.1", int(port)), timeout=2)
+                        self._mc_sock = s
+                        threading.Thread(target=self._mc_reader, daemon=True).start()
+                        return
+                    except Exception:
+                        time.sleep(0.6)
+                self._msg("kemy", "Não consegui falar com o bot do Minecraft. Veja o _mc.log na pasta minecraft.")
+            except Exception as e:
+                self._msg("kemy", f"Falha ao iniciar o Minecraft: {e}")
+        threading.Thread(target=boot, daemon=True).start()
+
+    def mc_stop(self) -> None:
+        self._mc_mode = False
+        try:
+            if getattr(self, "_mc_sock", None):
+                self._mc_sock.close()
+        except Exception:
+            pass
+        self._mc_sock = None
+        try:
+            if getattr(self, "_mc_proc", None):
+                self._mc_proc.terminate()
+        except Exception:
+            pass
+        self._mc_proc = None
+        self._msg("sys", "🎮 Saí do Minecraft.", store=False)
+
+    def _mc_reader(self) -> None:
+        buf = ""
+        sock = self._mc_sock
+        while sock and sock is self._mc_sock:
+            try:
+                data = sock.recv(4096)
+            except Exception:
+                break
+            if not data:
+                break
+            buf += data.decode("utf-8", "ignore")
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if "ok" in obj or "state" in obj and "event" not in obj:
+                    try:
+                        self._mc_resp.put_nowait(obj)
+                    except Exception:
+                        pass
+                ev = obj.get("event")
+                if ev == "ready":
+                    self._mc_mode = True
+                    self._msg("kemy", "✅ Entrei no Minecraft! Pode falar comigo normalmente — "
+                              "'vem cá', 'minera 5 ferro', 'constrói uma casa', 'me defende'. 'Sai do minecraft' pra sair.")
+                elif ev == "chat":
+                    self._mc_on_chat(obj.get("user", ""), obj.get("text", ""))
+                elif ev == "death":
+                    self._msg("kemy", "💀 Morri no jogo! Já volto.")
+                elif ev in ("kicked", "error", "end"):
+                    self._msg("sys", f"🎮 {obj.get('msg', ev)}", store=False)
+
+    def mc_send(self, obj: dict, timeout: float = 30) -> dict:
+        sock = getattr(self, "_mc_sock", None)
+        if not sock:
+            return {"ok": False, "msg": "não estou no Minecraft"}
+        try:
+            sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+        except Exception as e:
+            return {"ok": False, "msg": str(e)}
+        try:
+            return self._mc_resp.get(timeout=timeout)
+        except Exception:
+            return {"ok": True, "msg": "(executando…)"}
+
+    def _mc_on_chat(self, user: str, text: str) -> None:
+        """Alguém falou no chat do jogo — a Kemy responde/age se foi com ela."""
+        low = (text or "").lower()
+        self._msg("sys", f"💬 [{user}] {text}", store=False)
+        if "kemy" in low or low.startswith(("!", "@")):
+            threading.Thread(target=self.mc_brain, args=(text, user), daemon=True).start()
+
+    def mc_brain(self, request: str, who: str = "") -> None:
+        """O cérebro: lê o estado do jogo + o pedido e decide as ações (skills) a executar."""
+        if not getattr(self, "_mc_sock", None):
+            return
+        st = self.mc_send({"cmd": "state"}, timeout=10).get("state", {})
+        sysp = (
+            "Voce e a Kemy jogando Minecraft como uma jogadora inteligente e simpatica. Recebe o ESTADO do "
+            "jogo e um PEDIDO, e decide as ACOES. Skills disponiveis (responda SO um JSON):\n"
+            '{"reply":"resposta curta e natural em PT-BR pro jogador","actions":[ ... ]}\n'
+            "Cada acao e um objeto: {\"cmd\":\"come\"} (vir ate o jogador), {\"cmd\":\"follow\",\"name\":\"Player\"}, "
+            "{\"cmd\":\"stop\"}, {\"cmd\":\"goto\",\"x\":..,\"y\":..,\"z\":..}, "
+            "{\"cmd\":\"mine\",\"name\":\"iron_ore\",\"count\":5}, {\"cmd\":\"collect\"}, "
+            "{\"cmd\":\"attack\"}, {\"cmd\":\"place\",\"name\":\"oak_planks\"}, {\"cmd\":\"say\",\"text\":\"oi\"}. "
+            "Use nomes de bloco do Minecraft em ingles. Seja proativa e natural, nao robotica.")
+        usr = f"ESTADO:\n{json.dumps(st, ensure_ascii=False)}\n\nPEDIDO de {who or 'jogador'}: {request}"
+        try:
+            out = self.llm.chat(sysp, [{"role": "user", "content": usr}], max_tokens=600, fast=True)
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            plan = json.loads(m.group(0)) if m else {}
+        except Exception:
+            plan = {}
+        reply = (plan.get("reply") or "").strip()
+        if reply:
+            self._msg("kemy", reply)
+            self.mc_send({"cmd": "say", "text": reply[:200]}, timeout=5)
+            if self.speaker.available:
+                self.speaker.say(reply[:200])
+        for act in (plan.get("actions") or [])[:8]:
+            if not getattr(self, "_mc_sock", None):
+                break
+            r = self.mc_send(act, timeout=60)
+            if r.get("msg"):
+                self._msg("sys", f"🎮 {r['msg']}", store=False)
+
     def toggle_overlay(self) -> None:
         """Modo mini foi REMOVIDO (era a principal causa de travamento). Para overlay de
         stream, use o OBS: Window Capture na janela da Kemy (recorte no avatar)."""
@@ -4334,6 +4507,11 @@ class WebApi:
             return
         if self._app_command(text):   # comandos de controle do app (voz ou texto)
             return
+        # No Minecraft: a fala vira ação no jogo (cérebro do bot).
+        if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
+            threading.Thread(target=self.mc_brain, args=(text, "você"), daemon=True).start()
+            self._state("idle")
+            return
         played = self._try_play_intent(text)   # "toque <musica>" -> toca no YouTube
         if played is not None:
             self._msg("kemy", played)
@@ -4415,6 +4593,11 @@ class WebApi:
         t = (text or "").strip().lower().rstrip("!.")
         if re.fullmatch(r"(?:para de falar|silenci\w*|cala a boca|fica quieta|shh+|quieta|cala)", t):
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
+        # Minecraft: entrar / sair
+        if re.fullmatch(r"(?:entra(?:r)?|conecta(?:r)?|joga(?:r)?|vem|bora)\s+(?:n[oa]\s+)?minecraft|minecraft|modo minecraft", t):
+            self.mc_start(); return True
+        if re.fullmatch(r"(?:sai(?:r)?|desconecta(?:r)?|para(?:r)?)\s+(?:d[oe]\s+)?minecraft|sai do mine", t):
+            self.mc_stop(); self._state("idle"); return True
         # Modo jogo: "joga <jogo>", "zera <jogo>", "modo jogo", "para o jogo"
         if re.fullmatch(r"(?:para(?:r)?(?: o)?(?: modo)? jogo|stop game|para de jogar|sai do jogo)", t):
             self.stop_game(); self._state("idle"); return True

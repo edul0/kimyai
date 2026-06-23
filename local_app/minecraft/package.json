@@ -1,0 +1,15 @@
+{
+  "name": "kemy-minecraft-bot",
+  "version": "1.0.0",
+  "description": "Bot Minecraft da Kemy (Mineflayer) controlado pela IA.",
+  "type": "commonjs",
+  "main": "kemy_bot.js",
+  "scripts": { "start": "node kemy_bot.js" },
+  "dependencies": {
+    "mineflayer": "^4.20.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "mineflayer-collectblock": "^1.4.1",
+    "minecraft-data": "^3.78.0",
+    "vec3": "^0.1.10"
+  }
+}
