@@ -186,6 +186,25 @@ def save_memorias(mems: list) -> None:
         pass
 
 
+def instructions_file() -> Path:
+    return config_dir() / "kemy_instrucoes.txt"
+
+
+def load_instructions() -> str:
+    """Instrucoes/Perfil do usuario (estilo 'custom instructions') — valem em TODA conversa."""
+    try:
+        return instructions_file().read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def save_instructions(text: str) -> None:
+    try:
+        instructions_file().write_text((text or "").strip()[:4000], encoding="utf-8")
+    except Exception:
+        pass
+
+
 def conhecimento_file() -> Path:
     return config_dir() / "kemy_conhecimento.json"
 
@@ -3520,6 +3539,7 @@ class WebApi:
         self._sd_running = False    # Pokémon Showdown
         self._sd_stop = False
         self.memories = load_memorias()
+        self.instructions = load_instructions()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
@@ -4773,6 +4793,74 @@ class WebApi:
             self._msg("kemy", f"Não consegui publicar: {exc}. Confere se o token do Netlify está certo.")
             self._after_speak()
 
+    def import_ai_data(self) -> None:
+        """Importa dados de outra IA (export do Claude/ChatGPT etc.) e extrai o que importa
+        sobre o usuario pra memoria — assim a Kemy 'ja te conhece'."""
+        try:
+            res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
+        except Exception:
+            res = None
+        if not res:
+            return
+        src = res[0] if isinstance(res, (list, tuple)) else res
+        self._msg("kemy", "Lendo seus dados e aprendendo sobre você…")
+        self._state("thinking")
+
+        def work():
+            try:
+                raw = Path(src).read_text(encoding="utf-8", errors="ignore")
+            except Exception as e:
+                self._msg("kemy", f"Não consegui ler o arquivo: {e}"); self._state("idle"); return
+            # extrai texto de conversa (funciona com JSON do Claude/ChatGPT ou texto puro)
+            text = raw
+            try:
+                data = json.loads(raw)
+                bits = []
+
+                def walk(o):
+                    if isinstance(o, dict):
+                        for k, v in o.items():
+                            if k in ("text", "content", "parts") and isinstance(v, str):
+                                bits.append(v)
+                            else:
+                                walk(v)
+                    elif isinstance(o, list):
+                        for it in o:
+                            walk(it)
+                    elif isinstance(o, str) and len(o) > 12:
+                        bits.append(o)
+                walk(data)
+                if bits:
+                    text = "\n".join(bits)
+            except Exception:
+                pass
+            text = text[:30000]
+            try:
+                out = self.llm.chat(
+                    "Extraia um PERFIL do usuario a partir destas conversas com outra IA: nome, como gosta "
+                    "de ser tratado, area/profissao, stack/linguagens favoritas, gostos e projetos recorrentes, "
+                    "estilo de resposta preferido. Responda SO um JSON array de frases curtas e duraveis "
+                    "(maximo 15), cada uma um fato/preferencia. Sem texto fora do JSON.",
+                    [{"role": "user", "content": text}], max_tokens=700, fast=True)
+                facts = self._parse_facts(out)
+            except Exception as e:
+                self._msg("kemy", f"Falha ao analisar: {e}"); self._state("idle"); return
+            novos = 0
+            existentes = {m.lower() for m in self.memories}
+            for f in facts:
+                frase = (f.get("fato") if isinstance(f, dict) else str(f)).strip()
+                if len(frase) > 5 and frase.lower() not in existentes:
+                    self.memories.append(frase); existentes.add(frase.lower()); novos += 1
+            if novos:
+                save_memorias(self.memories)
+                amostra = "\n- ".join(self.memories[-min(novos, 6):])
+                self._msg("kemy", f"Importei {novos} coisa(s) sobre você e já guardei na memória:\n- {amostra}\n\n"
+                          "Agora eu já te conheço em toda conversa.")
+            else:
+                self._msg("kemy", "Li o arquivo mas não achei dados novos pra guardar.")
+            self._state("idle")
+        threading.Thread(target=work, daemon=True).start()
+
     def import_env(self) -> None:
         try:
             res = self.window.create_file_dialog(webview_open_dialog())  # type: ignore
@@ -5056,11 +5144,24 @@ class WebApi:
                 return
 
     def _memoria_prefix(self) -> str:
-        if not self.memories:
-            return ""
-        return ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
-                "(respeite SEMPRE, isso vale mais que regras gerais):\n- "
-                + "\n- ".join(self.memories[-40:]) + "\n\n")
+        out = ""
+        instr = (getattr(self, "instructions", "") or "").strip()
+        if instr:
+            out += ("INSTRUCOES DO USUARIO (perfil/preferencias fixas — respeite SEMPRE, "
+                    "valem mais que regras gerais):\n" + instr[:4000] + "\n\n")
+        if self.memories:
+            out += ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
+                    "(respeite SEMPRE):\n- " + "\n- ".join(self.memories[-40:]) + "\n\n")
+        return out
+
+    def get_instructions(self) -> str:
+        return getattr(self, "instructions", "") or ""
+
+    def save_user_instructions(self, text: str) -> None:
+        self.instructions = (text or "").strip()[:4000]
+        save_instructions(self.instructions)
+        self._msg("kemy", "Anotado! Vou seguir essas instruções em todas as conversas.")
+        self._state("idle")
 
     def _knowledge_prefix(self, text: str) -> str:
         """Recupera (RAG) os fatos aprendidos mais relevantes para a pergunta."""
