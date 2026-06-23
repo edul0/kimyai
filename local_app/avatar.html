@@ -67,7 +67,8 @@
   function baseClass(){ return (qs.get('nolabel')==='1' ? 'hidelbl ' : ''); }
   function setState(s){
     if(!s) s='idle';
-    if(s!==curState){ curState=s; document.body.className=baseClass()+s; lbl.textContent=qs.get('label')||LABELS[s]||'Pronta'; }
+    if(s!==curState){ curState=s; document.body.className=baseClass()+s; lbl.textContent=qs.get('label')||LABELS[s]||'Pronta';
+      try{ var m=window._l2dModel; if(m){ if(s==='speaking'&&m.motion)m.motion('TapBody'); else if(s==='idle'&&m.motion)m.motion('Idle'); if(m.expression&&s!=='idle')m.expression(); } }catch(e){} }
   }
   function setMouthSVG(v){ v=Math.max(0,Math.min(1,+v||0));
     mouthEl.style.transform='scaleY('+(1+v*1.8)+') scaleX('+(1-v*0.15)+')'; }
@@ -90,6 +91,7 @@
       var app=new PIXI.Application({view:document.getElementById('l2d'),resizeTo:wrap,backgroundAlpha:0,antialias:true});
       PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
         app.stage.addChild(model);
+        window._l2dModel = model;
         function fit(){ var w=app.renderer.width,h=app.renderer.height;
           model.anchor.set(0.5,1.0); var s=(h/model.height)*0.98; model.scale.set(s); model.x=w/2; model.y=h; }
         fit(); window.addEventListener('resize',fit);
