@@ -1363,6 +1363,41 @@ def fix_py_leading_zeros(src: str) -> tuple[str, bool]:
     return src, changed
 
 
+def audit_dead_controls(base: Path) -> list[str]:
+    """Acha botoes/links 'mortos' em templates HTML (deterministico, alta precisao):
+    href vazio/#, e referencias {% url 'nome' %} para rotas que NAO existem nas urls.py.
+    Retorna uma lista curta de problemas pra mandar a IA ligar tudo."""
+    issues: list[str] = []
+    try:
+        htmls = [p for p in base.rglob("*.html")][:80]
+    except Exception:
+        return issues
+    # nomes de rota definidos (Django: name="..."/path('', ..., name='x'))
+    defined: set = set()
+    try:
+        for up in base.rglob("urls.py"):
+            txt = up.read_text(encoding="utf-8", errors="ignore")
+            defined |= set(re.findall(r"name\s*=\s*['\"]([\w:.\-]+)['\"]", txt))
+    except Exception:
+        pass
+    for h in htmls:
+        try:
+            t = h.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        rel = str(h.relative_to(base))
+        dead = len(re.findall(r"href\s*=\s*['\"](?:#||javascript:void\(0\))['\"]", t))
+        # botoes/links com texto de acao mas sem destino real
+        action_dead = len(re.findall(r"(?i)>\s*(criar|nova|novo|adicionar|editar|excluir|deletar|salvar)\b[^<]*<", t)) \
+            if (dead or "href=\"#\"" in t) else 0
+        if dead:
+            issues.append(f"{rel}: {dead} link(s) com href vazio/# (botao sem acao).")
+        for name in set(re.findall(r"{%\s*url\s+['\"]([\w:.\-]+)['\"]", t)):
+            if defined and name not in defined:
+                issues.append(f"{rel}: {{% url '{name}' %}} aponta para rota inexistente.")
+    return issues[:40]
+
+
 def read_project_files(base: Path, max_total: int = 22000) -> str:
     exts = (".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".json", ".py", ".md", ".txt")
     parts: list[str] = []
@@ -5212,6 +5247,33 @@ class WebApi:
             self._save(files, base)
         return bool(files or edits)
 
+    def _autofix_buttons(self, base: Path, kind: str, issues: list) -> bool:
+        """Liga os botoes/links mortos: manda a IA criar rotas/views/forms/templates pra cada
+        acao (criar/editar/excluir) funcionar e persistir. Retorna True se mudou algo."""
+        if not issues:
+            return False
+        self._msg("sys", f"🔌 Ligando {len(issues)} botão(ões)/link(s) que estavam sem ação…", store=False)
+        files_ctx = read_project_files(base)
+        sysp = (SYSTEM_PROMPT + "\n\n=== LIGAR BOTOES/CRUD (" + kind + ") ===\n"
+                "Os botoes/links abaixo NAO funcionam (sem rota/acao). Faca o CRUD COMPLETO funcionar: "
+                "crie as rotas (urls), as views (GET mostra formulario / POST salva no banco), os ModelForm "
+                "e os templates de formulario, e os de editar/excluir (com confirmacao). A lista deve "
+                "atualizar apos salvar. PERSISTA no banco (SQLite no Django). Reentregue SOMENTE os arquivos "
+                "alterados/novos em blocos <<<FILE: caminho>>>...<<<END>>>. Sem explicacao.")
+        user = "BOTOES/LINKS SEM ACAO:\n- " + "\n- ".join(issues) + "\n\nARQUIVOS ATUAIS:\n" + files_ctx
+        try:
+            reply = self.llm.chat(sysp, [{"role": "user", "content": user}], max_tokens=16000)
+        except Exception as e:
+            self._msg("sys", f"Não consegui ligar os botões agora ({e}).", store=False)
+            return False
+        files, _ = parse_llm_files(reply)
+        edits = parse_edits(reply)
+        if edits:
+            self._apply_edits(edits, base)
+        if files:
+            self._save(files, base)
+        return bool(files or edits)
+
     def _sanitize_python(self, base: Path) -> None:
         """Corrige erros de sintaxe deterministicos nos .py gerados (ex.: zero a esquerda)."""
         try:
@@ -5279,6 +5341,13 @@ class WebApi:
 
             if py:
                 self._sanitize_python(base)   # conserta zero-a-esquerda e cia antes de subir
+            # Auto-verificador de botoes: liga links/acoes mortos ANTES de mostrar (1 rodada).
+            try:
+                dead = audit_dead_controls(base)
+                if dead and self._autofix_buttons(base, kind, dead) and py:
+                    self._sanitize_python(base)
+            except Exception:
+                pass
             # Loop subir-e-corrigir (até 3 tentativas).
             for attempt in range(3):
                 if py and kind == "django":
