@@ -409,8 +409,46 @@ def extract_image_requests(text: str) -> list[dict]:
     return reqs
 
 
+# Chave do Gemini para usar o Nano Banana (Gemini 2.5 Flash Image) como gerador principal.
+# Definida no boot (WebApi). Nano Banana e GRATIS (~500 imgs/dia) e MUITO melhor que o Flux,
+# inclusive renderizando TEXTO legivel e mantendo personagem consistente.
+GEMINI_IMAGE_KEY = ""
+NANO_BANANA_MODELS = ["gemini-2.5-flash-image", "gemini-2.5-flash-image-preview"]
+
+
+def gemini_image(prompt: str, dest: Path, key: str, ref_b64: str | None = None) -> bool:
+    """Gera (ou edita, com ref_b64) uma imagem com o Nano Banana (Gemini Image). Salva PNG."""
+    if not key:
+        return False
+    parts: list = [{"text": prompt[:1800]}]
+    if ref_b64:
+        parts.append({"inline_data": {"mime_type": "image/png", "data": ref_b64}})
+    payload = {"contents": [{"role": "user", "parts": parts}]}
+    body = json.dumps(payload).encode("utf-8")
+    for model in NANO_BANANA_MODELS:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}")
+        try:
+            req = urllib.request.Request(url, data=body, method="POST",
+                                         headers={"Content-Type": "application/json", "User-Agent": BROWSER_UA})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for cand in data.get("candidates", []):
+                for part in cand.get("content", {}).get("parts", []):
+                    inl = part.get("inline_data") or part.get("inlineData")
+                    if inl and inl.get("data"):
+                        raw = base64.b64decode(inl["data"])
+                        if len(raw) > 800:
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_bytes(raw)
+                            return True
+        except Exception:
+            continue
+    return False
+
+
 def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
-    """Gera uma imagem do tema via Pollinations (gratis, sem chave) e salva em disco."""
+    """Gera uma imagem do tema e salva em disco. Tenta o Nano Banana (Gemini, gratis, melhor
+    qualidade) primeiro; cai pro Pollinations Flux (sem chave) se nao tiver chave/falhar."""
     w, h = 1024, 1024
     try:
         a, _, b = size.lower().partition("x")
@@ -420,6 +458,13 @@ def download_image(prompt: str, dest: Path, size: str = "1024x1024") -> bool:
             h = max(64, min(2048, int(b.strip())))
     except Exception:
         pass
+    # 1) Nano Banana (Gemini Image) — melhor qualidade, texto legivel, consistencia.
+    if GEMINI_IMAGE_KEY:
+        ar = "square" if abs(w - h) < 60 else ("portrait" if h > w else "landscape")
+        gp = f"{prompt[:1600]}. High quality, {ar} composition ({w}x{h})."
+        if gemini_image(gp, dest, GEMINI_IMAGE_KEY):
+            return True
+    # 2) Pollinations Flux (gratis, sem chave) — reserva.
     url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:300]) +
            f"?width={w}&height={h}&nologo=true&enhance=true&model=flux&seed={random.randint(1, 99999)}")
     try:
@@ -1491,9 +1536,10 @@ class LLMClient:
         self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
                               or self.openrouter or self.nvidia or self.mistral
                               or self.github or self.sambanova or self.anthropic)
-        self.available = bool(self.gemini or self.groq or self.cerebras or self.openai
-                              or self.openrouter or self.nvidia or self.mistral
-                              or self.github or self.sambanova or self.anthropic)
+        # Nano Banana (Gemini Image) usa a chave do Gemini — vira o gerador de imagem padrao.
+        if self.gemini:
+            global GEMINI_IMAGE_KEY
+            GEMINI_IMAGE_KEY = self.gemini
 
         def _list(key: str, default: list[str]) -> list[str]:
             raw = (env.get(key) or "").strip()
