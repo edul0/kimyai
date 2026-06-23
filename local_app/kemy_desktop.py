@@ -3697,6 +3697,57 @@ class WebApi:
             return ""
         return f"http://127.0.0.1:{self._obs_port}/"
 
+    # ---------------- Configurações (hub no app, salva no .env local) ----------------
+    SETTINGS_KEYS = [
+        "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
+        "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY", "OPENROUTER_API_KEY",
+        "SUPABASE_URL", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
+        "MC_HOST", "MC_PORT", "MC_USER", "MC_AUTH", "MC_VERSION",
+    ]
+    SECRET_KEYS = {"NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
+                   "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY",
+                   "OPENROUTER_API_KEY", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN"}
+
+    def get_settings(self) -> dict:
+        """Valores atuais pro hub de Configuracoes (chaves vem mascaradas por seguranca)."""
+        env = getattr(self, "env_vars", {}) or {}
+        out = {}
+        for k in self.SETTINGS_KEYS:
+            v = (env.get(k) or "").strip()
+            if k in self.SECRET_KEYS and v:
+                out[k] = "set:" + v[-4:]      # so mostra que existe + ultimos 4
+            else:
+                out[k] = v
+        return out
+
+    def save_settings(self, data) -> None:
+        """Salva os campos do hub no .env LOCAL (config_dir) — sem mexer no GitHub."""
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+        except Exception:
+            data = {}
+        path = config_dir() / ".env"
+        changed = 0
+        for k, v in (data or {}).items():
+            if k not in self.SETTINGS_KEYS:
+                continue
+            v = ("" if v is None else str(v)).strip()
+            if v.startswith("set:"):   # mascarado e nao alterado -> ignora
+                continue
+            if v == "":
+                continue
+            _set_env_var(path, k, v)
+            changed += 1
+        # recarrega tudo (chaves de IA, NVIDIA, Nano Banana, Minecraft…)
+        self.env_path = path
+        self.env_vars = load_merged_env()
+        self.env_file_vars = self.env_vars
+        self.llm = LLMClient(self.env_vars)
+        self._msg("kemy", f"✅ Configurações salvas ({changed} campo(s))! Já apliquei — "
+                  f"IA ativa: {self.llm.primary_label()}.")
+        self._state("idle")
+
     def show_obs_url(self) -> None:
         url = self.obs_url()
         if url:
