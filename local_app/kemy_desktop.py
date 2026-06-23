@@ -3496,6 +3496,8 @@ class WebApi:
         self._cu_stop = False
         self._game_running = False
         self._game_stop = False
+        self._sd_running = False    # Pokémon Showdown
+        self._sd_stop = False
         self.memories = load_memorias()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
@@ -4256,6 +4258,138 @@ class WebApi:
               "espaco": "space", "espaço": "space", "start": "enter", "select": "backspace"}
         return tr.get(k, k)
 
+    # ---------------- POKÉMON SHOWDOWN (batalha online via protocolo) ----------------
+    def showdown_play(self, fmt: str = "gen9randombattle") -> None:
+        """A Kemy batalha no Pokémon Showdown (random battle): a IA escolhe os golpes."""
+        if getattr(self, "_sd_running", False):
+            self._msg("sys", "Já estou no Showdown. Diga 'parar' pra sair.", store=False)
+            return
+        try:
+            import websocket  # noqa: F401
+        except Exception:
+            self._msg("kemy", "Pra batalhar no Showdown eu preciso da lib websocket-client.")
+            return
+        self._sd_running = True
+        self._sd_stop = False
+        self._msg("kemy", "⚔️ Entrando no Pokémon Showdown e procurando uma batalha (random)… diga 'parar' pra sair.")
+        threading.Thread(target=self._sd_loop, args=(fmt,), daemon=True).start()
+
+    def stop_showdown(self) -> None:
+        if getattr(self, "_sd_running", False):
+            self._sd_stop = True
+            self._msg("sys", "⚔️ Saindo do Showdown…", store=False)
+
+    def _sd_login(self, challstr: str, name: str) -> str:
+        """Pega a 'assertion' de convidado (sem senha) pra logar no Showdown."""
+        try:
+            userid = re.sub(r"[^a-z0-9]", "", name.lower())
+            data = urllib.parse.urlencode({"act": "getassertion", "userid": userid,
+                                           "challstr": challstr}).encode("utf-8")
+            req = urllib.request.Request("https://play.pokemonshowdown.com/action.php", data=data,
+                                         headers={"User-Agent": BROWSER_UA})
+            return urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore").strip()
+        except Exception:
+            return ""
+
+    def _sd_choose(self, room: str, request: dict, log_tail: str) -> str:
+        """Decide a jogada (golpe/troca) com a IA; cai pra 'default' se algo falhar."""
+        try:
+            if request.get("forceSwitch"):
+                opts = []
+                for i, p in enumerate(request.get("side", {}).get("pokemon", []), 1):
+                    if not p.get("active") and not p.get("condition", "").endswith(" fnt"):
+                        opts.append(f"switch {i} ({p.get('ident','')})")
+                prompt = ("Voce DEVE trocar de pokémon. Opcoes: " + "; ".join(opts) +
+                          ". Responda SO JSON {\"choice\":\"switch N\"}.")
+                payload = json.dumps({"forceSwitch": True, "options": opts})
+            else:
+                active = (request.get("active") or [{}])[0]
+                moves = active.get("moves", [])
+                lst = [f"{i}: {m.get('move')} (tipo via nome, pp {m.get('pp')}, {'OFF' if m.get('disabled') else 'ok'})"
+                       for i, m in enumerate(moves, 1)]
+                team = [f"{p.get('ident','')} {p.get('condition','')}" for p in request.get("side", {}).get("pokemon", [])]
+                prompt = ("Escolha o MELHOR golpe pra ganhar (pense em vantagem de tipo e dano). "
+                          "Golpes: " + " | ".join(lst) + ". Seu time: " + "; ".join(team) +
+                          ". Responda SO JSON {\"choice\":\"move N\"} (ou \"switch N\" se for melhor trocar).")
+                payload = json.dumps({"moves": lst})
+            out = self.llm.chat("Voce e uma jogadora competitiva de Pokémon. " + prompt,
+                                [{"role": "user", "content": "Estado recente:\n" + log_tail[-800:] + "\n" + payload}],
+                                max_tokens=40, fast=True)
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            ch = (json.loads(m.group(0)).get("choice") if m else "") or ""
+            ch = ch.strip().lower()
+            if re.match(r"(move|switch)\s+\d+", ch):
+                return ch
+        except Exception:
+            pass
+        return "default"
+
+    def _sd_loop(self, fmt: str) -> None:
+        import websocket
+        name = "Kemy" + str(random.randint(100, 999))
+        try:
+            ws = websocket.create_connection("wss://sim3.psim.us/showdown/websocket", timeout=30)
+        except Exception as e:
+            self._sd_running = False
+            self._msg("kemy", f"Não consegui conectar no Showdown: {e}")
+            return
+        rooms: dict = {}
+        searched = False
+        try:
+            while not self._sd_stop:
+                try:
+                    raw = ws.recv()
+                except Exception:
+                    break
+                if not raw:
+                    continue
+                room = ""
+                if raw.startswith(">"):
+                    nl = raw.find("\n"); room = raw[1:nl] if nl > 0 else raw[1:]; raw = raw[nl + 1:] if nl > 0 else ""
+                for line in raw.split("\n"):
+                    if not line.startswith("|"):
+                        continue
+                    parts = line.split("|")
+                    cmd = parts[1] if len(parts) > 1 else ""
+                    if cmd == "challstr":
+                        challstr = "|".join(parts[2:])
+                        assertion = self._sd_login(challstr, name)
+                        if assertion:
+                            ws.send(f"|/trn {name},0,{assertion}")
+                    elif cmd == "updateuser" and not searched and len(parts) > 2 and not parts[2].strip().startswith("Guest"):
+                        searched = True
+                        ws.send(f"|/search {fmt}")
+                        self._msg("sys", f"⚔️ Logada como {name}, procurando partida ({fmt})…", store=False)
+                    elif cmd == "request" and room:
+                        try:
+                            req = json.loads(parts[2]) if parts[2].strip() else {}
+                        except Exception:
+                            req = {}
+                        if req and (req.get("active") or req.get("forceSwitch")):
+                            rooms.setdefault(room, "")
+                            choice = self._sd_choose(room, req, rooms.get(room, ""))
+                            rqid = req.get("rqid", "")
+                            ws.send(f"{room}|/choose {choice}|{rqid}")
+                            self._msg("sys", f"⚔️ Jogada: {choice}", store=False)
+                    elif cmd in ("win", "tie"):
+                        who = parts[2] if len(parts) > 2 else ""
+                        won = (cmd == "win" and who == name)
+                        self._msg("kemy", "🏆 Ganhei a batalha!" if won else ("🤝 Empate." if cmd == "tie" else f"😅 Perdi pra {who}. Bora de novo?"))
+                        if not self._sd_stop:
+                            ws.send(f"|/search {fmt}")
+                    elif cmd in ("error", "popup"):
+                        self._msg("sys", f"⚔️ {' '.join(parts[2:])[:160]}", store=False)
+                    if room:
+                        rooms[room] = (rooms.get(room, "") + "\n" + line)[-2000:]
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            self._sd_running = False
+            self._state("idle")
+            self._msg("kemy", "⚔️ Saí do Showdown.")
+
     # ---------------- COMPUTER-USE (opera o PC/navegador por visão) ----------------
     def computer_use(self, goal: str = "") -> None:
         """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa."""
@@ -4785,9 +4919,12 @@ class WebApi:
             self.mc_start(); return True
         if re.fullmatch(r"(?:sai(?:r)?|desconecta(?:r)?|para(?:r)?)\s+(?:d[oe]\s+)?minecraft|sai do mine", t):
             self.mc_stop(); self._state("idle"); return True
-        # Parar tudo (jogo / PC)
+        # Parar tudo (jogo / PC / showdown)
         if re.fullmatch(r"(?:parar?|para tudo|stop|chega|cancela(?:r)?)", t):
-            self.stop_game(); self.stop_computer(); self._state("idle"); return True
+            self.stop_game(); self.stop_computer(); self.stop_showdown(); self._state("idle"); return True
+        # Pokémon Showdown (batalha online)
+        if re.fullmatch(r"(?:showdown|batalha(?:r)?(?: de| no)? pok\w*|joga(?:r)? showdown|pok\w* showdown)", t):
+            self.showdown_play(); return True
         # Computer-use: "usa o pc pra ...", "controla o pc ...", "no navegador ..."
         mcu = re.match(r"(?i)^(?:usa(?:r)? o (?:pc|computador)(?: pra| para)?|controla(?:r)? o (?:pc|computador)|"
                        r"computer use|opera(?:r)? o (?:pc|navegador)|no navegador)\b(.*)", t)
