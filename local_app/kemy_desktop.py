@@ -1574,10 +1574,11 @@ class LLMClient:
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
-        # Padrao GRATIS: lidera com os flash AMPLAMENTE disponiveis (2.5/2.0); gemini-3-flash
-        # so existe em algumas contas (da 404 nas demais), entao fica por ultimo como opt-in.
-        # O Gemini 3.1 PRO via API e PAGO: GEMINI_PRIMARY_MODEL=gemini-3.1-pro-preview
-        self.gemini_models = _list("GEMINI_PRIMARY_MODEL", ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-3-flash"])
+        # Lidera com o MAIS ATUAL e gratis: 'gemini-flash-latest' (alias que aponta pro mais novo,
+        # = Gemini 3 Flash quando disponivel, sem dar 404) e 'gemini-3-flash'; cai pra 2.5/2.0 como
+        # rede de seguranca. O Gemini 3 PRO via API e PAGO -> opt-in: GEMINI_PRIMARY_MODEL=gemini-3-pro
+        self.gemini_models = _list("GEMINI_PRIMARY_MODEL",
+                                   ["gemini-flash-latest", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         # Claude (Anthropic API, PAGO) — melhor pra codigo. Use chave ANTHROPIC_API_KEY.
         self.claude_models = _list("CLAUDE_MODEL", ["claude-sonnet-4-6", "claude-3-5-sonnet-latest"])
@@ -4963,13 +4964,28 @@ class WebApi:
                     all_urls.append(u)
         if not all_urls:
             return
-        self._msg("sys", f"🖼 Baixando {len(all_urls)} imagem(ns) para o site (deixa elas estaveis)…", store=False)
+        self._msg("sys", f"🖼 Gerando {len(all_urls)} imagem(ns) do site (Nano Banana, alta qualidade)…", store=False)
         assets = base / "assets"
         mapping: dict[str, str] = {}
         for i, u in enumerate(all_urls[:12], 1):
-            dest = assets / f"img{i}.jpg"
-            if download_to(u, dest):
-                mapping[u] = f"assets/img{i}.jpg"
+            # extrai o prompt e o tamanho da URL do Pollinations pra REGERAR no Nano Banana.
+            prompt, size = "", "1024x1024"
+            try:
+                m = re.search(r"/prompt/([^?]+)", u)
+                if m:
+                    prompt = urllib.parse.unquote(m.group(1))
+                qw = re.search(r"width=(\d+)", u); qh = re.search(r"height=(\d+)", u)
+                if qw and qh:
+                    size = f"{qw.group(1)}x{qh.group(1)}"
+            except Exception:
+                pass
+            png = assets / f"img{i}.png"
+            if prompt and GEMINI_IMAGE_KEY and download_image(prompt, png, size):
+                mapping[u] = f"assets/img{i}.png"
+            else:
+                jpg = assets / f"img{i}.jpg"   # reserva: baixa a do Pollinations
+                if download_to(u, jpg):
+                    mapping[u] = f"assets/img{i}.jpg"
         if not mapping:
             return
         for f, txt in contents.items():
