@@ -4555,11 +4555,13 @@ class WebApi:
             if plano:
                 self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
                 system += "\n\nPLANO A SEGUIR:\n" + plano
-        # 🧠 Roteador: escolhe a MELHOR IA pra esse tipo de tarefa (especialista primeiro).
-        route = self._route(text)
+        # 🧠 Roteador inteligente: a Kemy analisa a tarefa e escolhe o melhor especialista.
+        route = self._smart_route(text)
         prefer = route[0] if route else ""
         if prefer:
-            self._msg("sys", f"🧠 Melhor IA pra essa tarefa: {self._spec_label(text, prefer)}.", store=False)
+            cat = getattr(self, "_last_cat", "")
+            tag = f" (vi que é {cat})" if cat else ""
+            self._msg("sys", f"🧠 Analisei a tarefa{tag} → usando {self._spec_label(text, prefer)}.", store=False)
         if self.boost and complexo and len(self.llm.providers()) >= 2:
             self._msg("sys", "🤝 Especialistas gerando e um modelo forte juntando o melhor…", store=False)
             reply = self._moa(system, hist, text, route)  # 2) Mixture of Agents (especialistas)
@@ -4649,6 +4651,37 @@ class WebApi:
         if any(k in t for k in writing):
             return order(["gemini", "github", "nvidia", "groq", "cerebras"])
         return order(["nvidia", "cerebras", "groq", "gemini"])
+
+    def _smart_route(self, text: str) -> list:
+        """A Kemy ANALISA a tarefa (uma IA rapida classifica) e ESCOLHE o melhor especialista.
+        Cai pro roteador por palavra-chave se a classificacao falhar."""
+        base = self._route(text)
+        self._last_cat = ""
+        if len((text or "").strip()) < 12 or len(self.llm.providers()) < 2:
+            return base
+        try:
+            cls = self.llm.chat(
+                "Classifique a tarefa do usuario em UMA categoria, respondendo SO a palavra: "
+                "code (programar/sistema/bug), design (site/ui/visual), writing (texto/explicar/ideia), "
+                "reasoning (planejar/analisar/decidir), data (dados/planilha/banco), chat (conversa).",
+                [{"role": "user", "content": (text or "")[:600]}], max_tokens=6, fast=True)
+            cat = next((c for c in ("code", "design", "writing", "reasoning", "data", "chat")
+                        if c in (cls or "").lower()), "")
+        except Exception:
+            return base
+        mapping = {
+            "code": ["groq", "cerebras", "nvidia", "mistral", "sambanova", "github"],
+            "design": ["github", "nvidia", "gemini", "cerebras", "groq"],
+            "writing": ["gemini", "github", "nvidia", "groq", "cerebras"],
+            "reasoning": ["nvidia", "github", "groq", "gemini", "cerebras"],
+            "data": ["nvidia", "cerebras", "groq", "gemini"],
+            "chat": ["gemini", "cerebras", "groq"],
+        }
+        if cat not in mapping:
+            return base
+        self._last_cat = cat
+        provs = self.llm.providers()
+        return [p for p in mapping[cat] if p in provs] + [p for p in provs if p not in mapping[cat]]
 
     def _spec_label(self, text: str, prov: str) -> str:
         if prov == "groq":
