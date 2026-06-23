@@ -1554,7 +1554,8 @@ class LLMClient:
         # Sobrescreva por env (CEREBRAS_MODEL, GROQ_MODEL, OPENROUTER_MODEL, GEMINI_PRIMARY_MODEL),
         # virgula-separado, na ordem de preferencia.
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
-        self.groq_models = _list("GROQ_MODEL", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
+        # Kimi K2 lidera o Groq pra CODIGO (excelente modelo de codigo, gratis e rapido).
+        self.groq_models = _list("GROQ_MODEL", ["moonshotai/kimi-k2-instruct", "openai/gpt-oss-120b", "qwen/qwen3-32b"])
         self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "qwen/qwen-2.5-coder-32b-instruct:free"])
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
@@ -4640,18 +4641,23 @@ class WebApi:
         writing = ("explica", "resuma", "resumo", "escreve", "escreva", "texto", "redaç", "artigo",
                    "ideia", "planeje", "plano", "estrateg", "estratég", "analise", "análise", "traduz")
         if any(k in t for k in code):
-            return order(["nvidia", "cerebras", "mistral", "sambanova", "groq", "github"])
+            # Kimi K2 (Groq) primeiro pra codigo; depois Cerebras Qwen-Coder e NVIDIA DeepSeek.
+            return order(["groq", "cerebras", "nvidia", "mistral", "sambanova", "github"])
         if any(k in t for k in design):
-            return order(["nvidia", "github", "gemini", "cerebras", "groq"])
+            # Design/UI: GPT-5 (GitHub) e GLM-5.1/DeepSeek (NVIDIA) sao os melhores gratis.
+            return order(["github", "nvidia", "gemini", "cerebras", "groq"])
         if any(k in t for k in writing):
             return order(["gemini", "github", "nvidia", "groq", "cerebras"])
         return order(["nvidia", "cerebras", "groq", "gemini"])
 
     def _spec_label(self, text: str, prov: str) -> str:
-        names = {"nvidia": "NVIDIA (DeepSeek/GLM)", "cerebras": "Cerebras (Qwen-Coder)",
-                 "groq": "Groq (GPT-OSS/Kimi)", "gemini": "Gemini", "mistral": "Mistral (Codestral)",
-                 "github": "GitHub (GPT-5)", "sambanova": "SambaNova", "openai": "OpenAI",
-                 "openrouter": "OpenRouter"}
+        if prov == "groq":
+            return "Kimi K2 (código)"
+        if prov == "github":
+            return "GPT-5 (design)"
+        names = {"nvidia": "NVIDIA (DeepSeek-V4 / GLM-5.1)", "cerebras": "Cerebras (Qwen-Coder 480B)",
+                 "gemini": "Gemini 3", "mistral": "Mistral (Codestral)",
+                 "sambanova": "SambaNova", "openai": "OpenAI", "openrouter": "OpenRouter"}
         return names.get(prov, prov)
 
     def _moa(self, system: str, msgs: list, text: str, route: list | None = None) -> str:
