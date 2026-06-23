@@ -5,29 +5,40 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Kemy</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap');
   :root{
-    --bg:#070a12; --bg2:#0b1020; --panel:rgba(255,255,255,.04); --panel2:rgba(255,255,255,.06);
-    --line:rgba(255,255,255,.08); --text:#eaf0ff; --muted:#8a98b8;
-    --accent:#7c5cff; --accent2:#22e0c8; --user:#9fe7d2;
+    --bg:#06080f; --bg2:#0a0e1c; --panel:rgba(255,255,255,.045); --panel2:rgba(255,255,255,.07);
+    --line:rgba(255,255,255,.09); --text:#eef2ff; --muted:#8b99bd;
+    --accent:#7c5cff; --accent2:#22e0c8; --gold:#e7c66b; --user:#9fe7d2;
     --idle:#22e0c8; --listening:#5ab0ff; --thinking:#ffc857; --speaking:#b98bff; --error:#ff6b6b;
-    --st:var(--idle);
+    --st:var(--idle); --r:14px;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0}
   body{
-    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--text);
+    font-family:'Inter',"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--text);
+    font-feature-settings:"cv11","ss01";letter-spacing:.1px;-webkit-font-smoothing:antialiased;
     background:
-      radial-gradient(900px 500px at 80% -10%, rgba(124,92,255,.18), transparent 60%),
-      radial-gradient(700px 500px at -10% 110%, rgba(34,224,200,.12), transparent 60%),
-      linear-gradient(160deg,#070a12,#0b1020);
+      radial-gradient(1100px 600px at 82% -12%, rgba(124,92,255,.20), transparent 60%),
+      radial-gradient(800px 560px at -12% 112%, rgba(34,224,200,.13), transparent 60%),
+      radial-gradient(600px 400px at 50% 50%, rgba(231,198,107,.04), transparent 70%),
+      linear-gradient(160deg,#06080f,#0a0e1c);
     overflow:hidden;
   }
+  /* scrollbars premium */
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:padding-box}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::selection{background:rgba(124,92,255,.35)}
   .app{display:grid;grid-template-columns:248px 1fr;height:100vh}
   /* sidebar */
   .side{background:rgba(0,0,0,.25);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px;gap:12px;backdrop-filter:blur(12px)}
-  .brand{display:flex;align-items:center;gap:10px;padding:4px 6px}
-  .brand b{font-size:20px;letter-spacing:.5px}
-  .brand small{color:var(--muted)}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 4px}
+  .brand b{font-family:'Sora','Inter',sans-serif;font-size:21px;font-weight:800;letter-spacing:.3px;
+    background:linear-gradient(120deg,#fff 10%,var(--accent2) 55%,var(--accent) 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .brand small{color:var(--muted);font-weight:600;letter-spacing:.5px}
   .newbtn{border:0;border-radius:14px;padding:12px;font-weight:700;color:#08111a;cursor:pointer;
     background:linear-gradient(135deg,var(--accent2),#5ad8ff);box-shadow:0 8px 24px rgba(34,224,200,.25);transition:.2s}
   .newbtn:hover{transform:translateY(-2px);filter:brightness(1.05)}
@@ -102,11 +113,11 @@
   @keyframes talk{0%{transform:scaleY(.3)}50%{transform:scaleY(1.1)}100%{transform:scaleY(.5)}}
   /* chat */
   .chat{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
-  .msg{max-width:78%;padding:12px 15px;border-radius:16px;line-height:1.55;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s ease;user-select:text;-webkit-user-select:text}
+  .msg{max-width:74%;padding:13px 16px;border-radius:18px;line-height:1.6;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s cubic-bezier(.2,.8,.2,1);user-select:text;-webkit-user-select:text;box-shadow:0 8px 26px rgba(0,0,0,.22)}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
-  .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(34,224,200,.12));border:1px solid var(--line)}
-  .msg.kemy{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
-  .msg.sys{align-self:center;background:none;color:var(--muted);font-size:12px;font-style:italic;padding:2px}
+  .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(124,92,255,.26),rgba(34,224,200,.14));border:1px solid rgba(124,92,255,.30);border-bottom-right-radius:6px}
+  .msg.kemy{align-self:flex-start;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid var(--line);border-bottom-left-radius:6px}
+  .msg.sys{align-self:center;background:rgba(255,255,255,.03);color:var(--muted);font-size:11.5px;font-style:normal;padding:4px 12px;border-radius:20px;border:1px solid var(--line);box-shadow:none;opacity:.85;max-width:88%}
   .msg .save{margin-top:8px;font-size:12px;color:var(--accent2);font-weight:700}
   .msg .copybtn{display:inline-block;margin-top:9px;font-size:11px;font-weight:600;color:var(--muted);
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:8px;padding:3px 9px;cursor:pointer;user-select:none}
@@ -392,12 +403,12 @@
     var c=document.getElementById('chat');
     var old=document.getElementById('taskpanel'); if(old) old.remove();
     var d=document.createElement('div'); d.className='msg sys taskpanel'; d.id='taskpanel';
-    var html='<div class="tp-h">🧭 Trabalhando…</div>';
+    var html='<div class="tp-h">Trabalhando</div>';
     (steps||[]).forEach(function(s,i){ html+='<div class="tp-i" id="tp-'+i+'"><span class="tp-dot"></span>'+_esc(s)+'</div>'; });
     d.innerHTML=html; c.appendChild(d); c.scrollTop=c.scrollHeight;
   };
   window.kemyPlanStep=function(i,state){ var el=document.getElementById('tp-'+i); if(el) el.className='tp-i '+(state||''); };
-  window.kemyPlanDone=function(){ var h=document.querySelector('#taskpanel .tp-h'); if(h) h.textContent='✅ Concluído'; };
+  window.kemyPlanDone=function(){ var h=document.querySelector('#taskpanel .tp-h'); if(h) h.textContent='Concluído'; };
   function clearChat(){document.getElementById("chat").innerHTML="";}
   var _streamEl=null;
   function startStream(){ var c=document.getElementById("chat");

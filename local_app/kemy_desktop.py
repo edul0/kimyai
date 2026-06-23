@@ -127,6 +127,23 @@ def config_dir() -> Path:
     return d
 
 
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+    "\U0001F1E6-\U0001F1FF\U00002190-\U000021FF\U00002300-\U000023FF"
+    "\U0000FE00-\U0000FE0F\U0000200D\U00002022\U000025AA-\U000025FF]+")
+
+
+def strip_emojis(text: str) -> str:
+    """Remove emojis e simbolos decorativos pra UI ficar limpa/sobria. Preserva o texto."""
+    if not text:
+        return text
+    out = _EMOJI_RE.sub("", text)
+    # tira espacos duplos/sobras deixados pelos emojis removidos
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n[ \t]+", "\n", out)
+    return out.strip()
+
+
 def proc_quiet(**extra) -> dict:
     """kwargs pra subprocess que NAO abre janela de console nem trava num app --windowed
     (sem console): redireciona stdin e usa CREATE_NO_WINDOW no Windows."""
@@ -1225,10 +1242,14 @@ SYSTEM_PROMPT = (
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
 CHAT_PROMPT = (
-    "Voce e a Kemy, uma assistente simpatica e prestativa. Converse em PORTUGUES, "
-    "de forma curta, natural e amigavel, como uma amiga. Responda direto, sem enrolar e "
-    "sem markdown. Se o usuario pedir para criar/editar um site ou codigo, ou abrir um "
-    "programa, voce tambem faz isso normalmente."
+    "Voce e a Kemy: uma parceira de IA brasileira, esperta, calorosa e com personalidade. "
+    "Fala PORTUGUES do dia a dia, natural e com carisma — como uma amiga inteligente que manja "
+    "de tecnologia, jogos e cria coisas com voce. Tem opiniao, bom humor leve e e direta: responde "
+    "curto, sem enrolar, sem encher de pergunta. Trata o usuario pelo que importa, lembra do contexto "
+    "e e proativa quando ajuda. NAO use emojis nem markdown pesado (a interface e limpa e sobria). "
+    "Evita ser robotica ou formal demais; nada de 'Como posso ajudar?' generico. Se for pedido de "
+    "criar/editar site ou codigo, abrir programa, jogar, controlar o PC etc., voce faz de boa. "
+    "Seja confiante e gente boa, mas honesta: se algo nao da, fala na lata e sugere um caminho."
 )
 
 # Camada de DESIGN dedicada (estilo Claude artifacts). Anexada quando o pedido e claramente
@@ -3624,6 +3645,7 @@ class WebApi:
             os._exit(0)
 
     def _msg(self, role: str, text: str, save: str | None = None, store: bool = True) -> None:
+        text = strip_emojis(text)   # UI limpa/sobria, sem emojis
         self._js(f"addMsg({json.dumps(role)},{json.dumps(text)},{json.dumps(save)})")
         if store and role in ("user", "kemy"):
             it = self._cur()
@@ -5210,45 +5232,36 @@ class WebApi:
         # e SEMPRE usa o melhor modelo disponivel (NVIDIA frontier / GPT-5).
         if design_req:
             system += DESIGN_PROMPT
-            self._msg("sys", "🎨 Modo Design ligado — caprichando no visual (design system).", store=False)
-        # 🪟 Painel "ver ela trabalhar" (checklist ao vivo, estilo Manus).
+        # Painel "ver ela trabalhar" (checklist ao vivo). Substitui o spam de status no chat.
         panel_on = self.boost
         if panel_on:
             self._panel(["Analisar a tarefa", "Planejar a solução", "Gerar com o especialista",
                          "Revisar (olhar de sênior)", "Salvar e montar", "Rodar e mostrar"])
             self._panel_step(0, "doing")
-        # ✨ Capricho (todas as tecnicas gratis nivel-pro):
+        # Capricho (tecnicas nivel-pro): tudo silencioso, refletido no painel.
         if self.boost:
-            if design_req:                    # 0) Pesquisa REFERENCIAS antes (como um pro)
-                self._msg("sys", "🔎 Pesquisando referências e boas práticas…", store=False)
+            if design_req:                    # pesquisa referencias antes (como um pro)
                 refs = self._research_references(text)
                 if refs:
                     system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + refs
             self._panel_step(1, "doing")
-            plano = self._plan(text)          # 1) Planejamento (raciocinio visivel)
+            plano = self._plan(text)          # planejamento
             if plano:
-                self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
                 system += "\n\nPLANO A SEGUIR:\n" + plano
-        # 🧠 Roteador inteligente: a Kemy analisa a tarefa e escolhe o melhor especialista.
+        # Roteador inteligente: escolhe a melhor IA pra tarefa (silencioso).
         route = self._smart_route(text)
         prefer = route[0] if route else ""
-        if prefer:
-            cat = getattr(self, "_last_cat", "")
-            tag = f" (vi que é {cat})" if cat else ""
-            self._msg("sys", f"🧠 Analisei a tarefa{tag} → usando {self._spec_label(text, prefer)}.", store=False)
         if panel_on:
             self._panel_step(0, "done"); self._panel_step(1, "done"); self._panel_step(2, "doing")
         if self.boost and complexo and len(self.llm.providers()) >= 2:
-            self._msg("sys", "🤝 Especialistas gerando e um modelo forte juntando o melhor…", store=False)
-            reply = self._moa(system, hist, text, route)  # 2) Mixture of Agents (especialistas)
+            reply = self._moa(system, hist, text, route)  # Mixture of Agents (especialistas)
         else:
             reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer)
         if panel_on:
             self._panel_step(2, "done")
         if self.boost:
             self._panel_step(3, "doing")
-            self._msg("sys", "🔍 Revisando o código (olhar de sênior)…", store=False)
-            reply = self._refine(system, hist, text, reply)   # 3) Revisao cruzada
+            reply = self._refine(system, hist, text, reply)   # revisao cruzada
             self._panel_step(3, "done")
         if panel_on:
             self._panel_step(4, "doing")
