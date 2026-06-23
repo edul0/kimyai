@@ -1219,38 +1219,43 @@ SYSTEM_PROMPT = (
     "17) PROATIVA: ao TERMINAR um projeto/tarefa, no final do resumo sugira 2-3 proximos passos curtos e "
     "uteis (ex.: 'Quer que eu adicione um formulario de contato? Posso publicar o site no ar? Adiciono modo "
     "escuro?'). Seja util como um colega senior, sem encher.\n"
-    "18) SISTEMA COMPLETO / ERP / PLATAFORMA / CRUD / DASHBOARD (regra CRITICA, leia com atencao): "
-    "quando o pedido for um SISTEMA de verdade (ERP, plataforma, painel admin, app com login, CRUD, "
-    "estoque, vendas, financeiro, agendamento, etc.), e PROIBIDO entregar um unico index.html simples ou "
-    "uma tela 'feia' de exemplo. Entregue uma APLICACAO REAL, MULTI-ARQUIVO e ARQUITETADA:\n"
-    "   - Respeite a LINGUAGEM/STACK que o usuario pediu. Se ele disse 'em Python' -> Flask ou FastAPI "
-    "(app.py + templates/ + static/ + models + rotas + persistencia em SQLite ou JSON); 'em Node' -> "
-    "Express; 'em React/Next' -> componentes reais. Se NAO especificou a stack, escolha a melhor e diga qual.\n"
-    "   - SEPARE em arquivos coerentes (models, rotas/controllers, services, templates/componentes, "
-    "static/css, static/js, db). Nada de tudo amontoado num arquivo so.\n"
-    "   - Implemente os MODULOS de verdade, funcionando ponta a ponta: listar, criar, editar, excluir, "
-    "buscar/filtrar, e PERSISTIR os dados (SQLite/JSON/arquivo). Nada de botao que nao faz nada nem "
-    "'// TODO implementar'. Inclua dados de exemplo (seed) para abrir e ja ver funcionando.\n"
-    "   - !!! TODO BOTAO E LINK TEM QUE FUNCIONAR DE VERDADE !!! 'Criar/Nova' abre um FORMULARIO (pagina "
-    "ou modal) que ao enviar SALVA no banco e volta pra lista atualizada; 'Editar' carrega os dados no "
-    "formulario e atualiza; 'Excluir' remove (com confirmacao) e some da lista. Crie as ROTAS/views/handlers "
-    "e os templates de formulario de CADA modulo. Em Django: urls + views (GET form / POST salva) + "
-    "ModelForm + template do form + redirect. PROIBIDO entregar tabela so-leitura ou botao decorativo: se um "
-    "modulo aparece no menu, o seu CRUD inteiro funciona. Teste mentalmente cada botao antes de entregar.\n"
-    "   - UI de PAINEL profissional: sidebar de navegacao entre modulos, topbar, area de conteudo com "
-    "tabelas/cards, formularios em modal ou pagina, estados de vazio/carregando, e o MESMO nivel de capricho "
-    "visual da regra 9 (fonte boa, paleta coerente, espacamento, responsivo). Um ERP deve PARECER um ERP.\n"
-    "   - Forneca os comandos para instalar e rodar num bloco ```kemy-run (ex.: pip install flask; "
-    "python app.py) e um README curto com como usar.\n"
-    "   - Se for grande demais para uma resposta, ENTREGUE O ESQUELETO COMPLETO E FUNCIONAL (todos os "
-    "arquivos, rodando, com 1-2 modulos prontos de exemplo) e diga claramente o que falta — NUNCA um stub "
-    "vazio e feio. O criterio e: o usuario abre, roda o comando, e ja tem um sistema utilizavel na cara dele.\n"
+    "18) SISTEMA COMPLETO / ERP / PLATAFORMA / CRUD / DASHBOARD (regra CRITICA — leia com MUITA atencao, "
+    "aqui esta a causa de 'os botoes nao funcionam'):\n"
+    "   - STACK PADRAO = APP CLIENT-SIDE (HTML + CSS + JavaScript puro + localStorage). NAO use Django/Flask/"
+    "backend A NAO SER que o usuario peca explicitamente uma linguagem/servidor. Motivo: um app client-side "
+    "tem os botoes ligados em JS de verdade, persiste em localStorage e ABRE FUNCIONANDO no navegador, sem "
+    "servidor/rotas/forms que costumam quebrar. So va de backend (Flask/Express + SQLite) se o usuario "
+    "exigir 'em Python/Node/Django' — e ai faca o CRUD completo (rotas+views+forms+templates).\n"
+    "   - CADA modulo (Vendas, Estoque, Clientes, OS, Financeiro...) tem CRUD 100% FUNCIONAL em JS: um array "
+    "guardado no localStorage; funcao render() que desenha a tabela a partir do array; botao 'Novo' abre um "
+    "modal com <form>; no submit voce faz e.preventDefault(), le os campos, da push/atualiza no array, salva "
+    "no localStorage e chama render(); 'Editar' preenche o form com o item; 'Excluir' pede confirm() e remove. "
+    "PROIBIDO botao decorativo, href='#' sem acao, ou tabela so-leitura. Inclua addEventListener em TODOS os "
+    "botoes (ou onclick com funcao DEFINIDA). Teste mentalmente: clicar 'Nova Venda' -> abre modal -> preenche "
+    "-> salva -> aparece na tabela -> recarrega a pagina -> CONTINUA la (localStorage).\n"
+    "   - PADRAO DE CODIGO JS (siga este esqueleto, adaptando os campos):\n"
+    "     const KEY='vendas'; let vendas=JSON.parse(localStorage.getItem(KEY)||'[]');\n"
+    "     function save(){localStorage.setItem(KEY,JSON.stringify(vendas));}\n"
+    "     function render(){const tb=document.querySelector('#tblVendas tbody');tb.innerHTML=vendas.map((v,i)=>"
+    "`<tr><td>${v.cliente}</td><td>R$ ${v.valor}</td><td>${v.status}</td>"
+    "<td><button onclick=editVenda(${i})>Editar</button> <button onclick=delVenda(${i})>Excluir</button></td></tr>`).join('');}\n"
+    "     function novaVenda(){/* abre modal limpo */} function editVenda(i){/* abre modal com vendas[i] */}\n"
+    "     function delVenda(i){if(confirm('Excluir?')){vendas.splice(i,1);save();render();}}\n"
+    "     // no submit do form: e.preventDefault(); pega valores; if(editando)vendas[idx]=obj;else vendas.push(obj); save(); fecharModal(); render();\n"
+    "     document.addEventListener('DOMContentLoaded',render);\n"
+    "   - ARQUITETURA: index.html (sidebar com os modulos), styles.css (visual de PAINEL pro, regra 9), e UM "
+    "app.js por modulo OU um app.js so com tudo. Navegacao entre modulos por show/hide de <section> (SPA). "
+    "Seed: comece com 2-3 itens de exemplo no array se o localStorage estiver vazio.\n"
+    "   - UI de PAINEL profissional: sidebar fixa, topbar, cards de resumo (totais), tabelas com acoes, "
+    "modais bonitos, estado vazio ('nenhuma venda ainda'), responsivo. Um ERP deve PARECER e FUNCIONAR como ERP.\n"
+    "   - Entregue COMPLETO e funcionando de primeira. O criterio unico: o usuario abre o index.html, clica "
+    "em qualquer botao e FUNCIONA, e os dados sobrevivem ao recarregar.\n"
     "19) BANCO DE DADOS / PERSISTENCIA (sempre que houver dados a guardar — cadastros, vendas, estoque, "
     "usuarios, etc.): NUNCA deixe os dados so na memoria/variavel (somem ao recarregar). Use um banco DE "
     "VERDADE:\n"
-    "   - PADRAO = SQLite LOCAL (zero configuracao, sem chave, funciona offline). Django -> ja usa SQLite "
-    "(models + migrate). Flask/FastAPI -> sqlite3 ou SQLAlchemy criando o arquivo .db e as tabelas no 1o run. "
-    "Node -> better-sqlite3. App so de frontend (HTML/JS puro) sem backend -> use localStorage/IndexedDB.\n"
+    "   - PADRAO (app client-side, regra 18) = localStorage/IndexedDB (zero config, persiste de verdade). "
+    "Se o usuario pediu BACKEND: Django -> SQLite (models+migrate); Flask/FastAPI -> sqlite3/SQLAlchemy "
+    "criando o .db no 1o run; Node -> better-sqlite3.\n"
     "   - SUPABASE (Postgres na nuvem, free) quando o usuario PEDIR nuvem/online/multiusuario, ou quando "
     "houver as variaveis SUPABASE_URL e SUPABASE_ANON_KEY no ambiente: use a lib oficial (supabase-js no "
     "front/Node, supabase-py no Python) lendo a URL e a anon key dessas variaveis (NUNCA escreva a chave no "
@@ -2333,9 +2338,18 @@ class Speaker:
                     spoke = True
                 except Exception as exc:
                     spoke = False  # chave invalida/cota -> tenta edge
+                    # 402 (pagamento) / 401 (chave) / 429 (limite): desliga a ElevenLabs
+                    # pela sessao pra nao ficar tentando e repetindo o aviso toda fala.
+                    code = getattr(exc, "code", None)
+                    fatal = code in (401, 402, 403, 429) or any(
+                        c in str(exc) for c in ("402", "401", "403", "429"))
                     if self.log and not self._el_warned:
                         self._el_warned = True
-                        self.log(f"⚠️ Voz ElevenLabs indisponivel ({exc}); usando a voz reserva.")
+                        motivo = ("cota/plano da ElevenLabs esgotado" if code == 402 or "402" in str(exc)
+                                  else f"ElevenLabs indisponivel ({exc})")
+                        self.log(f"Voz {motivo}; usando a voz neural reserva (gratis).")
+                    if fatal:
+                        self.el_key = None  # desativa de vez nesta sessao
             if not spoke and self._edge_ok:
                 try:
                     self._speak_edge(text)
