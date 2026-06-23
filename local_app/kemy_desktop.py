@@ -3492,6 +3492,10 @@ class WebApi:
         self._mc_sock = None       # Minecraft (Mineflayer) — socket da ponte
         self._mc_proc = None
         self._mc_mode = False
+        self._cu_running = False    # computer-use (controle do PC)
+        self._cu_stop = False
+        self._game_running = False
+        self._game_stop = False
         self.memories = load_memorias()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
@@ -4236,6 +4240,122 @@ class WebApi:
               "espaco": "space", "espaço": "space", "start": "enter", "select": "backspace"}
         return tr.get(k, k)
 
+    # ---------------- COMPUTER-USE (opera o PC/navegador por visão) ----------------
+    def computer_use(self, goal: str = "") -> None:
+        """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa."""
+        if not self.llm.gemini:
+            self._msg("kemy", "Pra controlar o PC eu preciso enxergar a tela — configure a chave do Gemini.")
+            return
+        if getattr(self, "_cu_running", False):
+            self._msg("sys", "Já estou usando o PC. Diga 'parar' pra eu parar.", store=False)
+            return
+        try:
+            import pyautogui  # noqa: F401
+        except Exception:
+            self._msg("kemy", "Pra controlar o PC eu preciso do pyautogui. No modo Auto: pip install pyautogui")
+            return
+        goal = (goal or "").strip()
+        if not goal:
+            self._msg("kemy", "Me diz o que fazer no PC. Ex.: 'pesquise no Google por notebooks e abra o primeiro'.")
+            return
+        self._cu_running = True
+        self._cu_stop = False
+        self._msg("kemy", f"🖱️ Tô no controle! Objetivo: **{goal}**. Pra eu parar na hora, diga **'parar'** "
+                  "ou jogue o mouse pro canto superior-esquerdo da tela.")
+        threading.Thread(target=self._cu_loop, args=(goal,), daemon=True).start()
+
+    def stop_computer(self) -> None:
+        if getattr(self, "_cu_running", False):
+            self._cu_stop = True
+            self._msg("sys", "🖱️ Parando o controle do PC…", store=False)
+
+    def _cu_loop(self, goal: str, max_steps: int = 40) -> None:
+        import io
+        from PIL import ImageGrab
+        try:
+            import pyautogui
+            pyautogui.FAILSAFE = True  # mouse no canto sup-esq aborta
+        except Exception:
+            self._cu_running = False
+            return
+        self._state("thinking")
+        hist: list[str] = []
+        base_prompt = (
+            "Voce CONTROLA o computador olhando a tela pra cumprir o OBJETIVO: " + goal + ".\n"
+            "A tela e um plano de coordenadas NORMALIZADAS de 0 a 1000 (x=0 esquerda,1000 direita; "
+            "y=0 topo,1000 base). Decida a PROXIMA acao e responda SO um JSON:\n"
+            '{\"reason\":\"o que ve e o plano em 1 frase\",\"action\":\"click|double_click|right_click|'
+            'move|type|key|scroll|open_url|wait|done\",\"x\":500,\"y\":500,\"text\":\"...\",'
+            '\"keys\":[\"enter\"],\"amount\":-400,\"url\":\"https://...\"}\n'
+            "Use 'open_url' pra abrir um site direto no navegador. 'type' digita um texto; 'key' aperta "
+            "teclas (ex.: enter, ctrl+a). 'scroll' usa amount (negativo desce). done=true quando concluir.")
+        for step in range(max_steps):
+            if self._cu_stop:
+                break
+            try:
+                full = ImageGrab.grab()
+                W, H = full.size
+                small = full.copy(); small.thumbnail((1100, 700))
+                buf = io.BytesIO(); small.convert("RGB").save(buf, format="JPEG", quality=70)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                time.sleep(0.8); continue
+            ctx = base_prompt + ("\n\nUltimas acoes: " + " | ".join(hist[-5:]) if hist else "")
+            try:
+                out = self.llm.vision(ctx, b64, "image/jpeg")
+            except Exception as e:
+                self._msg("sys", f"(visão falhou: {e})", store=False); time.sleep(1.0); continue
+            act = self._parse_game_action(out)
+            reason = (act.get("reason") or "").strip()
+            if reason:
+                self._msg("sys", f"🖱️ {reason}", store=False); hist.append(reason[:60])
+            a = (act.get("action") or "").lower()
+            if a == "done" or act.get("done"):
+                self._msg("kemy", "✅ Acho que terminei! Confere aí.")
+                break
+            try:
+                px = int(float(act.get("x", 500)) / 1000.0 * W)
+                py = int(float(act.get("y", 500)) / 1000.0 * H)
+            except Exception:
+                px, py = W // 2, H // 2
+            try:
+                if a in ("click", "double_click", "right_click", "move"):
+                    pyautogui.moveTo(px, py, duration=0.3)
+                    if a == "click":
+                        pyautogui.click()
+                    elif a == "double_click":
+                        pyautogui.doubleClick()
+                    elif a == "right_click":
+                        pyautogui.rightClick()
+                elif a == "type":
+                    pyautogui.write(str(act.get("text", "")), interval=0.02)
+                elif a == "key":
+                    keys = act.get("keys") or []
+                    if len(keys) > 1:
+                        pyautogui.hotkey(*[self._norm_key(k) for k in keys])
+                    elif keys:
+                        pyautogui.press(self._norm_key(keys[0]))
+                elif a == "scroll":
+                    pyautogui.scroll(int(act.get("amount", -400)))
+                elif a == "open_url":
+                    url = act.get("url") or ""
+                    if url:
+                        webbrowser.open(url); time.sleep(2.0)
+                elif a == "wait":
+                    time.sleep(1.0)
+            except pyautogui.FailSafeException:
+                self._msg("kemy", "🛑 Você jogou o mouse no canto — parei na hora!")
+                break
+            except Exception as e:
+                self._msg("sys", f"(ação falhou: {e})", store=False)
+            time.sleep(0.7)
+        self._cu_running = False
+        self._state("idle")
+        if not self._cu_stop:
+            self._msg("kemy", "Parei (limite de passos). Me diz se ficou bom ou o que ajustar. 🖱️")
+        else:
+            self._msg("kemy", "Parei o controle do PC. 🖱️")
+
     # ---------------- MINECRAFT (player inteligente via Mineflayer) ----------------
     def _find_minecraft_dir(self) -> Path | None:
         for cand in (ROOT_DIR / "minecraft", Path(__file__).resolve().parent / "minecraft"):
@@ -4649,6 +4769,14 @@ class WebApi:
             self.mc_start(); return True
         if re.fullmatch(r"(?:sai(?:r)?|desconecta(?:r)?|para(?:r)?)\s+(?:d[oe]\s+)?minecraft|sai do mine", t):
             self.mc_stop(); self._state("idle"); return True
+        # Parar tudo (jogo / PC)
+        if re.fullmatch(r"(?:parar?|para tudo|stop|chega|cancela(?:r)?)", t):
+            self.stop_game(); self.stop_computer(); self._state("idle"); return True
+        # Computer-use: "usa o pc pra ...", "controla o pc ...", "no navegador ..."
+        mcu = re.match(r"(?i)^(?:usa(?:r)? o (?:pc|computador)(?: pra| para)?|controla(?:r)? o (?:pc|computador)|"
+                       r"computer use|opera(?:r)? o (?:pc|navegador)|no navegador)\b(.*)", t)
+        if mcu:
+            self.computer_use(mcu.group(1).strip(" :,-")); return True
         # Modo jogo: "joga <jogo>", "zera <jogo>", "modo jogo", "para o jogo"
         if re.fullmatch(r"(?:para(?:r)?(?: o)?(?: modo)? jogo|stop game|para de jogar|sai do jogo)", t):
             self.stop_game(); self._state("idle"); return True
