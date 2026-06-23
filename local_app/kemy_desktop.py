@@ -4168,11 +4168,22 @@ class WebApi:
             self._game_stop = True
             self._msg("sys", "🎮 Parando o modo jogo…", store=False)
 
+    def _read_emu_state(self) -> dict:
+        """Lê o estado do jogo gravado pelo bridge Lua do mGBA (memória). Vazio se não houver."""
+        try:
+            p = Path(os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp") / "kemy_pokemon.json"
+            if p.exists() and (time.time() - p.stat().st_mtime) < 10:
+                return json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            pass
+        return {}
+
     def _game_loop(self, goal: str, max_steps: int = 600) -> None:
         import io
         from PIL import ImageGrab
         press = self._key_presser()
         self._state("thinking")
+        is_pkmn = "pok" in (goal or "").lower()
         hist: list[str] = []
         prompt_base = (
             "Voce e uma IA que JOGA videogame olhando a tela. OBJETIVO: " + goal + ".\n"
@@ -4194,6 +4205,11 @@ class WebApi:
             except Exception:
                 time.sleep(0.6); continue
             ctx = prompt_base + ("\n\nUltimas acoes: " + " | ".join(hist[-5:]) if hist else "")
+            if is_pkmn:
+                mem = self._read_emu_state()
+                if mem:
+                    ctx += ("\n\nESTADO DA MEMORIA (use pra decidir com estrategia — cure se HP baixo, "
+                            "evite lutar perdendo): " + json.dumps(mem))
             try:
                 out = self.llm.vision(ctx, b64, "image/jpeg")
             except Exception as e:
