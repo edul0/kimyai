@@ -5670,8 +5670,7 @@ def run_webview(host: str, port: int) -> bool:
                 pet = webview.create_window(
                     "Kemy", url=url + "?nolabel=1",
                     width=mw, height=mh, x=mx, y=my,
-                    frameless=True, easy_drag=True, on_top=True, transparent=True,
-                    background_color="#000000")
+                    frameless=True, easy_drag=True, on_top=True, transparent=True)
                 api.pet_win = pet
                 api._pet_visible = True
             except Exception:

@@ -3,14 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kemy — Avatar (OBS)</title>
+<title>Kemy — Avatar (OBS / Desktop)</title>
 <style>
-  /* Fundo TRANSPARENTE para usar como Browser Source no OBS. */
+  /* Fundo TRANSPARENTE (OBS Browser Source e janela mascote). */
   html,body{margin:0;height:100%;background:transparent;overflow:hidden}
   *{box-sizing:border-box}
-  .stage{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
-  .avatar{width:62vh;height:62vh;max-width:92vw;max-height:92vw;position:relative;
-    animation:bob 4s ease-in-out infinite}
+  .stage{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;padding-bottom:2vh}
+  /* Live2D (VTuber real) */
+  #l2dwrap{width:100%;height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  #l2d{width:100%;height:100%}
+  /* Avatar SVG (reserva enquanto o Live2D nao carrega / se falhar) */
+  .avatar{width:46vh;height:46vh;max-width:90vw;position:relative;animation:bob 4s ease-in-out infinite}
   @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.2%)}}
   .halo{position:absolute;inset:-6%;border-radius:50%;
     background:radial-gradient(circle, rgba(60,231,200,.30), rgba(60,231,200,0) 68%);
@@ -21,21 +24,19 @@
   .avatar svg{position:absolute;inset:0;width:100%;height:100%}
   .iris{fill:#1fd6c8}
   .gem{fill:#3ce7c8;filter:drop-shadow(0 0 5px rgba(60,231,200,.9))}
-  /* piscar */
   .eye{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
   @keyframes blink{0%,94%,100%{transform:scaleY(1)}97%{transform:scaleY(.08)}}
-  body.thinking .iris{animation:look 2.6s ease-in-out infinite}
-  @keyframes look{0%,100%{transform:translateX(0)}30%{transform:translateX(2px)}60%{transform:translateX(-2px)}}
   .mouth{transform-box:fill-box;transform-origin:center;transition:transform .05s linear}
   .statelbl{font-family:'Segoe UI',system-ui,sans-serif;font-weight:700;letter-spacing:.5px;
     color:#eafff9;text-shadow:0 2px 10px rgba(0,0,0,.6),0 0 18px rgba(60,231,200,.4);
-    font-size:clamp(14px,3.4vh,26px);opacity:.92}
+    font-size:clamp(14px,3.2vh,24px);opacity:.92}
   body.hidelbl .statelbl{display:none}
 </style>
 </head>
 <body class="idle">
   <div class="stage">
-    <div class="avatar" id="av">
+    <div id="l2dwrap" style="display:none"><canvas id="l2d"></canvas></div>
+    <div class="avatar" id="svgAvatar">
       <div class="halo"></div>
       <svg viewBox="0 0 200 200" aria-hidden="true">
         <path d="M40 96 Q28 180 70 168 Q100 182 130 168 Q172 180 160 96 Q150 30 100 26 Q50 30 40 96Z" fill="#1a1030"/>
@@ -57,45 +58,65 @@
     <div class="statelbl" id="lbl">Pronta</div>
   </div>
 <script>
-  // ?nolabel=1 esconde o texto de estado;  ?label=Oi muda o texto fixo.
   var qs = new URLSearchParams(location.search);
   if (qs.get('nolabel') === '1') document.body.classList.add('hidelbl');
   var LABELS = {idle:'Pronta', thinking:'Pensando…', speaking:'Falando…', offline:'Offline'};
-  var mouth = document.getElementById('mouth'), lbl = document.getElementById('lbl');
-  var curState = 'idle';
+  var mouthEl = document.getElementById('mouth'), lbl = document.getElementById('lbl');
+  var curState = 'idle', lastMouth = -1, t = 0;
+
+  function baseClass(){ return (qs.get('nolabel')==='1' ? 'hidelbl ' : ''); }
   function setState(s){
-    if(!s) s = 'idle';
-    if(s !== curState){
-      document.body.className = (qs.get('nolabel')==='1' ? 'hidelbl ' : '') + s;
-      curState = s;
-      lbl.textContent = qs.get('label') || LABELS[s] || 'Pronta';
-    }
+    if(!s) s='idle';
+    if(s!==curState){ curState=s; document.body.className=baseClass()+s; lbl.textContent=qs.get('label')||LABELS[s]||'Pronta'; }
   }
-  function setMouth(v){
-    v = Math.max(0, Math.min(1, +v || 0));
-    // boca abre esticando no eixo Y (lip-sync simples)
-    mouth.style.transform = 'scaleY(' + (1 + v*1.8) + ') scaleX(' + (1 - v*0.15) + ')';
+  function setMouthSVG(v){ v=Math.max(0,Math.min(1,+v||0));
+    mouthEl.style.transform='scaleY('+(1+v*1.8)+') scaleX('+(1-v*0.15)+')'; }
+
+  // ---- VTuber Live2D (mesmo modelo do app). Cai pro SVG se falhar. ----
+  window._mouth = 0;
+  function _loadScript(src){ return new Promise(function(res,rej){ var s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+  function loadLive2D(){
+    _loadScript("https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js")
+      .then(function(){ return _loadScript("https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"); })
+      .then(function(){ return _loadScript("https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"); })
+      .then(initL2D)
+      .catch(function(e){ console.log('Live2D libs falharam, mantendo SVG:',e); });
   }
-  // fallback de "boca falando" caso /state não traga mouth: oscila enquanto speaking
-  var t = 0;
-  function tick(){
-    t += 0.35;
-    if(curState === 'speaking' && lastMouth < 0){
-      setMouth(0.5 + 0.5*Math.sin(t*6)); // boca animada
-    }
+  function initL2D(){
+    try{
+      if(!window.PIXI||!window.PIXI.live2d) return;
+      var MODEL = qs.get('model') || "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+      var wrap=document.getElementById('l2dwrap');
+      var app=new PIXI.Application({view:document.getElementById('l2d'),resizeTo:wrap,backgroundAlpha:0,antialias:true});
+      PIXI.live2d.Live2DModel.from(MODEL).then(function(model){
+        app.stage.addChild(model);
+        function fit(){ var w=app.renderer.width,h=app.renderer.height;
+          model.anchor.set(0.5,1.0); var s=(h/model.height)*0.98; model.scale.set(s); model.x=w/2; model.y=h; }
+        fit(); window.addEventListener('resize',fit);
+        // mostra o Live2D e esconde o SVG
+        wrap.style.display='flex'; document.getElementById('svgAvatar').style.display='none';
+        app.ticker.add(function(){
+          try{ model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', window._mouth); }catch(e){}
+        });
+      }).catch(function(e){ console.log('Live2D model falhou, usando SVG:',e); });
+    }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
+  }
+
+  // boca falando: usa mouth do /state; se nao vier, oscila enquanto 'speaking'
+  function tick(){ t+=0.35;
+    var m = 0;
+    if(curState==='speaking'){ m = (lastMouth>=0) ? lastMouth : (0.5+0.5*Math.sin(t*6)); }
+    window._mouth = m; setMouthSVG(m);
     requestAnimationFrame(tick);
   }
-  var lastMouth = -1;
-  // Poll do estado da Kemy (servido pelo app em /state).
   function poll(){
-    fetch('/state', {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    fetch('/state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
       setState(d.state);
-      if(typeof d.mouth === 'number'){ lastMouth = d.mouth; if(curState==='speaking') setMouth(d.mouth); else setMouth(0); }
-      else { lastMouth = -1; if(curState!=='speaking') setMouth(0); }
-    }).catch(function(){ /* app fechado: mantém idle */ });
+      lastMouth = (typeof d.mouth==='number') ? d.mouth : -1;
+    }).catch(function(){});
   }
-  setInterval(poll, 120);
-  poll(); tick();
+  setInterval(poll,120); poll(); tick();
+  setTimeout(loadLive2D, 800);
 </script>
 </body>
 </html>
