@@ -50,6 +50,10 @@ else:
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
+# User-Agent de navegador para chamadas de API (evita bloqueio 403/1010 do Cloudflare).
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+
 APP_USER = os.environ.get("KEMY_AUTH_USER", "admin")
 APP_PASSWORD = os.environ.get("KEMY_AUTH_PASSWORD", "kemy-ai")
 APP_SECRET = os.environ.get("KEMY_AUTH_SECRET", "kemy-local-desktop-secret")
@@ -1585,13 +1589,22 @@ class LLMClient:
                 return res
             except Exception as exc:
                 errors.append(f"{prov}/{model}: {exc}")
+        # Diagnostico claro de QUAIS provedores tem chave (NVIDIA some quando nao ha chave nvapi-).
+        have = [n for n, k in (("nvidia", self.nvidia), ("cerebras", self.cerebras), ("groq", self.groq),
+                               ("gemini", self.gemini), ("mistral", self.mistral), ("github", self.github),
+                               ("sambanova", self.sambanova), ("openai", self.openai),
+                               ("openrouter", self.openrouter)) if k]
+        diag = (f"\n\nProvedores COM chave: {', '.join(have) or 'nenhum'}."
+                + ("" if self.nvidia else " ⚠️ NVIDIA SEM chave: nenhuma chave 'nvapi-' foi "
+                   "encontrada no .env/secrets — confira o NVIDIA_API_KEY."))
         raise RuntimeError(
-            ("Todos os provedores falharam (" + "; ".join(errors) + "). "
-             "As chaves podem estar esgotadas ou bloqueadas — gere chaves novas e atualize o KEMY_ENV.")
-            if errors else "Sem provedor de IA configurado.")
+            ("Todos os provedores falharam (" + "; ".join(errors) + ")." + diag)
+            if errors else "Sem provedor de IA configurado." + diag)
 
     def _post(self, url: str, headers: dict, payload: dict, timeout: float = 60) -> dict:
         data = json.dumps(payload).encode("utf-8")
+        # User-Agent de navegador: evita o bloqueio 403/1010 do Cloudflare (Cerebras/Groq).
+        headers = {"User-Agent": BROWSER_UA, "Accept": "application/json", **headers}
         last_err: Exception | None = None
         # Retry com backoff em 429/503 (limites momentaneos sao comuns no free tier).
         for attempt in range(4):
@@ -1726,7 +1739,8 @@ class LLMClient:
         msgs = [{"role": "system", "content": system}] + [{"role": m["role"], "content": m["content"]} for m in messages]
         payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": max_tokens, "stream": True}
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
+                                              "User-Agent": BROWSER_UA, "Accept": "text/event-stream"},
                                      method="POST")
         full = ""
         with urllib.request.urlopen(req, timeout=120) as resp:
