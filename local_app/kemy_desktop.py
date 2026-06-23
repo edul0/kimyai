@@ -5296,6 +5296,48 @@ class WebApi:
             self._state("idle")
         threading.Thread(target=work, daemon=True).start()
 
+    def _project_notes_prefix(self, base: Path) -> str:
+        """Memoria do PROJETO (stack, modulos prontos, decisoes, pendencias) — entre conversas."""
+        try:
+            d = json.loads((base / "_kemy_project.json").read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        if not isinstance(d, dict) or not d:
+            return ""
+        partes = []
+        if d.get("stack"):
+            partes.append("Stack: " + str(d["stack"]))
+        if d.get("resumo"):
+            partes.append("Resumo: " + str(d["resumo"]))
+        if d.get("modulos"):
+            partes.append("Prontos: " + ", ".join(d["modulos"][:12]) if isinstance(d["modulos"], list) else str(d["modulos"]))
+        if d.get("pendencias"):
+            partes.append("Pendente: " + ", ".join(d["pendencias"][:12]) if isinstance(d["pendencias"], list) else str(d["pendencias"]))
+        if not partes:
+            return ""
+        return ("\n\nMEMORIA DESTE PROJETO (continue de onde parou, mantenha a mesma stack e padroes, "
+                "NAO recomece do zero):\n- " + "\n- ".join(partes) + "\n")
+
+    def _update_project_notes(self, base: Path, text: str) -> None:
+        """Resume o projeto (rapido) e salva pra lembrar na proxima conversa."""
+        try:
+            files = sorted({str(p.relative_to(base)) for p in base.rglob("*")
+                            if p.is_file() and p.suffix in (".html", ".css", ".js", ".py", ".json", ".md")
+                            and "node_modules" not in str(p) and not p.name.startswith("_kemy")})[:40]
+            ctx = relevant_project_files(base, text, max_total=9000)
+            out = self.llm.chat(
+                "Resuma o estado do PROJETO pra memoria (curto e util). Responda SO um JSON: "
+                '{"stack":"...","resumo":"1 frase do que e o projeto","modulos":["feito1","feito2"],'
+                '"pendencias":["falta1"]}.',
+                [{"role": "user", "content": f"Ultimo pedido: {text}\nArquivos: {files}\n\n{ctx}"}],
+                max_tokens=400, fast=True)
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            data = json.loads(m.group(0)) if m else {}
+            if isinstance(data, dict) and data:
+                (base / "_kemy_project.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass
+
     def get_instructions(self) -> str:
         return getattr(self, "instructions", "") or ""
 
@@ -5469,6 +5511,9 @@ class WebApi:
             _, chat = parse_llm_files(reply)
             return (chat or reply).strip() or "…", None
         system = mem + SYSTEM_PROMPT
+        notes = self._project_notes_prefix(base)   # memoria do projeto (entre conversas)
+        if notes:
+            system += notes
         if current:
             system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
         if web:
@@ -5548,6 +5593,8 @@ class WebApi:
         self._open_preview(base)                         # abre o preview SEMPRE no fim
         if panel_on:
             self._panel_step(5, "done"); self._panel_done()
+        if files or edits0:   # atualiza a memoria do projeto em segundo plano (nao atrasa a resposta)
+            threading.Thread(target=self._update_project_notes, args=(base, text), daemon=True).start()
         return chat or "Feito.", save
 
     def _refine(self, system: str, msgs: list, user_text: str, draft: str) -> str:
