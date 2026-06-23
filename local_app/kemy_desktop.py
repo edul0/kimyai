@@ -1729,6 +1729,46 @@ class LLMClient:
                 out.append(name)
         return out
 
+    def test_all(self) -> list:
+        """Pinga CADA provedor configurado isoladamente. Retorna [(nome, modelo, ok, detalhe)]."""
+        results = []
+        sysp, msgs = "Responda apenas: ok", [{"role": "user", "content": "ping"}]
+
+        def run(name, model, fn):
+            t0 = time.time()
+            try:
+                fn()
+                results.append((name, model, True, f"{int((time.time()-t0)*1000)}ms"))
+            except Exception as e:
+                code = getattr(e, "code", "")
+                results.append((name, model, False, (f"HTTP {code} " if code else "") + str(e)[:90]))
+
+        if self.nvidia_keys:
+            m = self.nvidia_models[0]
+            run("NVIDIA", m, lambda: self._nvidia_compat(m, sysp, msgs, 8))
+        if self.cerebras:
+            m = self.cerebras_fast[0]
+            run("Cerebras", m, lambda: self._openai_compat("https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, sysp, msgs, 8))
+        if self.groq:
+            m = self.groq_fast[0]
+            run("Groq", m, lambda: self._openai_compat("https://api.groq.com/openai/v1/chat/completions", self.groq, m, sysp, msgs, 8))
+        if self.gemini:
+            m = self.gemini_models[0]
+            run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 8))
+        if self.github:
+            m = self.github_fast[0]
+            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 8))
+        if self.mistral:
+            m = self.mistral_fast[0]
+            run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 8))
+        if self.sambanova:
+            m = self.sambanova_fast[0]
+            run("SambaNova", m, lambda: self._openai_compat("https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, sysp, msgs, 8))
+        if self.openrouter:
+            m = self.openrouter_models[0]
+            run("OpenRouter", m, lambda: self._openai_compat("https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, sysp, msgs, 8))
+        return results
+
     def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False,
              prefer: str = "") -> str:
         errors: list[str] = []
@@ -5228,6 +5268,33 @@ class WebApi:
             out += ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
                     "(respeite SEMPRE):\n- " + "\n- ".join(self.memories[-40:]) + "\n\n")
         return out
+
+    def test_providers(self) -> None:
+        """Diagnostico: testa cada IA configurada e diz qual esta viva (e qual a 'inteligencia')."""
+        self._msg("kemy", "Testando suas IAs, um segundo…")
+        self._state("thinking")
+
+        def work():
+            try:
+                res = self.llm.test_all()
+            except Exception as e:
+                self._msg("kemy", f"Não consegui testar: {e}"); self._state("idle"); return
+            if not res:
+                self._msg("kemy", "Nenhuma IA configurada. Abra Configurações e cole pelo menos uma chave "
+                          "(NVIDIA, Gemini, Groq ou Cerebras).")
+                self._state("idle"); return
+            linhas = []
+            for nome, modelo, ok, det in res:
+                marca = "OK" if ok else "FALHOU"
+                linhas.append(f"[{marca}] {nome} ({modelo}) — {det}")
+            vivos = [r for r in res if r[2]]
+            top = "NVIDIA" if any(r[0] == "NVIDIA" and r[2] for r in res) else (vivos[0][0] if vivos else "nenhuma")
+            resumo = (f"\nResultado: {len(vivos)}/{len(res)} vivas. "
+                      + ("NVIDIA (DeepSeek/GLM) ativa — inteligência no topo!" if top == "NVIDIA"
+                         else f"Usando {top}. Pra subir o nível, configure a chave NVIDIA (nvapi-...)."))
+            self._msg("kemy", "Diagnóstico das IAs:\n" + "\n".join(linhas) + "\n" + resumo)
+            self._state("idle")
+        threading.Thread(target=work, daemon=True).start()
 
     def get_instructions(self) -> str:
         return getattr(self, "instructions", "") or ""
