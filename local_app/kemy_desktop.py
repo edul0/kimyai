@@ -1157,7 +1157,19 @@ SYSTEM_PROMPT = (
     "python app.py) e um README curto com como usar.\n"
     "   - Se for grande demais para uma resposta, ENTREGUE O ESQUELETO COMPLETO E FUNCIONAL (todos os "
     "arquivos, rodando, com 1-2 modulos prontos de exemplo) e diga claramente o que falta — NUNCA um stub "
-    "vazio e feio. O criterio e: o usuario abre, roda o comando, e ja tem um sistema utilizavel na cara dele."
+    "vazio e feio. O criterio e: o usuario abre, roda o comando, e ja tem um sistema utilizavel na cara dele.\n"
+    "19) BANCO DE DADOS / PERSISTENCIA (sempre que houver dados a guardar — cadastros, vendas, estoque, "
+    "usuarios, etc.): NUNCA deixe os dados so na memoria/variavel (somem ao recarregar). Use um banco DE "
+    "VERDADE:\n"
+    "   - PADRAO = SQLite LOCAL (zero configuracao, sem chave, funciona offline). Django -> ja usa SQLite "
+    "(models + migrate). Flask/FastAPI -> sqlite3 ou SQLAlchemy criando o arquivo .db e as tabelas no 1o run. "
+    "Node -> better-sqlite3. App so de frontend (HTML/JS puro) sem backend -> use localStorage/IndexedDB.\n"
+    "   - SUPABASE (Postgres na nuvem, free) quando o usuario PEDIR nuvem/online/multiusuario, ou quando "
+    "houver as variaveis SUPABASE_URL e SUPABASE_ANON_KEY no ambiente: use a lib oficial (supabase-js no "
+    "front/Node, supabase-py no Python) lendo a URL e a anon key dessas variaveis (NUNCA escreva a chave no "
+    "codigo). Crie as tabelas via SQL e faca CRUD real (select/insert/update/delete).\n"
+    "   - Sempre crie o ESQUEMA (tabelas/migrations) e um SEED de exemplo, e garanta que criar/editar/excluir "
+    "PERSISTE de verdade (sobrevive a recarregar a pagina/reiniciar). Diga ao usuario qual banco usou."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
@@ -5216,6 +5228,12 @@ class WebApi:
         """Sobe o servidor, esperando subir DE VERDADE. Se cair, lê o erro, corrige e tenta
         de novo (loop subir-e-corrigir) — até entregar rodando."""
         try:
+            # Passa credenciais de banco (Supabase) pro projeto, se o usuario configurou.
+            child_env = dict(os.environ)
+            for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL"):
+                v = (getattr(self, "env_vars", {}) or {}).get(k) or (getattr(self, "env_vars", {}) or {}).get("KIMI_" + k)
+                if v:
+                    child_env[k] = v
             py = None
             if kind == "node":
                 node = None
@@ -5229,7 +5247,7 @@ class WebApi:
                     return
                 self._msg("sys", "🚀 Projeto Node — instalando deps e subindo o servidor…", store=False)
                 subprocess.run([node, "install"], cwd=str(base), capture_output=True, timeout=400, **proc_quiet())
-                cmd, port, label, env = [node, "start"], 3000, "servidor Node", None
+                cmd, port, label, env = [node, "start"], 3000, "servidor Node", child_env
             else:
                 py = self._python_exe()
                 if not py:
@@ -5242,16 +5260,16 @@ class WebApi:
                 if kind == "django":
                     self._msg("sys", "🚀 Projeto Django — instalando, migrando e subindo…", store=False)
                     subprocess.run([py, "-m", "pip", "install", "django"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
-                    cmd, port, label, env = [py, "manage.py", "runserver", "--noreload", "127.0.0.1:8000"], 8000, "Django", None
+                    cmd, port, label, env = [py, "manage.py", "runserver", "--noreload", "127.0.0.1:8000"], 8000, "Django", child_env
                 elif kind == "fastapi":
                     self._msg("sys", "🚀 Projeto FastAPI — subindo com uvicorn…", store=False)
                     subprocess.run([py, "-m", "pip", "install", "fastapi", "uvicorn"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
-                    cmd, port, label, env = [py, "-m", "uvicorn", f"{target.stem}:app", "--port", "8000"], 8000, "FastAPI", None
+                    cmd, port, label, env = [py, "-m", "uvicorn", f"{target.stem}:app", "--port", "8000"], 8000, "FastAPI", child_env
                 else:  # flask
                     self._msg("sys", "🚀 Projeto Flask — subindo o servidor…", store=False)
                     subprocess.run([py, "-m", "pip", "install", "flask"], cwd=str(base), capture_output=True, timeout=300, **proc_quiet())
-                    env = dict(os.environ); env["FLASK_APP"] = target.name
-                    cmd, port, label, env = [py, "-m", "flask", "run", "--port", "5000"], 5000, "Flask", env
+                    child_env["FLASK_APP"] = target.name
+                    cmd, port, label, env = [py, "-m", "flask", "run", "--port", "5000"], 5000, "Flask", child_env
 
             if py:
                 self._sanitize_python(base)   # conserta zero-a-esquerda e cia antes de subir
@@ -5678,17 +5696,23 @@ def run_webview(host: str, port: int) -> bool:
         # janela principal carregar (evita o conflito de 2 janelas WebView2 no boot).
         url = api.obs_url()
         if url and os.environ.get("KEMY_PET", "1") != "0":
-            try:
-                mw, mh = 260, 320
-                mx, my = _corner_pos(mw, mh)
-                pet = webview.create_window(
-                    "Kemy", url=url + "?nolabel=1",
-                    width=mw, height=mh, x=mx, y=my,
-                    frameless=True, easy_drag=True, on_top=True, transparent=True)
-                api.pet_win = pet
-                api._pet_visible = True
-            except Exception:
-                api.pet_win = None
+            mw, mh = 280, 340
+            mx, my = _corner_pos(mw, mh)
+            pet = None
+            # Tenta transparente; se o WebView2 nao suportar (erro), refaz SEM transparencia
+            # pra pelo menos abrir a janela do mascote.
+            for kw in ({"transparent": True}, {"background_color": "#070a12"}):
+                try:
+                    pet = webview.create_window(
+                        "Kemy", url=url + "?nolabel=1",
+                        width=mw, height=mh, x=mx, y=my,
+                        frameless=True, easy_drag=True, on_top=True, **kw)
+                    break
+                except Exception:
+                    pet = None
+                    continue
+            api.pet_win = pet
+            api._pet_visible = bool(pet)
         try:
             _start_tray(api, win)
         except Exception:
