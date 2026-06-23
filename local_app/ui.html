@@ -75,12 +75,13 @@
     padding:10px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
   .menu button:hover{background:var(--panel)}
   .menusep{height:1px;background:var(--line);margin:5px 4px}
+  .menulbl{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:1.4px;padding:9px 12px 3px;text-transform:uppercase}
   /* avatar */
-  .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 0 8px;gap:6px}
-  .avatar{width:210px;height:210px;position:relative}
-  .l2dwrap{width:190px;height:220px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px 0 10px;gap:10px}
+  .avatar{width:256px;height:256px;position:relative}
+  .l2dwrap{width:238px;height:272px;display:flex;align-items:center;justify-content:center;overflow:hidden}
   #l2d{width:100%;height:100%}
-  .statelbl{font-size:13px;font-weight:700;color:var(--st);letter-spacing:.4px;opacity:.9}
+  .statelbl{font-size:13px;font-weight:700;color:var(--st);letter-spacing:1.2px;text-transform:uppercase;opacity:.85}
   /* modo overlay: so a VTuber, sobrepondo a tela */
   body.overlay .side,body.overlay .top,body.overlay .chat,body.overlay .composer{display:none!important}
   body.overlay .app{grid-template-columns:1fr}
@@ -98,6 +99,10 @@
   body.listening .halo,body.speaking .halo{animation:pulse 1.1s ease-in-out infinite}
   @keyframes breathe{0%,100%{transform:scale(1);opacity:.45}50%{transform:scale(1.05);opacity:.7}}
   @keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.12);opacity:.9}}
+  .avatar::after{content:"";position:absolute;inset:-16%;border-radius:50%;z-index:-1;
+    background:radial-gradient(circle, var(--st), transparent 62%);opacity:.16;filter:blur(16px);transition:opacity .4s}
+  body.speaking .avatar::after{opacity:.36}
+  body.thinking .avatar::after{opacity:.26}
   .avatar svg{position:absolute;inset:0;width:100%;height:100%;animation:bob 4s ease-in-out infinite}
   .vtspanel{align-items:center;gap:14px;padding:14px 22px;border-radius:16px;background:rgba(120,90,220,.12);border:1px solid rgba(150,120,255,.3)}
   .vtsface{font-size:42px;animation:bob 4s ease-in-out infinite}
@@ -132,6 +137,16 @@
   .tp-i.done{color:#8fe388}.tp-i.done .tp-dot{border-color:#8fe388;background:#8fe388}
   .tp-i.fail{color:#ff8c8c}.tp-i.fail .tp-dot{border-color:#ff8c8c}
   @keyframes tpp{0%,100%{box-shadow:0 0 0 0 rgba(34,224,200,.5)}50%{box-shadow:0 0 0 5px rgba(34,224,200,0)}}
+  /* tela de boas-vindas elegante (chat vazio) */
+  .welcome{margin:auto;max-width:560px;text-align:center;padding:30px 20px;animation:rise .4s ease}
+  .welcome h2{font-family:'Sora','Inter',sans-serif;font-size:30px;font-weight:800;margin:0 0 8px;
+    background:linear-gradient(120deg,#fff,var(--accent2) 60%,var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .welcome p{color:var(--muted);margin:0 0 22px;font-size:14.5px;line-height:1.6}
+  .wchips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+  .wchip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:14px;
+    padding:12px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:.18s;text-align:left;max-width:250px}
+  .wchip:hover{transform:translateY(-2px);border-color:var(--accent2);background:var(--panel2);box-shadow:0 10px 28px rgba(34,224,200,.12)}
+  .wchip b{display:block;color:var(--accent2);font-weight:700;margin-bottom:2px}
   /* arquivos alterados (chips clicaveis) */
   .filechips{display:flex!important;flex-wrap:wrap;gap:8px;align-self:flex-start!important;font-style:normal!important;background:none!important}
   .filechip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
@@ -212,15 +227,17 @@
         <div class="menuwrap">
           <button class="iconbtn" onclick="toggleMenu()" title="Mais opções"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span class="badge" id="updBadge"></span></button>
           <div class="menu" id="menu">
-            <button onclick="openVoice();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>Voz da Kemy</button>
+            <div class="menulbl">Site</div>
             <button onclick="api('preview');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>Ver o site (preview)</button>
             <button onclick="api('deploy_site');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v13"/><path d="M6 8l6-6 6 6"/><path d="M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>Publicar site (no ar)</button>
-            <button onclick="api('toggle_pet');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>Mascote flutuante (mostrar/ocultar)</button>
-            <button onclick="api('show_obs_url');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>Overlay pro OBS (transparente)</button>
+            <div class="menulbl">Avatar & Stream</div>
+            <button onclick="openVoice();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>Voz da Kemy</button>
+            <button onclick="api('toggle_pet');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>Mascote no desktop</button>
+            <button onclick="api('show_obs_url');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>Overlay pro OBS</button>
             <button onclick="api('vts_connect');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"/></svg>Conectar VTube Studio</button>
             <button onclick="api('vts_test');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9.5" x2="9.01" y2="9.5"/><line x1="15" y1="9.5" x2="15.01" y2="9.5"/></svg>Testar boca (VTS)</button>
+            <div class="menulbl">Sistema</div>
             <button onclick="api('git_undo');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>Desfazer última alteração</button>
-            <div class="menusep"></div>
             <button onclick="openSettings();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Configurações (chaves, Minecraft…)</button>
             <button id="updItem" onclick="doUpdate();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg><span class="lab">Atualizar a Kemy</span></button>
           </div>
@@ -391,6 +408,7 @@
     el.appendChild(b);
   }
   function addMsg(role,text,save){
+    killWelcome();
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg "+role;
     d.textContent=text;
@@ -399,6 +417,21 @@
     c.appendChild(d); c.scrollTop=c.scrollHeight;
   }
   function _esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+  var WELCOME_SUG=[
+    ["Crie um site","faça uma landing page moderna pra uma cafeteria premium"],
+    ["Monte um sistema","crie um ERP completo de oficina com vendas, estoque e ordens de serviço"],
+    ["Gere uma arte","crie um post de Black Friday pra minha loja, estilo moderno"],
+    ["Jogue comigo","entra no minecraft"]
+  ];
+  function showWelcome(){
+    var c=document.getElementById('chat'); if(!c||c.children.length) return;
+    var d=document.createElement('div'); d.className='welcome'; d.id='welcome';
+    var chips=WELCOME_SUG.map(function(s){return '<button class="wchip" onclick="sugest(this.getAttribute(\'data-t\'))" data-t="'+s[1].replace(/"/g,'&quot;')+'"><b>'+_esc(s[0])+'</b>'+_esc(s[1])+'</button>';}).join('');
+    d.innerHTML='<h2>Oi, eu sou a Kemy</h2><p>Sua parceira de IA — crio sites, sistemas, artes, jogo com você e ainda controlo o PC. Por onde começamos?</p><div class="wchips">'+chips+'</div>';
+    c.appendChild(d);
+  }
+  function sugest(t){ var i=document.getElementById('inp'); if(i){i.value=t;} sendText(); }
+  function killWelcome(){ var w=document.getElementById('welcome'); if(w) w.remove(); }
   window.kemyPlan=function(steps){
     var c=document.getElementById('chat');
     var old=document.getElementById('taskpanel'); if(old) old.remove();
@@ -409,9 +442,9 @@
   };
   window.kemyPlanStep=function(i,state){ var el=document.getElementById('tp-'+i); if(el) el.className='tp-i '+(state||''); };
   window.kemyPlanDone=function(){ var h=document.querySelector('#taskpanel .tp-h'); if(h) h.textContent='Concluído'; };
-  function clearChat(){document.getElementById("chat").innerHTML="";}
+  function clearChat(){document.getElementById("chat").innerHTML="";showWelcome();}
   var _streamEl=null;
-  function startStream(){ var c=document.getElementById("chat");
+  function startStream(){ killWelcome(); var c=document.getElementById("chat");
     _streamEl=document.createElement("div"); _streamEl.className="msg kemy"; _streamEl.textContent="";
     c.appendChild(_streamEl); c.scrollTop=c.scrollHeight; }
   function streamChunk(delta){ if(!_streamEl)startStream();
@@ -513,6 +546,7 @@
     pywebview.api.bootstrap().then(function(st){
       renderConvos(st.convos,st.active); kemyState(st.state||"idle");
       (st.log||[]).forEach(function(m){ addMsg(m.r,m.t); });
+      if(!(st.log&&st.log.length)) showWelcome();
       // rede de seguranca: se continuar "Conectando", consulta o estado
       var tries=0, iv=setInterval(function(){ tries++;
         if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }

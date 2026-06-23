@@ -4832,7 +4832,16 @@ class WebApi:
             threading.Timer(0.6, self.listen).start()
 
     def send_text(self, text: str) -> None:
-        self._handle(text)
+        # Rede de seguranca: nenhum erro do handler pode travar a UI em "Pensando".
+        try:
+            self._handle(text)
+        except Exception as exc:
+            try:
+                self.busy = False
+                self._msg("sys", f"Ops, deu um erro aqui: {exc}", store=False)
+                self._state("idle")
+            except Exception:
+                pass
 
     # ----- nucleo -----
     def _handle(self, text: str) -> None:
