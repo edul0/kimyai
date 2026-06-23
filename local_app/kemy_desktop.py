@@ -3496,6 +3496,25 @@ class WebApi:
         self.listener = Listener()
         threading.Thread(target=self._mini_mouth_loop, daemon=True).start()
 
+    def _panel(self, steps: list) -> None:
+        """Mostra o painel 'ver ela trabalhar' (checklist ao vivo)."""
+        try:
+            self._js(f"kemyPlan({json.dumps(steps)})")
+        except Exception:
+            pass
+
+    def _panel_step(self, i: int, state: str) -> None:
+        try:
+            self._js(f"kemyPlanStep({int(i)},{json.dumps(state)})")
+        except Exception:
+            pass
+
+    def _panel_done(self) -> None:
+        try:
+            self._js("kemyPlanDone()")
+        except Exception:
+            pass
+
     def _on_speak_start(self) -> None:
         self.vts.speaking = True
         self._speaking = True
@@ -4677,6 +4696,12 @@ class WebApi:
         if design_req:
             system += DESIGN_PROMPT
             self._msg("sys", "🎨 Modo Design ligado — caprichando no visual (design system).", store=False)
+        # 🪟 Painel "ver ela trabalhar" (checklist ao vivo, estilo Manus).
+        panel_on = self.boost
+        if panel_on:
+            self._panel(["Analisar a tarefa", "Planejar a solução", "Gerar com o especialista",
+                         "Revisar (olhar de sênior)", "Salvar e montar", "Rodar e mostrar"])
+            self._panel_step(0, "doing")
         # ✨ Capricho (todas as tecnicas gratis nivel-pro):
         if self.boost:
             if design_req:                    # 0) Pesquisa REFERENCIAS antes (como um pro)
@@ -4684,6 +4709,7 @@ class WebApi:
                 refs = self._research_references(text)
                 if refs:
                     system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + refs
+            self._panel_step(1, "doing")
             plano = self._plan(text)          # 1) Planejamento (raciocinio visivel)
             if plano:
                 self._msg("sys", "🧭 Plano:\n" + plano.strip()[:700], store=False)
@@ -4695,14 +4721,22 @@ class WebApi:
             cat = getattr(self, "_last_cat", "")
             tag = f" (vi que é {cat})" if cat else ""
             self._msg("sys", f"🧠 Analisei a tarefa{tag} → usando {self._spec_label(text, prefer)}.", store=False)
+        if panel_on:
+            self._panel_step(0, "done"); self._panel_step(1, "done"); self._panel_step(2, "doing")
         if self.boost and complexo and len(self.llm.providers()) >= 2:
             self._msg("sys", "🤝 Especialistas gerando e um modelo forte juntando o melhor…", store=False)
             reply = self._moa(system, hist, text, route)  # 2) Mixture of Agents (especialistas)
         else:
             reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer)
+        if panel_on:
+            self._panel_step(2, "done")
         if self.boost:
+            self._panel_step(3, "doing")
             self._msg("sys", "🔍 Revisando o código (olhar de sênior)…", store=False)
             reply = self._refine(system, hist, text, reply)   # 3) Revisao cruzada
+            self._panel_step(3, "done")
+        if panel_on:
+            self._panel_step(4, "doing")
         files, chat = parse_llm_files(reply)
         edits0 = parse_edits(reply)
         self._apply_edits(edits0, base)  # edicoes cirurgicas (search/replace)
@@ -4719,7 +4753,11 @@ class WebApi:
         self._maybe_tests(base, text)                    # 5) Testes automaticos
         if files or edits0:
             self._git_snapshot(base, "kemy: " + text[:60])   # 6) Git: foto pra desfazer
+        if panel_on:
+            self._panel_step(4, "done"); self._panel_step(5, "doing")
         self._open_preview(base)                         # abre o preview SEMPRE no fim
+        if panel_on:
+            self._panel_step(5, "done"); self._panel_done()
         return chat or "Feito.", save
 
     def _refine(self, system: str, msgs: list, user_text: str, draft: str) -> str:

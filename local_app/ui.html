@@ -111,6 +111,16 @@
   .msg .copybtn{display:inline-block;margin-top:9px;font-size:11px;font-weight:600;color:var(--muted);
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:8px;padding:3px 9px;cursor:pointer;user-select:none}
   .msg .copybtn:hover{color:var(--accent2);border-color:var(--accent2)}
+  /* painel "ver ela trabalhar" (checklist ao vivo) */
+  .taskpanel{align-self:stretch!important;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;font-style:normal!important;color:var(--text)}
+  .tp-h{font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .tp-i{display:flex;align-items:center;gap:10px;padding:4px 0;color:var(--muted);font-size:13.5px;transition:.2s}
+  .tp-i .tp-dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--muted);flex:none}
+  .tp-i.doing{color:var(--text);font-weight:600}
+  .tp-i.doing .tp-dot{border-color:var(--accent2);background:var(--accent2);animation:tpp 1s ease-in-out infinite}
+  .tp-i.done{color:#8fe388}.tp-i.done .tp-dot{border-color:#8fe388;background:#8fe388}
+  .tp-i.fail{color:#ff8c8c}.tp-i.fail .tp-dot{border-color:#ff8c8c}
+  @keyframes tpp{0%,100%{box-shadow:0 0 0 0 rgba(34,224,200,.5)}50%{box-shadow:0 0 0 5px rgba(34,224,200,0)}}
   /* arquivos alterados (chips clicaveis) */
   .filechips{display:flex!important;flex-wrap:wrap;gap:8px;align-self:flex-start!important;font-style:normal!important;background:none!important}
   .filechip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
@@ -325,6 +335,17 @@
     if(role==="kemy"||role==="user"){ addCopyBtn(d,text); }
     c.appendChild(d); c.scrollTop=c.scrollHeight;
   }
+  function _esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+  window.kemyPlan=function(steps){
+    var c=document.getElementById('chat');
+    var old=document.getElementById('taskpanel'); if(old) old.remove();
+    var d=document.createElement('div'); d.className='msg sys taskpanel'; d.id='taskpanel';
+    var html='<div class="tp-h">🧭 Trabalhando…</div>';
+    (steps||[]).forEach(function(s,i){ html+='<div class="tp-i" id="tp-'+i+'"><span class="tp-dot"></span>'+_esc(s)+'</div>'; });
+    d.innerHTML=html; c.appendChild(d); c.scrollTop=c.scrollHeight;
+  };
+  window.kemyPlanStep=function(i,state){ var el=document.getElementById('tp-'+i); if(el) el.className='tp-i '+(state||''); };
+  window.kemyPlanDone=function(){ var h=document.querySelector('#taskpanel .tp-h'); if(h) h.textContent='✅ Concluído'; };
   function clearChat(){document.getElementById("chat").innerHTML="";}
   var _streamEl=null;
   function startStream(){ var c=document.getElementById("chat");
