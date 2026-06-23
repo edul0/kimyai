@@ -4667,7 +4667,7 @@ class WebApi:
         self._auto_learn(text)            # aprende sozinha com preferencias/correcoes
         # 🤖 Modo agente autonomo (multi-passo) para tarefas que pedem "ate funcionar/completo".
         if build and self._wants_agent(text):
-            return self._agent_loop(text, base), None
+            return self._autonomous_agent(text, base), None
         mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
@@ -5040,10 +5040,16 @@ class WebApi:
 
     def _wants_agent(self, text: str) -> bool:
         t = (text or "").lower()
-        return any(k in t for k in (
+        # gatilhos explicitos
+        if any(k in t for k in (
             "modo agente", "agente", "passo a passo", "ate funcionar", "até funcionar",
             "rode e ", "monte e ", "crie e teste", "projeto completo", "faca funcionar",
-            "faça funcionar", "complete o projeto", "termine o projeto", "ate concluir", "até concluir"))
+            "faça funcionar", "complete o projeto", "termine o projeto", "ate concluir", "até concluir")):
+            return True
+        # objetivos GRANDES (sistema/ERP/plataforma) entregam melhor no agente autonomo
+        big = any(k in t for k in ("erp", "sistema", "plataforma", "dashboard completo", "painel admin",
+                                   "saas", "marketplace", "aplicativo completo", "app completo"))
+        return big and len(t) > 25
 
     def _run_capture(self, cmds: list, base: Path) -> str:
         outs = []
@@ -5126,6 +5132,84 @@ class WebApi:
                 return (chat or "Acho que terminei — dá uma olhada e me diz se falta algo.")[:700]
         self._open_preview(base)
         return "Cheguei no limite de passos. O projeto avançou bastante — me diz o que ainda falta que eu continuo."
+
+    def _agent_plan(self, text: str) -> list:
+        """Quebra o objetivo em 3-7 tarefas concretas e ordenadas (pro painel ao vivo)."""
+        try:
+            out = self.llm.chat(
+                "Voce e um engenheiro senior. Quebre o OBJETIVO do usuario em 3 a 7 TAREFAS concretas, "
+                "na ordem certa pra ENTREGAR funcionando (ex.: 'Criar modelos e banco', 'CRUD de vendas', "
+                "'UI do painel', 'Rodar e corrigir'). Responda SO um JSON array de strings curtas.",
+                [{"role": "user", "content": (text or "")[:800]}], max_tokens=400, fast=True)
+            m = re.search(r"\[.*\]", out or "", re.DOTALL)
+            arr = json.loads(m.group(0)) if m else []
+            steps = [str(s).strip() for s in arr if str(s).strip()][:7]
+            return steps
+        except Exception:
+            return []
+
+    def _agent_do_task(self, objective: str, task: str, base: Path, plan: list, last_output: str):
+        """Executa UMA tarefa do plano (gera/edita arquivos, roda comandos). Retorna (ok, saida, nota)."""
+        route = self._smart_route(objective + " " + task)
+        prefer = route[0] if route else ""
+        files_ctx = relevant_project_files(base, task + " " + objective) or read_project_files(base)
+        sysp = (self._memoria_prefix() + SYSTEM_PROMPT + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
+                "Faca SO a tarefa atual do plano, COMPLETA e funcional. Crie/edite arquivos "
+                "(<<<FILE>>>/<<<EDIT>>>); se precisar instalar/rodar/testar, use ```kemy-run. NAO refaca o "
+                "que ja existe. Lembre: todo botao/rota tem que funcionar e os dados persistem no banco.")
+        usr = (f"OBJETIVO GERAL: {objective}\nPLANO: {plan}\nTAREFA ATUAL: {task}\n\n"
+               f"ARQUIVOS ATUAIS:\n{files_ctx or '(vazio)'}\n\nSAIDA ANTERIOR:\n{last_output[-1200:] or '(nada)'}")
+        try:
+            reply = self.llm.chat(sysp, [{"role": "user", "content": usr}], max_tokens=16000, prefer=prefer)
+        except Exception as e:
+            return False, last_output, f"erro ({e})"
+        files, chat = parse_llm_files(reply)
+        edits = parse_edits(reply)
+        if edits:
+            self._apply_edits(edits, base)
+        if files:
+            self._save(files, base)
+        self._sanitize_python(base)
+        out = last_output
+        cmds = extract_run_commands(reply)
+        if cmds:
+            out = self._run_capture(cmds, base)
+        self._gen_images(extract_image_requests(reply), base)
+        self._gen_graphics(extract_graphic_requests(reply), base)
+        return True, out, (chat or task)[:90]
+
+    def _autonomous_agent(self, text: str, base: Path) -> str:
+        """Agente autônomo (objetivo → entrega) com painel ao vivo: planeja em tarefas, executa
+        uma a uma (gera, roda, corrige) e entrega o resultado pronto/rodando — estilo Manus."""
+        base.mkdir(parents=True, exist_ok=True)
+        self._msg("kemy", "🤖 Modo agente ligado! Vou planejar isso e entregar pronto. Acompanha no painel 👇")
+        plan = self._agent_plan(text) or ["Montar o projeto", "Implementar as funcionalidades",
+                                          "Rodar e corrigir", "Entregar funcionando"]
+        # garante uma etapa final de verificacao/entrega
+        if not any("rod" in s.lower() or "test" in s.lower() or "entreg" in s.lower() for s in plan):
+            plan.append("Rodar e entregar funcionando")
+        self._panel(plan)
+        last_output, notes = "", []
+        for i, task in enumerate(plan):
+            self._panel_step(i, "doing")
+            self._msg("sys", f"🤖 {i + 1}/{len(plan)}: {task}", store=False)
+            ok, last_output, note = self._agent_do_task(text, task, base, plan, last_output)
+            self._panel_step(i, "done" if ok else "fail")
+            if note:
+                notes.append(f"• {note}")
+        # Entrega: garante deps/scripts e SOBE o servidor / abre o preview (com auto-fix).
+        self._sanitize_python(base)
+        self._localize_images(base)
+        self._ensure_scripts_linked(base)
+        self._maybe_make_pdf(base, text, [])
+        try:
+            self._git_snapshot(base, "kemy agente: " + text[:50])
+        except Exception:
+            pass
+        self._panel_done()
+        self._open_preview(base)
+        resumo = "\n".join(notes[:6])
+        return f"✅ Entreguei! Trabalhei em {len(plan)} etapas:\n{resumo}\n\nDá uma olhada — me diz se quer ajustar algo."
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
         """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
