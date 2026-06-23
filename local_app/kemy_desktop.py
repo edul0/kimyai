@@ -6141,9 +6141,19 @@ class WebApi:
                 extra += f"\n\nCONTEUDO DE {u}:\n{t}"
         low = text.lower().strip()
         triggers = ("pesquise", "pesquisar", "busque", "buscar", "procure", "procurar", "search")
-        if any(low.startswith(p) for p in triggers) or "na internet" in low or "na web" in low:
-            q = text.split(":", 1)[1].strip() if ":" in text else text
-            self._msg("sys", f"🔎 Buscando na web: {q}", store=False)
+        explicit = any(low.startswith(p) for p in triggers) or "na internet" in low or "na web" in low
+        # Auto: a pergunta pede dados ATUAIS/factuais -> pesquisa sozinha (sem precisar mandar).
+        atuais = ("hoje", "atual", "atualmente", "agora", "2024", "2025", "2026", "preço", "preco",
+                  "cotação", "cotacao", "noticia", "notícia", "novidade", "lançou", "lancou",
+                  "lançamento", "lancamento", "ultima versao", "última versão", "ultimas", "recente",
+                  "quanto custa", "quem é", "quem e", "documentação", "documentacao", "como faço", "como faco")
+        is_question = low.endswith("?") or low.split(" ", 1)[0] in (
+            "quem", "quando", "onde", "quanto", "qual", "quais", "como", "porque", "por")
+        auto = (not explicit) and (not is_build_request(text)) and \
+            (any(w in low for w in atuais) or (is_question and len(low) > 18))
+        if explicit or auto:
+            q = text.split(":", 1)[1].strip() if (explicit and ":" in text) else text
+            self._msg("sys", f"Buscando na web: {q[:80]}", store=False)
             r = web_search(q)
             if r:
                 extra += f"\n\nRESULTADOS DA WEB para '{q}':\n{r}"
