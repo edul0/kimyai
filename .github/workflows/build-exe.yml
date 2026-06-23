@@ -50,6 +50,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_PRIMARY_MODEL: ${{ secrets.GEMINI_PRIMARY_MODEL }}
+          KEMY_VOICE: ${{ secrets.KEMY_VOICE }}
+          KEMY_ELEVENLABS_KEY: ${{ secrets.KEMY_ELEVENLABS_KEY }}
+          KEMY_ELEVENLABS_VOICE: ${{ secrets.KEMY_ELEVENLABS_VOICE }}
+          KEMY_ELEVENLABS_MODEL: ${{ secrets.KEMY_ELEVENLABS_MODEL }}
         run: |
           # Comeca do KEMY_ENV (se existir) e SEMPRE junta as chaves individuais por cima,
           # pra nenhuma ser ignorada. Chaves individuais sobrescrevem as do KEMY_ENV.
@@ -59,7 +63,7 @@ jobs:
           } else {
             "" | Out-File -Encoding ascii kemy_bundled.env
           }
-          foreach ($k in @("GEMINI_API_KEY","GROQ_API_KEY","CEREBRAS_API_KEY","NVIDIA_API_KEY","MISTRAL_API_KEY","GITHUB_MODELS_TOKEN","SAMBANOVA_API_KEY","OPENROUTER_API_KEY","OPENAI_API_KEY","GEMINI_PRIMARY_MODEL")) {
+          foreach ($k in @("GEMINI_API_KEY","GROQ_API_KEY","CEREBRAS_API_KEY","NVIDIA_API_KEY","MISTRAL_API_KEY","GITHUB_MODELS_TOKEN","SAMBANOVA_API_KEY","OPENROUTER_API_KEY","OPENAI_API_KEY","GEMINI_PRIMARY_MODEL","KEMY_VOICE","KEMY_ELEVENLABS_KEY","KEMY_ELEVENLABS_VOICE","KEMY_ELEVENLABS_MODEL")) {
             $v = [Environment]::GetEnvironmentVariable($k)
             if ($v) { Add-Content -Encoding ascii kemy_bundled.env "`n$k=$v" }
           }

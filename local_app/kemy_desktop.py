@@ -6779,6 +6779,14 @@ def main() -> int:
         return 0
     os.chdir(ROOT_DIR)
     cleanup_update_leftovers()
+    # Propaga o .env (incl. voz: KEMY_VOICE/KEMY_ELEVENLABS_*) pro os.environ — sem isso o
+    # Speaker nao via a voz personalizada configurada no .env.
+    try:
+        for _k, _v in load_merged_env().items():
+            if _v:
+                os.environ[_k] = _v
+    except Exception:
+        pass
     # UI moderna (HTML/pywebview); cai para Tkinter se indisponivel ou --classic.
     if not args.classic:
         unblock_bundle()
