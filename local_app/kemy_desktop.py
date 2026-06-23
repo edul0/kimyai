@@ -1453,6 +1453,67 @@ def fix_py_leading_zeros(src: str) -> tuple[str, bool]:
     return src, changed
 
 
+def audit_web_buttons(base: Path) -> list[str]:
+    """Verifica um app CLIENT-SIDE (HTML+JS): acha onclick chamando funcao que NAO existe,
+    links mortos e <form> sem handler de submit. Deterministico, alta precisao — pra a IA
+    consertar ANTES de entregar (conserta o 'botao nao faz nada')."""
+    issues: list[str] = []
+    try:
+        htmls = [p for p in base.rglob("*.html") if "node_modules" not in str(p)][:40]
+        jss = [p for p in base.rglob("*.js") if "node_modules" not in str(p)][:60]
+    except Exception:
+        return issues
+    if not htmls:
+        return issues
+    # junta todo o JS (inline + arquivos) pra saber quais funcoes existem
+    alljs = ""
+    htmltxt = {}
+    for h in htmls:
+        try:
+            t = h.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        htmltxt[h] = t
+        for m in re.finditer(r"<script\b[^>]*>(.*?)</script>", t, re.DOTALL | re.IGNORECASE):
+            alljs += "\n" + m.group(1)
+    for j in jss:
+        try:
+            alljs += "\n" + j.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+    # nomes de funcoes definidas (function f / const f= / window.f= / f=function / f: function)
+    defined = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)", alljs))
+    defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function|\([^)]*\)\s*=>)", alljs))
+    defined |= set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=", alljs))
+    defined |= set(re.findall(r"([A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s*)?function", alljs))
+    BUILTINS = {"alert", "confirm", "prompt", "print", "open", "console", "parseInt", "parseFloat",
+                "isNaN", "Number", "String", "Array", "Object", "JSON", "Math", "Date", "fetch",
+                "setTimeout", "setInterval", "location", "history", "scrollTo", "reload"}
+    for h, t in htmltxt.items():
+        rel = str(h.relative_to(base))
+        # onclick="fn(...)" / onsubmit / onchange -> a funcao chamada existe?
+        called = set(re.findall(r"on(?:click|submit|change|input)\s*=\s*['\"]\s*([A-Za-z_$][\w$]*)\s*\(", t))
+        for fn in called:
+            if fn not in defined and fn not in BUILTINS:
+                issues.append(f"{rel}: o botao chama {fn}() mas essa funcao NAO existe no JS (botao morto).")
+        # links mortos
+        if re.search(r"href\s*=\s*['\"](?:#|)['\"]", t):
+            issues.append(f"{rel}: ha link(s) com href vazio/# (sem acao).")
+        # form sem submit handler nem action
+        for fm in re.findall(r"<form\b([^>]*)>", t, re.IGNORECASE):
+            if "onsubmit" not in fm.lower() and "action" not in fm.lower():
+                # so reclama se nao houver addEventListener('submit') em algum lugar
+                if "addeventlistener('submit'" not in alljs.lower() and 'addeventlistener("submit"' not in alljs.lower():
+                    issues.append(f"{rel}: ha <form> sem onsubmit/action nem listener de submit (nao salva).")
+                    break
+    # dedup
+    seen, out = set(), []
+    for i in issues:
+        if i not in seen:
+            seen.add(i); out.append(i)
+    return out[:40]
+
+
 def audit_dead_controls(base: Path) -> list[str]:
     """Acha botoes/links 'mortos' em templates HTML (deterministico, alta precisao):
     href vazio/#, e referencias {% url 'nome' %} para rotas que NAO existem nas urls.py.
@@ -5397,6 +5458,16 @@ class WebApi:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
         self._ensure_scripts_linked(base)                # garante que app.js/css carreguem no index
+        # Verifica o app web: se algum botao chama funcao inexistente / form sem salvar, conserta.
+        try:
+            kind0, _ = self._detect_backend(base)
+            if (not kind0) and (base / "index.html").exists():
+                dead = audit_web_buttons(base)
+                if dead and self.boost:
+                    if self._autofix_buttons(base, "web", dead):
+                        self._ensure_scripts_linked(base)
+        except Exception:
+            pass
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
@@ -6295,19 +6366,25 @@ class WebApi:
         return bool(files or edits)
 
     def _autofix_buttons(self, base: Path, kind: str, issues: list) -> bool:
-        """Liga os botoes/links mortos: manda a IA criar rotas/views/forms/templates pra cada
-        acao (criar/editar/excluir) funcionar e persistir. Retorna True se mudou algo."""
+        """Liga os botoes/links mortos. Retorna True se mudou algo."""
         if not issues:
             return False
-        self._msg("sys", f"🔌 Ligando {len(issues)} botão(ões)/link(s) que estavam sem ação…", store=False)
+        self._msg("sys", f"Ligando {len(issues)} botão(ões) que estavam sem ação…", store=False)
         files_ctx = read_project_files(base)
-        sysp = (SYSTEM_PROMPT + "\n\n=== LIGAR BOTOES/CRUD (" + kind + ") ===\n"
-                "Os botoes/links abaixo NAO funcionam (sem rota/acao). Faca o CRUD COMPLETO funcionar: "
-                "crie as rotas (urls), as views (GET mostra formulario / POST salva no banco), os ModelForm "
-                "e os templates de formulario, e os de editar/excluir (com confirmacao). A lista deve "
-                "atualizar apos salvar. PERSISTA no banco (SQLite no Django). Reentregue SOMENTE os arquivos "
-                "alterados/novos em blocos <<<FILE: caminho>>>...<<<END>>>. Sem explicacao.")
-        user = "BOTOES/LINKS SEM ACAO:\n- " + "\n- ".join(issues) + "\n\nARQUIVOS ATUAIS:\n" + files_ctx
+        if kind == "web":
+            how = ("Estes botoes/acoes NAO funcionam num app CLIENT-SIDE (HTML+JS). Conserte de verdade: "
+                   "DEFINA as funcoes JS que os onclick chamam (ex.: novaVenda, editVenda, delVenda, salvar), "
+                   "ligue o submit do <form> (e.preventDefault, le campos, push/atualiza no array, salva no "
+                   "localStorage e re-renderiza a tabela), e troque href='#' por acao real. O CRUD inteiro "
+                   "tem que funcionar e persistir no localStorage (sobreviver a recarregar).")
+        else:
+            how = ("Os botoes/links abaixo NAO funcionam (sem rota/acao). Faca o CRUD COMPLETO funcionar: "
+                   "crie as rotas (urls), as views (GET form / POST salva no banco), os ModelForm e os "
+                   "templates de formulario (criar/editar/excluir). A lista atualiza apos salvar; persista no banco.")
+        sysp = (SYSTEM_PROMPT + "\n\n=== LIGAR BOTOES/CRUD (" + kind + ") ===\n" + how +
+                " Reentregue SOMENTE os arquivos alterados/novos em blocos <<<FILE: caminho>>>...<<<END>>> "
+                "(ou edicoes <<<EDIT>>>). Sem explicacao.")
+        user = "BOTOES/ACOES SEM FUNCIONAR:\n- " + "\n- ".join(issues) + "\n\nARQUIVOS ATUAIS:\n" + files_ctx
         try:
             reply = self.llm.chat(sysp, [{"role": "user", "content": user}], max_tokens=16000)
         except Exception as e:
