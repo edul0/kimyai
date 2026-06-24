@@ -1317,6 +1317,10 @@ CHAT_PROMPT = (
     "CURIOSIDADE: as vezes pergunta algo sobre a pessoa (como foi o dia, o que ta sentindo) — mas SEM "
     "encher; no maximo UMA pergunta, e so quando faz sentido. Use o que voce sabe (memoria/perfil) pra "
     "falar como quem conhece a pessoa, chamando pelo nome quando souber.\n"
+    "SEGURANCA: voce tambem e ESPECIALISTA em ciberseguranca DEFENSIVA — protege os dados e o codigo da "
+    "pessoa, acha e corrige vulnerabilidades (XSS, injection, segredo exposto, auth fraca), ensina boas "
+    "praticas e ajuda a se defender de ameacas/hack. Mas e ETICA: nao ajuda a invadir, atacar ou hackear "
+    "sistemas dos outros — so DEFESA e protecao.\n"
     "ESTILO: respostas curtas e naturais, como mensagem de amiga. SEM emoji, SEM markdown pesado "
     "(a interface e limpa). Nada de 'Como posso ajudar?' nem formalidade de robô. Seja honesta: se "
     "algo nao da, fala na lata com jeitinho. Se a pessoa pedir pra criar/editar codigo, abrir programa, "
@@ -5634,6 +5638,11 @@ class WebApi:
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
         if re.fullmatch(r"(?:o que (?:voc[eê]|vc) sabe (?:de|sobre) mim|minha mem[oó]ria|o que voce lembra|ver mem[oó]ria)", t):
             self.show_memory(); return True
+        # Ciberseguranca: auditar / blindar o projeto
+        if re.search(r"(?i)\b(corrig\w+|blind\w+|conserta\w*|arrum\w*|deixa\w* seguro|torna\w* seguro)\b.*\bseguran[çc]a\b|\bblinda\b.*\b(projeto|sistema|app)\b|corrig\w+ as falhas", t):
+            self.audit_security(fix=True); return True
+        if re.search(r"(?i)\b(audita\w*|verifica\w*|revisa\w*|checa\w*|analisa\w*|procura\w*)\b.*\b(seguran[çc]a|vulnerabilidade|falha|brecha|hack)\b|\b(t[aá]|esta|est[aá]) seguro\b|tem (falha|vulnerabilidade|brecha)", t):
+            self.audit_security(fix=False); return True
         if re.fullmatch(r"(?:esquece tudo|esque[cç]a tudo|apaga (?:a |sua )?mem[oó]ria|limpa (?:a |sua )?mem[oó]ria|esquece de mim)", t):
             self.clear_memory(); return True
         # Minecraft: entrar / sair
@@ -5846,6 +5855,55 @@ class WebApi:
         save_memorias(self.memories)
         self._msg("kemy", "Pronto, esqueci o que tinha aprendido sobre você. (Suas Instruções fixas continuam.)")
         self._state("idle")
+
+    def audit_security(self, fix: bool = False) -> None:
+        """Especialista em ciberseguranca DEFENSIVA: audita o projeto atual atras de falhas
+        (XSS, injection, segredos expostos, auth fraca, storage inseguro) e blinda."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        files_ctx = read_project_files(base)
+        if not files_ctx.strip():
+            self._msg("kemy", "Não há um projeto aberto pra eu auditar. Crie/abra um sistema primeiro.")
+            self._state("idle"); return
+        self._msg("kemy", "Vestindo o chapéu de segurança e revisando o projeto…")
+        self._state("thinking")
+
+        def work():
+            sysp = ("Voce e uma engenheira de SEGURANCA senior (defensiva). Audite o codigo abaixo e liste as "
+                    "VULNERABILIDADES reais, da mais grave pra menos: XSS (innerHTML com dado do usuario), "
+                    "injection (SQL/HTML), segredos/chaves no codigo, autenticacao ausente/fraca, senha em texto "
+                    "puro, dados sensiveis expostos no localStorage, falta de validacao, CSRF, permissoes. "
+                    "Para CADA uma: [GRAVIDADE] o problema (arquivo) -> como corrigir (1 linha). No fim, dê um "
+                    "veredito curto. Seja pratica e so aponte o que existe de verdade.")
+            try:
+                rep = self.llm.chat(sysp, [{"role": "user", "content": files_ctx}], max_tokens=1800, prefer="")
+            except Exception as e:
+                self._msg("kemy", f"Não consegui auditar agora: {e}"); self._state("idle"); return
+            self._msg("kemy", strip_emojis(rep or "").strip() or "Não encontrei nada gritante.")
+            if fix:
+                self._msg("sys", "Aplicando as correções de segurança…", store=False)
+                fxs = ("Voce e engenheira de seguranca. CORRIJA as vulnerabilidades do projeto (XSS->escape; "
+                       "segredos->remover do front; auth->tela de login com senha em HASH; validar entradas; "
+                       "nao expor dados). Reentregue SO os arquivos alterados em <<<FILE: caminho>>>...<<<END>>> "
+                       "(ou <<<EDIT>>>), SEM quebrar as funcionalidades existentes.")
+                try:
+                    reply = self.llm.chat(SYSTEM_PROMPT + "\n\n" + fxs,
+                                          [{"role": "user", "content": "RELATORIO:\n" + rep + "\n\nARQUIVOS:\n" + files_ctx}],
+                                          max_tokens=16000)
+                    files, _ = parse_llm_files(reply); edits = parse_edits(reply)
+                    if edits:
+                        self._apply_edits(edits, base)
+                    if files:
+                        self._save(files, base)
+                    self._sanitize_python(base); self._ensure_scripts_linked(base)
+                    self._open_preview(base)
+                    self._msg("kemy", "Blindei o que dava pra blindar. Testa e me diz.")
+                except Exception as e:
+                    self._msg("sys", f"Falha ao aplicar correções: {e}", store=False)
+            else:
+                self._msg("kemy", "Quer que eu já corrija tudo isso? É só dizer 'corrige a segurança'.")
+            self._state("idle")
+        threading.Thread(target=work, daemon=True).start()
 
     def help_kemy(self) -> None:
         """Mostra o que a Kemy sabe fazer (descoberta de recursos)."""
