@@ -6242,6 +6242,7 @@ class WebApi:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
         self._ensure_scripts_linked(base)                # garante que app.js/css carreguem no index
+        self._polish_html(base)                          # charset/viewport/lang/title (qualidade/SEO/a11y)
         # Verifica o app web: erro de sintaxe no JS (quebra tudo) + botao morto -> conserta.
         try:
             kind0, _ = self._detect_backend(base)
@@ -6250,6 +6251,15 @@ class WebApi:
                 if issues and self.boost:
                     if self._autofix_buttons(base, "web", issues):
                         self._ensure_scripts_linked(base)
+        except Exception:
+            pass
+        # Reforco de seguranca: avisa (e nao deixa passar) chave de API vazando no codigo.
+        try:
+            leaks = self._scan_secrets(base)
+            if leaks:
+                self._msg("kemy", "Atenção de segurança: achei credencial/segredo exposto no código:\n- "
+                          + "\n- ".join(leaks[:8]) + "\nIsso vaza pra quem ver o fonte. Tira a chave do código "
+                          "e usa variável de ambiente. Quer que eu corrija? (diz 'corrige a segurança')")
         except Exception:
             pass
         self._maybe_run(extract_run_commands(reply), base)
@@ -7022,6 +7032,65 @@ class WebApi:
             return None
         self._show_chips(changed)
         return None  # preview e aberto no fim do build; chips mostram os arquivos
+
+    def _polish_html(self, base: Path) -> None:
+        """Garante o basico de qualidade/SEO/acessibilidade em todo HTML: charset, viewport,
+        lang e title. Deterministico e seguro (so adiciona o que falta)."""
+        for h in list(base.glob("*.html")) + list(base.glob("**/*.html"))[:30]:
+            try:
+                t = h.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if "<html" not in t.lower():
+                continue
+            orig = t
+            if "<html" in t and "lang=" not in t.split(">", 1)[0]:
+                t = re.sub(r"<html\b", "<html lang=\"pt-BR\"", t, count=1)
+            if "charset" not in t.lower() and "<head" in t.lower():
+                t = re.sub(r"(<head[^>]*>)", r"\1\n  <meta charset=\"utf-8\">", t, count=1, flags=re.IGNORECASE)
+            if "viewport" not in t.lower() and "<head" in t.lower():
+                t = re.sub(r"(<head[^>]*>)", r"\1\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+                           t, count=1, flags=re.IGNORECASE)
+            if "<title" not in t.lower() and "</head>" in t.lower():
+                t = re.sub(r"(</head>)", "  <title>App</title>\n\\1", t, count=1, flags=re.IGNORECASE)
+            if t != orig:
+                try:
+                    h.write_text(t, encoding="utf-8")
+                except Exception:
+                    pass
+
+    def _scan_secrets(self, base: Path) -> list:
+        """Procura SEGREDOS vazando no codigo gerado (chave de API hardcoded). Reforco de seguranca."""
+        pats = [
+            (r"sk-[A-Za-z0-9]{20,}", "chave OpenAI"),
+            (r"nvapi-[A-Za-z0-9_\-]{20,}", "chave NVIDIA"),
+            (r"AIza[A-Za-z0-9_\-]{30,}", "chave Google/Gemini"),
+            (r"ghp_[A-Za-z0-9]{30,}", "token GitHub"),
+            (r"xox[baprs]-[A-Za-z0-9\-]{10,}", "token Slack"),
+            (r"sk_live_[A-Za-z0-9]{20,}", "chave Stripe (live)"),
+            (r"(?i)(api[_-]?key|secret|password|senha|token)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]", "credencial fixa"),
+        ]
+        found = []
+        try:
+            files = [p for p in base.rglob("*") if p.is_file()
+                     and p.suffix in (".js", ".ts", ".html", ".py", ".json", ".env", ".css")
+                     and "node_modules" not in str(p)][:60]
+        except Exception:
+            return found
+        for p in files:
+            try:
+                t = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            for rx, label in pats:
+                if re.search(rx, t):
+                    found.append(f"{p.relative_to(base)}: {label} exposta no código")
+                    break
+        seen, out = set(), []
+        for f in found:
+            if f not in seen:
+                seen.add(f); out.append(f)
+        return out[:20]
 
     def _ensure_scripts_linked(self, base: Path) -> None:
         """Garante que o index.html carregue TODOS os .js e .css do projeto (evita 'app.js que nao abre')."""
