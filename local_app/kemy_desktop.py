@@ -5634,6 +5634,33 @@ class WebApi:
                         + nomes + "\n\n")
         return out
 
+    def help_kemy(self) -> None:
+        """Mostra o que a Kemy sabe fazer (descoberta de recursos)."""
+        txt = (
+            "Oi! Olha tudo que eu faço — é só pedir em português:\n\n"
+            "CRIAR\n"
+            "- Sites, landing pages e apps bonitos (modo Design caprichado)\n"
+            "- Sistemas/ERP que FUNCIONAM (botões salvam de verdade, no navegador)\n"
+            "- Documentos, PDF, slides e planilhas\n"
+            "- Imagens e artes com TEXTO nítido (post, banner, thumb) via Nano Banana\n\n"
+            "AGIR\n"
+            "- 'modo agente: faça X' — planejo e entrego pronto, em passos\n"
+            "- 'usa o pc pra...' — controlo o navegador/apps por você\n"
+            "- 'manda mensagem no whatsapp pra...' — aprendo e faço (e guardo pra próxima)\n"
+            "- 'abre o youtube', 'toca slow dancing in the dark' — abro/toco de verdade\n"
+            "- 'vê minha tela' — olho e te ajudo\n\n"
+            "JOGAR\n"
+            "- 'entra no minecraft' — entro como player e faço o que pedir\n"
+            "- 'joga pokemon' / 'showdown' — jogo de verdade\n\n"
+            "LEMBRAR\n"
+            "- Eu te conheço entre conversas (memória) e aprendo sozinha\n"
+            "- Configurações: chaves de IA, voz e Minecraft, sem mexer no GitHub\n"
+            "- 'Testar IAs' no menu mostra qual modelo está ativo\n\n"
+            "Dica: no menu (canto superior) tem preview do site, publicar no ar, overlay pro OBS, "
+            "mascote no desktop e tema claro/escuro.")
+        self._msg("kemy", txt)
+        self._state("idle")
+
     def test_providers(self) -> None:
         """Diagnostico: testa cada IA configurada e diz qual esta viva (e qual a 'inteligencia')."""
         self._msg("kemy", "Testando suas IAs, um segundo…")

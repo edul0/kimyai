@@ -260,6 +260,7 @@
             <button onclick="api('vts_connect');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 5.8L20 10l-5.8 2.2L12 18l-2.2-5.8L4 10l5.8-2.2z"/></svg>Conectar VTube Studio</button>
             <button onclick="api('vts_test');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9.5" x2="9.01" y2="9.5"/><line x1="15" y1="9.5" x2="15.01" y2="9.5"/></svg>Testar boca (VTS)</button>
             <div class="menulbl">Sistema</div>
+            <button onclick="api('help_kemy');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 2.5"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>O que a Kemy faz</button>
             <button onclick="api('test_providers');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Testar IAs (diagnóstico)</button>
             <button onclick="api('import_ai_data');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Importar dados de outra IA</button>
             <button onclick="toggleTheme();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>Tema claro / escuro</button>
@@ -458,7 +459,8 @@
     ["Crie um site","faça uma landing page moderna pra uma cafeteria premium"],
     ["Monte um sistema","crie um ERP completo de oficina com vendas, estoque e ordens de serviço"],
     ["Gere uma arte","crie um post de Black Friday pra minha loja, estilo moderno"],
-    ["Jogue comigo","entra no minecraft"]
+    ["Jogue comigo","entra no minecraft"],
+    ["O que você faz?","__help__"]
   ];
   function showWelcome(){
     var c=document.getElementById('chat'); if(!c||c.children.length) return;
@@ -467,7 +469,7 @@
     d.innerHTML='<h2>Oi, eu sou a Kemy</h2><p>Sua parceira de IA — crio sites, sistemas, artes, jogo com você e ainda controlo o PC. Por onde começamos?</p><div class="wchips">'+chips+'</div>';
     c.appendChild(d);
   }
-  function sugest(t){ var i=document.getElementById('inp'); if(i){i.value=t;} sendText(); }
+  function sugest(t){ if(t==="__help__"){ killWelcome(); api('help_kemy'); return; } var i=document.getElementById('inp'); if(i){i.value=t;} sendText(); }
   function killWelcome(){ var w=document.getElementById('welcome'); if(w) w.remove(); }
   // tema claro/escuro (persistido)
   function applyTheme(){ try{ var t=localStorage.getItem('kemytheme'); document.documentElement.classList.toggle('light', t==='light'); }catch(e){} }
