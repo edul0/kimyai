@@ -6230,6 +6230,11 @@ class WebApi:
             self._panel(["Analisar a tarefa", "Planejar a solução", "Gerar com o especialista",
                          "Revisar (olhar de sênior)", "Salvar e montar", "Rodar e mostrar"])
             self._panel_step(0, "doing")
+        # Entende e LISTA os requisitos do pedido — pra atender TODOS (nada esquecido).
+        reqs = self._extract_requirements(text) if (self.boost and (complexo or len(text) > 40)) else ""
+        if reqs:
+            system += ("\n\nREQUISITOS DO PEDIDO (atenda TODOS, sem esquecer nenhum; ao final confira "
+                       "item por item):\n" + reqs)
         # Capricho (tecnicas nivel-pro): tudo silencioso, refletido no painel.
         if self.boost:
             if design_req:                    # pesquisa referencias antes (como um pro)
@@ -6308,9 +6313,11 @@ class WebApi:
         a versao final corrigida. Tecnica self-refine -> qualidade nivel pro, so com IA gratis."""
         self._state("thinking")
         review_sys = (system + "\n\n=== MODO REVISAO ===\nVoce vai REVISAR criticamente o rascunho que "
-                      "voce mesma fez, como um engenheiro SENIOR exigente. Cheque: tem bug ou erro? esta "
-                      "INCOMPLETO ou com placeholder? cada funcao/botao FUNCIONA de verdade? o design esta "
-                      "bonito e profissional? o codigo esta limpo e organizado? falta tratar algum caso? "
+                      "voce mesma fez, como um engenheiro SENIOR exigente. PRIMEIRO confira REQUISITO POR "
+                      "REQUISITO do pedido: cada coisa que o usuario pediu esta presente e FUNCIONANDO? Se "
+                      "faltou algo, ADICIONE. Depois cheque: tem bug ou erro? esta INCOMPLETO ou com "
+                      "placeholder? cada funcao/botao FUNCIONA de verdade? persiste os dados? o design esta "
+                      "profissional (nivel SaaS)? seguro (sem segredo exposto, dados escapados)? codigo limpo? "
                       "Corrija TODOS os problemas e entregue a VERSAO FINAL impecavel e COMPLETA, no mesmo "
                       "formato (<<<FILE>>> / <<<EDIT>>> / blocos). Entregue so a versao final, sem falar da revisao.")
         rmsgs = list(msgs) + [
@@ -6328,6 +6335,19 @@ class WebApi:
         except Exception:
             pass
         return draft
+
+    def _extract_requirements(self, text: str) -> str:
+        """Transforma o pedido numa CHECKLIST de requisitos concretos — pra IA atender TODOS."""
+        try:
+            out = self.llm.chat(
+                "Liste em bullets curtos os REQUISITOS concretos do pedido do usuario (funcionalidades, "
+                "telas/modulos, campos, comportamentos, estilo, restricoes que ele citou). So o que ele REALMENTE "
+                "pediu, sem inventar feature nova. Maximo 12 itens, formato '- requisito'. So a lista.",
+                [{"role": "user", "content": (text or "")[:900]}], max_tokens=350, fast=True)
+            linhas = [l.strip() for l in (out or "").splitlines() if l.strip().startswith(("-", "•", "*"))]
+            return "\n".join(linhas[:12])
+        except Exception:
+            return ""
 
     def _plan(self, text: str) -> str:
         """Planejamento (chain-of-thought): plano objetivo antes de codar."""
