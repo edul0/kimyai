@@ -3939,11 +3939,13 @@ class WebApi:
         "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
         "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY", "OPENROUTER_API_KEY",
         "SUPABASE_URL", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
+        "KEMY_VOICE", "KEMY_ELEVENLABS_KEY", "KEMY_ELEVENLABS_VOICE",
         "MC_HOST", "MC_PORT", "MC_USER", "MC_AUTH", "MC_VERSION",
     ]
     SECRET_KEYS = {"NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
                    "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY",
-                   "OPENROUTER_API_KEY", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN"}
+                   "OPENROUTER_API_KEY", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
+                   "KEMY_ELEVENLABS_KEY"}
 
     def get_settings(self) -> dict:
         """Valores atuais pro hub de Configuracoes (chaves vem mascaradas por seguranca)."""
@@ -3975,12 +3977,24 @@ class WebApi:
             if v == "":
                 continue
             _set_env_var(path, k, v)
+            os.environ[k] = v          # aplica na sessao atual (Speaker le do os.environ)
             changed += 1
         # recarrega tudo (chaves de IA, NVIDIA, Nano Banana, Minecraft…)
         self.env_path = path
         self.env_vars = load_merged_env()
         self.env_file_vars = self.env_vars
         self.llm = LLMClient(self.env_vars)
+        # aplica voz na hora (sem reiniciar)
+        try:
+            sp = self.speaker
+            if os.environ.get("KEMY_VOICE"):
+                sp.voice = os.environ["KEMY_VOICE"]
+            if os.environ.get("KEMY_ELEVENLABS_KEY"):
+                sp.el_key = os.environ["KEMY_ELEVENLABS_KEY"]; sp._el_warned = False
+            if os.environ.get("KEMY_ELEVENLABS_VOICE"):
+                sp.el_voice = os.environ["KEMY_ELEVENLABS_VOICE"]
+        except Exception:
+            pass
         self._msg("kemy", f"✅ Configurações salvas ({changed} campo(s))! Já apliquei — "
                   f"IA ativa: {self.llm.primary_label()}.")
         self._state("idle")
