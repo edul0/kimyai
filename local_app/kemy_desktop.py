@@ -5907,13 +5907,13 @@ class WebApi:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
         self._ensure_scripts_linked(base)                # garante que app.js/css carreguem no index
-        # Verifica o app web: se algum botao chama funcao inexistente / form sem salvar, conserta.
+        # Verifica o app web: erro de sintaxe no JS (quebra tudo) + botao morto -> conserta.
         try:
             kind0, _ = self._detect_backend(base)
             if (not kind0) and (base / "index.html").exists():
-                dead = audit_web_buttons(base)
-                if dead and self.boost:
-                    if self._autofix_buttons(base, "web", dead):
+                issues = self._check_js_syntax(base) + audit_web_buttons(base)
+                if issues and self.boost:
+                    if self._autofix_buttons(base, "web", issues):
                         self._ensure_scripts_linked(base)
         except Exception:
             pass
@@ -6869,6 +6869,33 @@ class WebApi:
         if files:
             self._save(files, base)
         return bool(files or edits)
+
+    def _check_js_syntax(self, base: Path) -> list:
+        """Checa a sintaxe dos .js com 'node --check' (1 erro de sintaxe mata todos os botoes).
+        Retorna a lista de erros pra IA consertar. Pula em silencio se nao houver Node."""
+        node = None
+        for exe in ("node", "node.exe"):
+            try:
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet()); node = exe; break
+            except Exception:
+                continue
+        if not node:
+            return []
+        errs = []
+        try:
+            jss = [p for p in base.rglob("*.js") if "node_modules" not in str(p)][:30]
+        except Exception:
+            return []
+        for j in jss:
+            try:
+                p = subprocess.run([node, "--check", str(j)], capture_output=True, text=True, timeout=15, **proc_quiet())
+                if p.returncode != 0:
+                    msg = (p.stderr or "").strip().splitlines()
+                    detail = next((ln for ln in msg if "Error" in ln or "SyntaxError" in ln), (msg[-1] if msg else "erro de sintaxe"))
+                    errs.append(f"{j.relative_to(base)}: erro de sintaxe no JS -> {detail[:120]}")
+            except Exception:
+                continue
+        return errs
 
     def _sanitize_python(self, base: Path) -> None:
         """Corrige erros de sintaxe deterministicos nos .py gerados (ex.: zero a esquerda)."""
