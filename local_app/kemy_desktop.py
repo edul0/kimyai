@@ -6207,7 +6207,14 @@ class WebApi:
         if notes:
             system += notes
         if current:
-            system += "\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current
+            system += ("\n\n=== EDITAR PROJETO EXISTENTE — REGRA DE OURO ===\n"
+                       "Abaixo os ARQUIVOS ATUAIS. Faca SO a mudanca pedida e NAO QUEBRE NADA do que ja "
+                       "funciona. Para mudancas pequenas, PREFIRA blocos cirurgicos <<<EDIT>>> "
+                       "(search/replace) em vez de reescrever o arquivo inteiro. Se reescrever um arquivo, "
+                       "devolva-o COMPLETO mantendo TODAS as funcoes/listeners/variaveis/CRUD que ja existiam "
+                       "(nao apague nem renomeie o que esta em uso). Ex.: adicionar modo escuro mexe SO no "
+                       "tema/CSS e num botao — sem tocar nas vendas/estoque. Confira que os botoes que "
+                       "funcionavam CONTINUAM funcionando.\n" + current)
         if web:
             system += web
         hist = msgs[-10:]
