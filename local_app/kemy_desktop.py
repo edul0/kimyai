@@ -1267,10 +1267,16 @@ SYSTEM_PROMPT = (
     "   - ARQUITETURA: index.html (sidebar com os modulos), styles.css (visual de PAINEL pro, regra 9), e UM "
     "app.js por modulo OU um app.js so com tudo. Navegacao entre modulos por show/hide de <section> (SPA). "
     "Seed: comece com 2-3 itens de exemplo no array se o localStorage estiver vazio.\n"
-    "   - UI de PAINEL profissional: sidebar fixa, topbar, cards de resumo (totais), tabelas com acoes, "
-    "modais bonitos, estado vazio ('nenhuma venda ainda'), responsivo. Um ERP deve PARECER e FUNCIONAR como ERP.\n"
+    "   - VISUAL NIVEL SAAS REAL (nada de cru/iniciante — siga o MODO DESIGN da regra 9/design-system): "
+    "design tokens em :root (paleta coerente + modo claro/escuro), Google Font moderna (Inter/Sora), "
+    "SIDEBAR fixa com icones (SVG, nao emoji) e item ativo destacado, TOPBAR com titulo+busca+avatar, "
+    "CARDS de KPI no topo (total de vendas, faturamento, itens) com numeros grandes e cor de destaque, "
+    "TABELAS bonitas (cabecalho fixo, zebra/hover, badges de status coloridos, acoes em icone), MODAIS "
+    "com overlay/blur e form caprichado, botoes com estados (hover/active), cantos 12-16px, sombras suaves, "
+    "espacamento generoso, micro-transicoes. Estado vazio ilustrado ('nenhuma venda ainda'). RESPONSIVO. "
+    "Tem que parecer um produto de empresa (estilo Linear/Notion/Stripe), nao um exercicio de faculdade.\n"
     "   - Entregue COMPLETO e funcionando de primeira. O criterio unico: o usuario abre o index.html, clica "
-    "em qualquer botao e FUNCIONA, e os dados sobrevivem ao recarregar.\n"
+    "em qualquer botao e FUNCIONA, os dados sobrevivem ao recarregar, e o visual impressiona.\n"
     "19) BANCO DE DADOS / PERSISTENCIA (sempre que houver dados a guardar — cadastros, vendas, estoque, "
     "usuarios, etc.): NUNCA deixe os dados so na memoria/variavel (somem ao recarregar). Use um banco DE "
     "VERDADE:\n"
@@ -3355,7 +3361,14 @@ class KemyVoiceApp:
             system = SYSTEM_PROMPT
             current = read_project_files(base)
             if current:
-                system += ("\n\nARQUIVOS ATUAIS DO PROJETO (edite estes, nao recomece):\n" + current)
+                system += ("\n\n=== EDITAR PROJETO EXISTENTE — REGRA DE OURO ===\n"
+                           "Abaixo estao os ARQUIVOS ATUAIS. Faca SO a mudanca pedida e NAO QUEBRE NADA do "
+                           "que ja funciona. Ao reentregar um arquivo, devolva-o COMPLETO e consistente, "
+                           "MANTENDO TODAS as funcoes, event listeners, variaveis e o CRUD que ja existiam "
+                           "(nao apague nem renomeie nada que esta sendo usado). Ex.: se for adicionar modo "
+                           "escuro, mexa SO no tema/CSS e num botao — sem tocar nas funcoes de venda/estoque. "
+                           "Depois confira mentalmente que os botoes que funcionavam CONTINUAM funcionando.\n"
+                           + current)
             messages = self._build_messages(item)
             reply = self.llm.chat(system, messages)
             files, chat = parse_llm_files(reply)
@@ -6104,7 +6117,10 @@ class WebApi:
             "plataforma", "modulo", "módulo", "apresenta", "varios", "vários"))
         design_req = any(k in text.lower() for k in (
             "site", "página", "pagina", "landing", "app", "dashboard", "ui", "interface",
-            "design", "portfolio", "portfólio", "loja", "ecommerce", "blog", "jogo", "game"))
+            "design", "portfolio", "portfólio", "loja", "ecommerce", "blog", "jogo", "game",
+            # sistemas/ERP TAMBEM merecem o design-system premium (antes saiam crus):
+            "erp", "sistema", "plataforma", "painel", "admin", "crud", "gestao", "gestão",
+            "estoque", "vendas", "financeiro", "tela", "modo escuro", "modo claro"))
         # 🎨 Modo Design dedicado: pedido claramente de UI/visual ganha o design-system premium
         # e SEMPRE usa o melhor modelo disponivel (NVIDIA frontier / GPT-5).
         if design_req:
