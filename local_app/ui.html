@@ -211,6 +211,8 @@
     padding:7px 16px;font-weight:700;font-size:13px;cursor:pointer;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.4)}
   .stopbtn:hover{background:rgba(255,80,80,.30);color:#fff}
   body.thinking .stopbtn,body.speaking .stopbtn,body.listening .stopbtn{display:inline-flex}
+  /* ocultar avatar (no <html> pra nao conflitar com as classes de estado do body) */
+  html.noavatar .stage{display:none}
   .row{display:flex;gap:10px;align-items:center}
   .input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 16px;color:var(--text);font-size:14px;outline:none;transition:.15s}
   .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,92,255,.18)}
@@ -254,6 +256,7 @@
             <button onclick="api('preview');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>Ver o site (preview)</button>
             <button onclick="api('deploy_site');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v13"/><path d="M6 8l6-6 6 6"/><path d="M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>Publicar site (no ar)</button>
             <div class="menulbl">Avatar & Stream</div>
+            <button onclick="toggleAvatar();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><line x1="3" y1="3" x2="21" y2="21"/></svg>Ocultar / mostrar avatar</button>
             <button onclick="openVoice();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>Voz da Kemy</button>
             <button onclick="api('toggle_pet');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>Mascote no desktop</button>
             <button onclick="api('show_obs_url');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>Overlay pro OBS</button>
@@ -476,7 +479,9 @@
   // tema claro/escuro (persistido)
   function applyTheme(){ try{ var t=localStorage.getItem('kemytheme'); document.documentElement.classList.toggle('light', t==='light'); }catch(e){} }
   function toggleTheme(){ try{ var on=document.documentElement.classList.toggle('light'); localStorage.setItem('kemytheme', on?'light':'dark'); }catch(e){} }
-  applyTheme();
+  function applyAvatarPref(){ try{ document.documentElement.classList.toggle('noavatar', localStorage.getItem('kemyavatar')==='off'); }catch(e){} }
+  function toggleAvatar(){ try{ var off=document.documentElement.classList.toggle('noavatar'); localStorage.setItem('kemyavatar', off?'off':'on'); }catch(e){} }
+  applyTheme(); applyAvatarPref();
   // Live2D: reage com expressao/movimento conforme o estado
   function setL2DMood(s){ var m=window._l2dModel; if(!m) return;
     try{
