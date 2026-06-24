@@ -3488,6 +3488,38 @@ def start_obs_server(api, port: int = 8777) -> int | None:
     return None
 
 
+def start_preview_server(api, port: int = 8799) -> int | None:
+    """Servidor estatico local pro PREVIEW. Serve a pasta do projeto atual (api._preview_dir)
+    por http://127.0.0.1:PORT — faz fetch/modulos/caminhos/JSON funcionarem (file:// quebra)."""
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            return
+
+        def translate_path(self, path):
+            path = path.split("?", 1)[0].split("#", 1)[0]
+            path = urllib.parse.unquote(path)
+            parts = [p for p in path.split("/") if p and p not in (".", "..")]
+            root = getattr(api, "_preview_dir", "") or str(Path.home())
+            return os.path.join(root, *parts)
+
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            super().end_headers()
+
+    for p in (port, port + 1, port + 2, 0):
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            real = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            return real
+        except Exception:
+            continue
+    return None
+
+
 class VTubeStudio:
     """Conector com o VTube Studio via API WebSocket publica (lip-sync do modelo)."""
 
@@ -3640,6 +3672,8 @@ class WebApi:
         self._pet_visible = True
         self._last_state = "idle"
         self._obs_port = None
+        self._preview_port = None
+        self._preview_dir = ""
         self._quitting = False
         self._speaking = False
         self._file_views: dict[str, dict] = {}
@@ -3836,6 +3870,7 @@ class WebApi:
         threading.Thread(target=self._connect, daemon=True).start()
         threading.Thread(target=self._update_flag, daemon=True).start()
         threading.Thread(target=self._start_obs, daemon=True).start()
+        threading.Thread(target=self._start_preview, daemon=True).start()
         it = self._cur() or {}
         return {"state": "idle" if self.connected else "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
@@ -3853,6 +3888,15 @@ class WebApi:
         except Exception:
             port = 8777
         self._obs_port = start_obs_server(self, port)
+
+    def _start_preview(self) -> None:
+        if self._preview_port:
+            return
+        try:
+            port = int(os.environ.get("KEMY_PREVIEW_PORT", "8799"))
+        except Exception:
+            port = 8799
+        self._preview_port = start_preview_server(self, port)
 
     def obs_url(self) -> str:
         """URL do overlay transparente pro OBS (botao/menu pode mostrar/copiar)."""
@@ -6401,16 +6445,27 @@ class WebApi:
         um template cru (que mostraria {% %} na tela)."""
         kind, target = self._detect_backend(base)
         idx = base / "index.html"
-        # Site estatico de verdade: index.html sem tags de template e sem backend.
+        # Site estatico: serve por http://127.0.0.1 (fetch/modulos/caminhos funcionam; file:// nao).
         if not kind and idx.exists():
             try:
                 txt = idx.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 txt = ""
             if "{%" in txt or "{{" in txt:
-                self._msg("sys", "⚠️ Esse index.html é um template (tem {% %}). Precisa de um servidor "
+                self._msg("sys", "Esse index.html é um template (tem {% %}). Precisa de um servidor "
                           "pra renderizar — me diga o framework ou rode o servidor do projeto.", store=False)
                 return
+            self._preview_dir = str(base)
+            port = getattr(self, "_preview_port", None)
+            if port:
+                url = f"http://127.0.0.1:{port}/index.html"
+                try:
+                    webbrowser.open(url)
+                    self._msg("sys", f"Preview aberto: {url}", store=False)
+                    return
+                except Exception:
+                    pass
+            # fallback file:// se o servidor nao subiu
             try:
                 webbrowser.open(idx.as_uri())
             except Exception:
