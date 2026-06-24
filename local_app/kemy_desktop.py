@@ -1693,12 +1693,14 @@ class LLMClient:
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
         # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
+        # Lidera com modelos FORTES e RESPONSIVOS (DeepSeek-V3.1 / GLM-5.1 / Qwen-Coder).
+        # O DeepSeek-V4-Pro (raciocinio 1.6T) e o mais inteligente porem LENTO -> fica por ultimo
+        # (opt-in via NVIDIA_MODEL=deepseek-ai/deepseek-v4-pro pra quem quiser o maximo e pode esperar).
         self.nvidia_models = _list("NVIDIA_MODEL", [
-            "deepseek-ai/deepseek-v4-pro", "mistralai/mistral-large-3-675b-instruct-2512",
-            "zai-org/glm-5.1", "z-ai/glm-5.1", "qwen/qwen2.5-coder-32b-instruct"])
+            "deepseek-ai/deepseek-v3.1", "zai-org/glm-5.1", "qwen/qwen2.5-coder-32b-instruct",
+            "z-ai/glm-5.1", "mistralai/mistral-large-3-675b-instruct-2512"])
         self.nvidia_fast = _list("NVIDIA_FAST", [
-            "zai-org/glm-5.1", "z-ai/glm-5.1", "qwen/qwen2.5-coder-32b-instruct",
-            "mistralai/mistral-large-3-675b-instruct-2512"])
+            "qwen/qwen2.5-coder-32b-instruct", "deepseek-ai/deepseek-v3.1", "zai-org/glm-5.1"])
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
@@ -1772,28 +1774,28 @@ class LLMClient:
 
         if self.nvidia_keys:
             m = self.nvidia_models[0]
-            run("NVIDIA", m, lambda: self._nvidia_compat(m, sysp, msgs, 8))
+            run("NVIDIA", m, lambda: self._nvidia_compat(m, sysp, msgs, 24))
         if self.cerebras:
             m = self.cerebras_fast[0]
-            run("Cerebras", m, lambda: self._openai_compat("https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, sysp, msgs, 8))
+            run("Cerebras", m, lambda: self._openai_compat("https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, sysp, msgs, 24))
         if self.groq:
             m = self.groq_fast[0]
-            run("Groq", m, lambda: self._openai_compat("https://api.groq.com/openai/v1/chat/completions", self.groq, m, sysp, msgs, 8))
+            run("Groq", m, lambda: self._openai_compat("https://api.groq.com/openai/v1/chat/completions", self.groq, m, sysp, msgs, 24))
         if self.gemini:
             m = self.gemini_models[0]
-            run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 8))
+            run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 24))
         if self.github:
             m = self.github_fast[0]
-            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 8))
+            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 24))
         if self.mistral:
             m = self.mistral_fast[0]
-            run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 8))
+            run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 24))
         if self.sambanova:
             m = self.sambanova_fast[0]
-            run("SambaNova", m, lambda: self._openai_compat("https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, sysp, msgs, 8))
+            run("SambaNova", m, lambda: self._openai_compat("https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, sysp, msgs, 24))
         if self.openrouter:
             m = self.openrouter_models[0]
-            run("OpenRouter", m, lambda: self._openai_compat("https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, sysp, msgs, 8))
+            run("OpenRouter", m, lambda: self._openai_compat("https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, sysp, msgs, 24))
         return results
 
     def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False,
@@ -1913,7 +1915,7 @@ class LLMClient:
         last_err: Exception | None = None
         for key in order:
             try:
-                res = self._openai_compat(url, key, model, system, messages, max_tokens)
+                res = self._openai_compat(url, key, model, system, messages, max_tokens, timeout=120)
                 self._working["nvidia_key"] = key
                 return res
             except Exception as exc:
@@ -1932,7 +1934,20 @@ class LLMClient:
             "generationConfig": {"temperature": 0.6, "maxOutputTokens": min(16384, max_tokens)},
         }
         data = self._post(url, {"Content-Type": "application/json"}, payload)
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        # Robusto: se vier sem 'parts' (bloqueio/truncamento), tenta achar texto ou erro claro.
+        try:
+            cand = (data.get("candidates") or [])[0]
+            parts = (cand.get("content") or {}).get("parts") or []
+            txt = "".join(p.get("text", "") for p in parts)
+            if txt.strip():
+                return txt
+        except Exception:
+            pass
+        try:
+            err = json.dumps(data.get("promptFeedback") or data.get("error") or data)[:160]
+        except Exception:
+            err = "resposta vazia"
+        raise RuntimeError(f"gemini sem texto ({err})")
 
     def vision(self, prompt: str, image_b64: str, mime: str) -> str:
         """Analisa uma imagem (multimodal). Usa Gemini (free tier suporta visao)."""
@@ -1952,12 +1967,31 @@ class LLMClient:
                 continue
         raise RuntimeError("Nao consegui analisar a imagem com o Gemini.")
 
-    def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
+    def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict],
+                       max_tokens: int = 16000, timeout: float = 60) -> str:
         msgs = [{"role": "system", "content": system}]
         msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
         payload = {"model": model, "messages": msgs, "temperature": 0.6, "max_tokens": max_tokens}
-        data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, payload)
-        return data["choices"][0]["message"]["content"]
+        data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                          payload, timeout=timeout)
+        # Robusto: alguns provedores/modelos de raciocinio devolvem content vazio + reasoning,
+        # ou um objeto de erro. Em vez de quebrar com KeyError, levanta um erro claro.
+        try:
+            ch = (data.get("choices") or [])[0]
+            msg = ch.get("message", {})
+            txt = msg.get("content")
+            if not txt:
+                txt = msg.get("reasoning_content") or ch.get("text") or ""
+            if txt:
+                return txt
+        except Exception:
+            pass
+        err = ""
+        try:
+            err = json.dumps(data.get("error") or data)[:160]
+        except Exception:
+            err = "resposta vazia"
+        raise RuntimeError(f"resposta sem texto ({err})")
 
     # ---- Streaming (resposta em tempo real) ----
     def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700, fast: bool = True) -> str:
