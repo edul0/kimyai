@@ -480,7 +480,19 @@
   function applyTheme(){ try{ var t=localStorage.getItem('kemytheme'); document.documentElement.classList.toggle('light', t==='light'); }catch(e){} }
   function toggleTheme(){ try{ var on=document.documentElement.classList.toggle('light'); localStorage.setItem('kemytheme', on?'light':'dark'); }catch(e){} }
   function applyAvatarPref(){ try{ document.documentElement.classList.toggle('noavatar', localStorage.getItem('kemyavatar')==='off'); }catch(e){} }
-  function toggleAvatar(){ try{ var off=document.documentElement.classList.toggle('noavatar'); localStorage.setItem('kemyavatar', off?'off':'on'); }catch(e){} }
+  function _refitAvatar(){ try{
+    var box=document.getElementById('l2dwrap');
+    if(window._l2dApp && box && box.clientWidth>0){ window._l2dApp.renderer.resize(box.clientWidth, box.clientHeight); }
+    if(window._l2dFit) window._l2dFit();
+    // se o Live2D nao carregou, garante o SVG visivel
+    var sv=document.getElementById('svgAvatar');
+    if(sv && !window._l2dModel) sv.style.display='block';
+  }catch(e){} }
+  function toggleAvatar(){ try{
+    var off=document.documentElement.classList.toggle('noavatar');
+    localStorage.setItem('kemyavatar', off?'off':'on');
+    if(!off){ setTimeout(_refitAvatar, 60); setTimeout(_refitAvatar, 220); }  // reapareceu: re-encaixa o avatar
+  }catch(e){} }
   applyTheme(); applyAvatarPref();
   // Live2D: reage com expressao/movimento conforme o estado
   function setL2DMood(s){ var m=window._l2dModel; if(!m) return;
