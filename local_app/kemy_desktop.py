@@ -1648,7 +1648,12 @@ class LLMClient:
                     return v
             return None
 
-        self.gemini = _nonnv(env.get("GEMINI_API_KEY"))
+        # Gemini: aceita VARIAS chaves (virgula/espaco ou GEMINI_API_KEY2..9) e roda entre elas
+        # quando uma esgota a cota (429) — mantem visao e Nano Banana de pe o dia todo.
+        gm_raw = " ".join(filter(None, [env.get("GEMINI_API_KEY") or ""]
+                                 + [env.get(f"GEMINI_API_KEY{i}") or "" for i in range(2, 10)]))
+        self.gemini_keys = [k for k in re.split(r"[\s,;]+", gm_raw) if k and not k.startswith("nvapi-")]
+        self.gemini = self.gemini_keys[0] if self.gemini_keys else None
         self.groq = _nonnv(env.get("GROQ_API_KEY"))
         self.cerebras = _nonnv(env.get("CEREBRAS_API_KEY"))
         self.openai = _nonnv(env.get("OPENAI_API_KEY"), env.get("CHATGPT_API_KEY"))
@@ -1710,11 +1715,11 @@ class LLMClient:
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
-        # Lidera com o MAIS ATUAL e gratis: 'gemini-flash-latest' (alias que aponta pro mais novo,
-        # = Gemini 3 Flash quando disponivel, sem dar 404) e 'gemini-3-flash'; cai pra 2.5/2.0 como
-        # rede de seguranca. O Gemini 3 PRO via API e PAGO -> opt-in: GEMINI_PRIMARY_MODEL=gemini-3-pro
+        # Lidera com gemini-2.5-flash (estavel, cota boa); cai pro -latest/2.0 se preciso.
+        # gemini-flash-latest as vezes da 429/limite momentaneo; 2.5-flash e mais firme.
+        # O Gemini 3 PRO via API e PAGO -> opt-in: GEMINI_PRIMARY_MODEL=gemini-3-pro
         self.gemini_models = _list("GEMINI_PRIMARY_MODEL",
-                                   ["gemini-flash-latest", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"])
+                                   ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         # Claude (Anthropic API, PAGO) — melhor pra codigo. Use chave ANTHROPIC_API_KEY.
         self.claude_models = _list("CLAUDE_MODEL", ["claude-sonnet-4-6", "claude-3-5-sonnet-latest"])
@@ -1770,11 +1775,13 @@ class LLMClient:
                 results.append((name, model, True, f"{int((time.time()-t0)*1000)}ms"))
             except Exception as e:
                 msg = str(e); code = getattr(e, "code", "")
-                # "respondeu porem sem texto" (modelo de raciocinio truncado) = ESTA VIVA.
+                # respondeu porem truncado / ocupado / no limite = chave VALIDA, esta viva.
                 if "sem texto" in msg:
                     results.append((name, model, True, "viva (resposta curta no teste)"))
                 elif code == 503 or "503" in msg:
                     results.append((name, model, True, "viva (ocupada agora, tente já)"))
+                elif code == 429 or "429" in msg or "quota" in msg.lower():
+                    results.append((name, model, True, "viva (no limite agora — espera um pouco)"))
                 else:
                     results.append((name, model, False, (f"HTTP {code} " if code else "") + msg[:90]))
 
@@ -1941,8 +1948,6 @@ class LLMClient:
         raise last_err or RuntimeError("sem chave NVIDIA")
 
     def _gemini(self, system: str, messages: list[dict], model: str | None = None, max_tokens: int = 16000) -> str:
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model or self.gemini_model}:generateContent?key={self.gemini}")
         contents = [{"role": "model" if m["role"] == "assistant" else "user",
                      "parts": [{"text": m["content"]}]} for m in messages]
         payload = {
@@ -1950,39 +1955,61 @@ class LLMClient:
             "contents": contents,
             "generationConfig": {"temperature": 0.6, "maxOutputTokens": min(16384, max_tokens)},
         }
-        data = self._post(url, {"Content-Type": "application/json"}, payload)
-        # Robusto: se vier sem 'parts' (bloqueio/truncamento), tenta achar texto ou erro claro.
-        try:
-            cand = (data.get("candidates") or [])[0]
-            parts = (cand.get("content") or {}).get("parts") or []
-            txt = "".join(p.get("text", "") for p in parts)
-            if txt.strip():
-                return txt
-        except Exception:
-            pass
-        try:
-            err = json.dumps(data.get("promptFeedback") or data.get("error") or data)[:160]
-        except Exception:
-            err = "resposta vazia"
-        raise RuntimeError(f"gemini sem texto ({err})")
-
-    def vision(self, prompt: str, image_b64: str, mime: str) -> str:
-        """Analisa uma imagem (multimodal). Usa Gemini (free tier suporta visao)."""
-        if not self.gemini:
-            raise RuntimeError("Para enviar imagens, configure a chave do Gemini (GEMINI_API_KEY).")
-        for model in self.gemini_models:
+        last = None
+        for key in self._gemini_key_order():
             url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                   f"{model}:generateContent?key={self.gemini}")
-            payload = {"contents": [{"role": "user", "parts": [
-                {"text": prompt or "Descreva esta imagem em portugues e como posso usa-la."},
-                {"inline_data": {"mime_type": mime, "data": image_b64}},
-            ]}], "generationConfig": {"temperature": 0.5, "maxOutputTokens": 4096}}
+                   f"{model or self.gemini_model}:generateContent?key={key}")
             try:
                 data = self._post(url, {"Content-Type": "application/json"}, payload)
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception:
+                try:
+                    cand = (data.get("candidates") or [])[0]
+                    parts = (cand.get("content") or {}).get("parts") or []
+                    txt = "".join(p.get("text", "") for p in parts)
+                    if txt.strip():
+                        self._working["gemini_key"] = key
+                        return txt
+                except Exception:
+                    pass
+                try:
+                    err = json.dumps(data.get("promptFeedback") or data.get("error") or data)[:160]
+                except Exception:
+                    err = "resposta vazia"
+                last = RuntimeError(f"gemini sem texto ({err})")
+            except Exception as exc:
+                last = exc
                 continue
-        raise RuntimeError("Nao consegui analisar a imagem com o Gemini.")
+        raise last or RuntimeError("gemini indisponivel")
+
+    def _gemini_key_order(self) -> list:
+        wk = self._working.get("gemini_key")
+        keys = self.gemini_keys or ([self.gemini] if self.gemini else [])
+        return ([wk] if wk in keys else []) + [k for k in keys if k != wk]
+
+    def vision(self, prompt: str, image_b64: str, mime: str) -> str:
+        """Analisa uma imagem (multimodal). Usa Gemini, rodando entre VARIAS chaves se uma esgotar."""
+        if not (self.gemini_keys or self.gemini):
+            raise RuntimeError("Para enviar imagens, configure a chave do Gemini (GEMINI_API_KEY).")
+        payload = {"contents": [{"role": "user", "parts": [
+            {"text": prompt or "Descreva esta imagem em portugues e como posso usa-la."},
+            {"inline_data": {"mime_type": mime, "data": image_b64}},
+        ]}], "generationConfig": {"temperature": 0.5, "maxOutputTokens": 4096}}
+        last = None
+        for key in self._gemini_key_order():
+            for model in self.gemini_models[:3]:
+                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                       f"{model}:generateContent?key={key}")
+                try:
+                    data = self._post(url, {"Content-Type": "application/json"}, payload)
+                    cand = (data.get("candidates") or [])[0]
+                    parts = (cand.get("content") or {}).get("parts") or []
+                    txt = "".join(p.get("text", "") for p in parts)
+                    if txt.strip():
+                        self._working["gemini_key"] = key
+                        return txt
+                except Exception as exc:
+                    last = exc
+                    continue
+        raise RuntimeError(f"Nao consegui analisar a imagem com o Gemini ({last}).")
 
     def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict],
                        max_tokens: int = 16000, timeout: float = 60) -> str:
