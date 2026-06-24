@@ -4704,7 +4704,23 @@ class WebApi:
     def stop_computer(self) -> None:
         if getattr(self, "_cu_running", False):
             self._cu_stop = True
-            self._msg("sys", "🖱️ Parando o controle do PC…", store=False)
+            self._msg("sys", "Parando o controle do PC…", store=False)
+
+    def stop_all(self) -> None:
+        """Botão de pânico: para tudo (fala, jogo, PC, Showdown, Minecraft)."""
+        try:
+            self.stop_speak()
+        except Exception:
+            pass
+        for fn in (getattr(self, "stop_game", None), getattr(self, "stop_computer", None),
+                   getattr(self, "stop_showdown", None)):
+            try:
+                if fn:
+                    fn()
+            except Exception:
+                pass
+        self.busy = False
+        self._state("idle")
 
     def _ui_elements(self, max_n: int = 40) -> list:
         """Lista os ELEMENTOS clicaveis da janela em foco (UI Automation do Windows), com nome e

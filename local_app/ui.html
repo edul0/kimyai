@@ -205,7 +205,12 @@
   .cn{width:50px;flex:none;text-align:right;padding-right:14px;color:#4d5566;user-select:none}
   .cc{white-space:pre;color:#d6deeb}
   /* composer */
-  .composer{padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+  .composer{position:relative;padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+  .stopbtn{display:none;position:absolute;top:-44px;left:50%;transform:translateX(-50%);align-items:center;gap:7px;
+    background:rgba(255,80,80,.16);border:1px solid rgba(255,90,90,.5);color:#ff9b9b;border-radius:20px;
+    padding:7px 16px;font-weight:700;font-size:13px;cursor:pointer;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .stopbtn:hover{background:rgba(255,80,80,.30);color:#fff}
+  body.thinking .stopbtn,body.speaking .stopbtn,body.listening .stopbtn{display:inline-flex}
   .row{display:flex;gap:10px;align-items:center}
   .input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 16px;color:var(--text);font-size:14px;outline:none;transition:.15s}
   .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,92,255,.18)}
@@ -298,6 +303,7 @@
       </div>
       <div class="chat" id="chat"></div>
       <div class="composer">
+        <button class="stopbtn" id="stopBtn" onclick="api('stop_all')"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Parar</button>
         <div class="row">
           <button class="iconbtn" title="Anexar arquivo (imagem, PDF, vídeo, Excel, CSV…)" onclick="api('attach_file', document.getElementById('inp').value)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"/></svg></button>
           <input class="input" id="inp" placeholder="Peça algo: crie um site, edite o código, abra um app…" />
@@ -567,8 +573,21 @@
     var b=document.getElementById(ids[name]); if(!b)return; b.classList.toggle("on",on);
     var lab=b.querySelector(".lab"); if(lab) lab.textContent=(labs[name]||name)+(on?": ON":""); }
   function toggle(name){ api('toggle',name); }
-  function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return; i.value=""; api('send_text',t); }
-  document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter")sendText(); });
+  var _hist=[], _hi=-1;
+  function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return;
+    _hist.push(t); if(_hist.length>50)_hist.shift(); _hi=_hist.length; i.value=""; api('send_text',t); }
+  document.getElementById("inp").addEventListener("keydown",function(e){
+    if(e.key==="Enter"){ sendText(); return; }
+    var i=document.getElementById("inp");
+    if(e.key==="ArrowUp" && !i.value.trim() && _hist.length){ _hi=Math.max(0,_hi-1); i.value=_hist[_hi]||""; e.preventDefault(); }
+    else if(e.key==="ArrowDown" && _hi>=0){ _hi=Math.min(_hist.length,_hi+1); i.value=_hist[_hi]||""; }
+  });
+  // Esc fecha qualquer modal; clicar fora (no fundo) tambem fecha.
+  document.addEventListener("keydown",function(e){ if(e.key==="Escape"){
+    document.querySelectorAll('[id$="Modal"]').forEach(function(m){ m.style.display='none'; });
+    closeMenu&&closeMenu(); } });
+  document.querySelectorAll('[id$="Modal"]').forEach(function(m){
+    m.addEventListener('mousedown',function(e){ if(e.target===m) m.style.display='none'; }); });
   function doUpdate(){ addMsg("sys","Procurando atualização…"); api('check_update'); }
   function setUpdate(av){ const b=document.getElementById("updBadge"); if(b)b.style.display=av?"block":"none";
     const it=document.querySelector("#updItem .lab"); if(it)it.textContent=av?"Atualizar (nova versão!)":"Atualizar a Kemy"; }
