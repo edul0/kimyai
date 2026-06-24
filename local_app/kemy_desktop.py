@@ -6721,6 +6721,14 @@ class WebApi:
         self._sanitize_python(base)
         self._localize_images(base)
         self._ensure_scripts_linked(base)
+        self._polish_html(base)
+        try:
+            leaks = self._scan_secrets(base)
+            if leaks:
+                self._msg("kemy", "Segurança: tem credencial exposta no código (" + "; ".join(leaks[:4])
+                          + "). Tira do código e usa variável de ambiente.")
+        except Exception:
+            pass
         # Verificacao final do app web (sintaxe JS + botoes mortos) — igual ao fluxo normal.
         try:
             kind0, _ = self._detect_backend(base)
