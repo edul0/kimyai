@@ -4677,8 +4677,9 @@ class WebApi:
             self._msg("kemy", "⚔️ Saí do Showdown.")
 
     # ---------------- COMPUTER-USE (opera o PC/navegador por visão) ----------------
-    def computer_use(self, goal: str = "") -> None:
-        """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa."""
+    def computer_use(self, goal: str = "", learn: bool = False, learn_name: str = "") -> None:
+        """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa.
+        learn=True salva a SEQUENCIA que funcionou como habilidade reutilizavel."""
         if not self.llm.gemini:
             self._msg("kemy", "Pra controlar o PC eu preciso enxergar a tela — configure a chave do Gemini.")
             return
@@ -4696,9 +4697,9 @@ class WebApi:
             return
         self._cu_running = True
         self._cu_stop = False
-        self._msg("kemy", f"🖱️ Tô no controle! Objetivo: **{goal}**. Pra eu parar na hora, diga **'parar'** "
+        self._msg("kemy", f"Tô no controle! Objetivo: {goal}. Pra eu parar, diga 'parar' "
                   "ou jogue o mouse pro canto superior-esquerdo da tela.")
-        threading.Thread(target=self._cu_loop, args=(goal,), daemon=True).start()
+        threading.Thread(target=self._cu_loop, args=(goal, learn, learn_name), daemon=True).start()
 
     def stop_computer(self) -> None:
         if getattr(self, "_cu_running", False):
@@ -4741,7 +4742,7 @@ class WebApi:
             return []
         return els
 
-    def _cu_loop(self, goal: str, max_steps: int = 40) -> None:
+    def _cu_loop(self, goal: str, learn: bool = False, learn_name: str = "", max_steps: int = 40) -> None:
         import io
         from PIL import ImageGrab
         try:
@@ -4752,6 +4753,7 @@ class WebApi:
             return
         self._state("thinking")
         hist: list[str] = []
+        steps_log: list[str] = []   # a SEQUENCIA real (pra aprender habilidade)
         last_sig, stuck = None, 0
         base_prompt = (
             "Voce CONTROLA o computador (Windows) pra cumprir o OBJETIVO: " + goal + ".\n"
@@ -4845,13 +4847,48 @@ class WebApi:
                 break
             except Exception as e:
                 self._msg("sys", f"(ação falhou: {e})", store=False)
+            # registra a acao real (pra aprender a habilidade certinha)
+            try:
+                if a in ("click_el", "click", "double_click", "right_click") and els and act.get("el") is not None:
+                    steps_log.append(f"clicar em '{els[int(act.get('el'))]['name'] or 'elemento'}'")
+                elif a == "type":
+                    steps_log.append(f"digitar '{str(act.get('text', ''))[:30]}'")
+                elif a == "key":
+                    steps_log.append("apertar " + ",".join(act.get("keys") or []))
+                elif a == "open_url":
+                    steps_log.append("abrir " + str(act.get("url", "")))
+            except Exception:
+                pass
             time.sleep(0.7)
         self._cu_running = False
         self._state("idle")
+        # autoverificacao: confere se cumpriu o objetivo
+        veredito = ""
         if not self._cu_stop:
-            self._msg("kemy", "Parei (limite de passos). Me diz se ficou bom ou o que ajustar.")
-        else:
+            try:
+                full = ImageGrab.grab(); full.thumbnail((1100, 700))
+                buf = io.BytesIO(); full.convert("RGB").save(buf, format="JPEG", quality=70)
+                chk = self.llm.vision(f"O objetivo '{goal}' foi cumprido nesta tela? Responda comecando "
+                                      "com SIM ou NAO e uma frase curta.",
+                                      base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg")
+                veredito = strip_emojis(chk or "").strip()
+            except Exception:
+                pass
+        # aprende a habilidade com a SEQUENCIA real que funcionou
+        sucesso = veredito.lower().startswith("sim")
+        if learn and steps_log and (sucesso or not veredito):
+            nome = (learn_name or goal)[:50]
+            recipe = "Passos que funcionaram:\n- " + "\n- ".join(steps_log[:20])
+            if not any(s.get("name", "").lower() == nome.lower() for s in self.skills):
+                self.skills.append({"name": nome, "desc": goal, "recipe": recipe})
+                save_skills(self.skills)
+                self._msg("sys", f"Aprendi a sequência de '{nome}' — vou repetir certeiro na próxima.", store=False)
+        if self._cu_stop:
             self._msg("kemy", "Parei o controle do PC.")
+        elif veredito:
+            self._msg("kemy", veredito)
+        else:
+            self._msg("kemy", "Terminei o que consegui. Me diz se ficou bom ou o que ajustar.")
 
     # ---------------- MINECRAFT (player inteligente via Mineflayer) ----------------
     def _find_minecraft_dir(self) -> Path | None:
@@ -5342,14 +5379,13 @@ class WebApi:
         if not goal:
             return
         skill = self._skill_for(goal)
-        recipe = ""
         if skill:
             self._msg("kemy", f"Isso eu já sei fazer ({skill.get('name')}). Bora!")
             recipe = "\n\nVocê JÁ aprendeu a fazer isso assim (siga estes passos):\n" + str(skill.get("recipe", ""))
+            self.computer_use(goal + recipe)
         else:
-            self._msg("kemy", "Ainda não sei fazer isso, mas vou aprender fazendo agora e guardar pra próxima.")
-            threading.Thread(target=self._learn_skill, args=(goal,), daemon=True).start()
-        self.computer_use(goal + recipe)
+            self._msg("kemy", "Ainda não sei fazer isso — vou aprender fazendo agora e guardar a sequência pra próxima.")
+            self.computer_use(goal, learn=True, learn_name=goal[:50])
 
     def _try_task_intent(self, text: str):
         """Detecta tarefas no PC que pedem AÇÃO composta (ex.: mandar mensagem no whatsapp) e
