@@ -1306,7 +1306,16 @@ SYSTEM_PROMPT = (
     "   C) SEGURANCA DE VERDADE (multiusuario/empresa): avise que localStorage e local/single-user e ofereca "
     "SUPABASE AUTH + ROW LEVEL SECURITY (RLS): login real, cada usuario so acessa os PROPRIOS dados.\n"
     "   Resumo: TODO projeto sai sem segredo exposto e com dados escapados (anti-vazamento); login so quando "
-    "ha dado privado."
+    "ha dado privado.\n"
+    "21) ACABAMENTO PRO (baseline em todo site/app — o que separa amador de profissional):\n"
+    "   - HTML SEMANTICO (header/nav/main/section/footer) e ACESSIVEL: <img> com alt; todo input com <label> "
+    "(ou aria-label); botoes com type correto; contraste bom; foco visivel (:focus-visible).\n"
+    "   - SEO/social: <title> e <meta name=description> reais; Open Graph (og:title/og:description/og:image) "
+    "quando for site publico; favicon (pode ser um emoji em SVG data-uri ou /favicon.ico).\n"
+    "   - PERFORMANCE: <script> com defer; imagens com loading=\"lazy\" e width/height; evite libs pesadas "
+    "sem necessidade; CSS enxuto.\n"
+    "   - Detalhes: estados de hover/active/disabled, loading e ERRO; mensagens claras; nada de Lorem Ipsum "
+    "nem 'console.log' de debug esquecido; codigo limpo e indentado."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
