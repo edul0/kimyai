@@ -5520,6 +5520,10 @@ class WebApi:
         t = (text or "").strip().lower().rstrip("!.")
         if re.fullmatch(r"(?:para de falar|silenci\w*|cala a boca|fica quieta|shh+|quieta|cala)", t):
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
+        if re.fullmatch(r"(?:o que (?:voc[eê]|vc) sabe (?:de|sobre) mim|minha mem[oó]ria|o que voce lembra|ver mem[oó]ria)", t):
+            self.show_memory(); return True
+        if re.fullmatch(r"(?:esquece tudo|esque[cç]a tudo|apaga (?:a |sua )?mem[oó]ria|limpa (?:a |sua )?mem[oó]ria|esquece de mim)", t):
+            self.clear_memory(); return True
         # Minecraft: entrar / sair
         if re.fullmatch(r"(?:entra(?:r)?|conecta(?:r)?|joga(?:r)?|vem|bora)\s+(?:n[oa]\s+)?minecraft|minecraft|modo minecraft", t):
             self.mc_start(); return True
@@ -5675,6 +5679,32 @@ class WebApi:
                 out += ("HABILIDADES que voce ja APRENDEU a fazer no PC (pode repetir quando pedirem): "
                         + nomes + "\n\n")
         return out
+
+    def show_memory(self) -> None:
+        """Mostra o que a Kemy sabe sobre voce (memoria + habilidades)."""
+        mems = self.memories[-40:] if self.memories else []
+        sks = [s.get("name", "") for s in (self.skills or [])][-20:]
+        instr = (getattr(self, "instructions", "") or "").strip()
+        parts = []
+        if instr:
+            parts.append("SUAS INSTRUÇÕES:\n" + instr[:600])
+        if mems:
+            parts.append("O QUE EU SEI DE VOCÊ:\n- " + "\n- ".join(mems))
+        if sks:
+            parts.append("HABILIDADES QUE APRENDI:\n- " + "\n- ".join(s for s in sks if s))
+        if not parts:
+            self._msg("kemy", "Ainda não sei muita coisa sobre você — conversa comigo que eu vou aprendendo. "
+                      "Você também pode preencher 'Instruções / Sobre você' nas Configurações.")
+        else:
+            self._msg("kemy", "\n\n".join(parts) + "\n\n(Pra apagar isso, diga 'esquece tudo' ou use o menu.)")
+        self._state("idle")
+
+    def clear_memory(self) -> None:
+        """Apaga a memoria aprendida (mantem as Instrucoes que voce escreveu)."""
+        self.memories = []
+        save_memorias(self.memories)
+        self._msg("kemy", "Pronto, esqueci o que tinha aprendido sobre você. (Suas Instruções fixas continuam.)")
+        self._state("idle")
 
     def help_kemy(self) -> None:
         """Mostra o que a Kemy sabe fazer (descoberta de recursos)."""
