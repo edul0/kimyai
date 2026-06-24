@@ -181,7 +181,7 @@ def load_memorias() -> list:
 
 def save_memorias(mems: list) -> None:
     try:
-        memoria_file().write_text(json.dumps(mems[-80:], ensure_ascii=False, indent=1), encoding="utf-8")
+        memoria_file().write_text(json.dumps(mems[-3000:], ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
 
@@ -205,6 +205,26 @@ def save_instructions(text: str) -> None:
         pass
 
 
+def skills_file() -> Path:
+    return config_dir() / "kemy_habilidades.json"
+
+
+def load_skills() -> list:
+    """Habilidades aprendidas: receitas de tarefas no PC que a Kemy ja sabe repetir."""
+    try:
+        d = json.loads(skills_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_skills(skills: list) -> None:
+    try:
+        skills_file().write_text(json.dumps(skills[-2000:], ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def conhecimento_file() -> Path:
     return config_dir() / "kemy_conhecimento.json"
 
@@ -220,7 +240,8 @@ def load_conhecimento() -> list:
 
 def save_conhecimento(facts: list) -> None:
     try:
-        conhecimento_file().write_text(json.dumps(facts[-600:], ensure_ascii=False, indent=1), encoding="utf-8")
+        # base "quase infinita": guarda muito (a recuperacao e por relevancia/RAG, nao tudo no prompt)
+        conhecimento_file().write_text(json.dumps(facts[-20000:], ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
 
@@ -3697,6 +3718,7 @@ class WebApi:
         self._sd_stop = False
         self.memories = load_memorias()
         self.instructions = load_instructions()
+        self.skills = load_skills()
         self.knowledge = load_conhecimento()
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
@@ -5175,6 +5197,8 @@ class WebApi:
             threading.Thread(target=self.mc_brain, args=(text, "você"), daemon=True).start()
             self._state("idle")
             return
+        if self._try_task_intent(text):   # "manda msg no whatsapp", "aprende a ..." -> faz e aprende
+            return
         played = self._try_play_intent(text)   # "toque <musica>" -> toca no YouTube
         if played is not None:
             self._msg("kemy", played)
@@ -5218,6 +5242,77 @@ class WebApi:
             self.speaker.say("Anotado! Vou lembrar disso.")
             self._state("speaking")
         return True
+
+    # ---------------- AUTOAPRENDIZADO DE TAREFAS (habilidades) ----------------
+    def _skill_for(self, goal: str):
+        """Acha uma habilidade ja aprendida que combine com o pedido (match por palavras)."""
+        g = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", (goal or "").lower()))
+        best, bs = None, 0
+        for sk in self.skills:
+            words = set(re.findall(r"[\wáéíóúâêôãõç]{3,}",
+                                   (str(sk.get("name", "")) + " " + str(sk.get("desc", ""))).lower()))
+            s = len(g & words)
+            if s > bs:
+                best, bs = sk, s
+        return best if bs >= 2 else None
+
+    def _learn_skill(self, goal: str) -> None:
+        """Aprende a tarefa: deriva uma RECEITA de passos (reutilizavel) e salva pra proxima vez."""
+        try:
+            out = self.llm.chat(
+                "Voce vai APRENDER a fazer uma tarefa no PC do usuario (Windows) pra repetir depois. "
+                "Escreva uma RECEITA curta e generica de passos praticos (abrir o app certo, achar o campo, "
+                "digitar, clicar enviar, etc.), que sirva pra qualquer pessoa/numero. Responda SO um JSON: "
+                '{"name":"nome curto da habilidade","desc":"quando usar","recipe":"passo 1...\\npasso 2..."}.',
+                [{"role": "user", "content": f"Tarefa: {goal}"}], max_tokens=400, fast=True)
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            sk = json.loads(m.group(0)) if m else {}
+            if isinstance(sk, dict) and sk.get("recipe"):
+                # nao duplica
+                if not any((s.get("name", "").lower() == sk.get("name", "").lower()) for s in self.skills):
+                    self.skills.append(sk)
+                    save_skills(self.skills)
+                    self._msg("sys", f"Aprendi uma habilidade nova: {sk.get('name')}. Vou lembrar pra próxima.", store=False)
+        except Exception:
+            pass
+
+    def learn_or_do(self, goal: str) -> None:
+        """Faz a tarefa no PC. Se ja aprendeu, usa a receita; se nao, aprende fazendo e salva."""
+        if not goal:
+            return
+        skill = self._skill_for(goal)
+        recipe = ""
+        if skill:
+            self._msg("kemy", f"Isso eu já sei fazer ({skill.get('name')}). Bora!")
+            recipe = "\n\nVocê JÁ aprendeu a fazer isso assim (siga estes passos):\n" + str(skill.get("recipe", ""))
+        else:
+            self._msg("kemy", "Ainda não sei fazer isso, mas vou aprender fazendo agora e guardar pra próxima.")
+            threading.Thread(target=self._learn_skill, args=(goal,), daemon=True).start()
+        self.computer_use(goal + recipe)
+
+    def _try_task_intent(self, text: str):
+        """Detecta tarefas no PC que pedem AÇÃO composta (ex.: mandar mensagem no whatsapp) e
+        roteia pro motor de habilidades (faz e aprende). Retorna True se tratou."""
+        t = (text or "").strip()
+        low = t.lower()
+        # ensinar explicitamente: "aprende a X: passos" / "te ensino a X: passos"
+        mteach = re.match(r"(?i)^(?:aprende(?:r)?|te ensino|anota como)\s+(?:a\s+)?(.+?)\s*[:\-]\s*(.+)$", t)
+        if mteach:
+            nome = mteach.group(1).strip()[:60]
+            recipe = mteach.group(2).strip()
+            self.skills.append({"name": nome, "desc": nome, "recipe": recipe})
+            save_skills(self.skills)
+            self._msg("kemy", f"Aprendido! Agora sei '{nome}'. É só pedir que eu faço.")
+            self._state("idle")
+            return True
+        # tarefa de mensagem / acao composta no PC
+        msg_app = re.search(r"(?i)\b(whatsapp|whats|zap|telegram|discord|instagram|insta|messenger|e-?mail|gmail|outlook)\b", low)
+        manda = re.search(r"(?i)\b(manda(?:r)?|envia(?:r)?|escreve(?:r)?|responde(?:r)?|posta(?:r)?)\b", low)
+        compound = re.search(r"(?i)\b(abr[ae]|abrir)\b.+\be\b.+\b(manda|envia|escreve|clica|pesquisa|posta|faz)", low)
+        if (msg_app and manda) or compound:
+            self.learn_or_do(t)
+            return True
+        return False
 
     def _try_play_intent(self, text: str):
         """'toque/toca/play <musica>' -> toca de verdade (YouTube autoplay); Spotify abre a busca."""
@@ -5405,6 +5500,11 @@ class WebApi:
         if self.memories:
             out += ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
                     "(respeite SEMPRE):\n- " + "\n- ".join(self.memories[-40:]) + "\n\n")
+        if getattr(self, "skills", None):
+            nomes = ", ".join(s.get("name", "") for s in self.skills[-30:] if s.get("name"))
+            if nomes:
+                out += ("HABILIDADES que voce ja APRENDEU a fazer no PC (pode repetir quando pedirem): "
+                        + nomes + "\n\n")
         return out
 
     def test_providers(self) -> None:
