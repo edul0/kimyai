@@ -6391,6 +6391,15 @@ class WebApi:
         self._sanitize_python(base)
         self._localize_images(base)
         self._ensure_scripts_linked(base)
+        # Verificacao final do app web (sintaxe JS + botoes mortos) — igual ao fluxo normal.
+        try:
+            kind0, _ = self._detect_backend(base)
+            if (not kind0) and (base / "index.html").exists():
+                issues = self._check_js_syntax(base) + audit_web_buttons(base)
+                if issues and self._autofix_buttons(base, "web", issues):
+                    self._ensure_scripts_linked(base)
+        except Exception:
+            pass
         self._maybe_make_pdf(base, text, [])
         try:
             self._git_snapshot(base, "kemy agente: " + text[:50])
