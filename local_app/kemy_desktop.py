@@ -3520,6 +3520,13 @@ def start_preview_server(api, port: int = 8799) -> int | None:
     por http://127.0.0.1:PORT — faz fetch/modulos/caminhos/JSON funcionarem (file:// quebra)."""
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+    # injetado nas paginas servidas: avisa a Kemy se der erro de JS no navegador.
+    ERR_JS = ("<script>(function(){function s(d){try{fetch('/_kemy_err',{method:'POST',"
+              "body:JSON.stringify(d)})}catch(e){}}window.addEventListener('error',function(e){"
+              "s({msg:String(e.message||''),src:String(e.filename||''),line:e.lineno||0})});"
+              "window.addEventListener('unhandledrejection',function(e){s({msg:'promise: '+"
+              "String(e.reason||'')})});})();</script>").encode("utf-8")
+
     class Handler(SimpleHTTPRequestHandler):
         def log_message(self, *a):
             return
@@ -3535,6 +3542,40 @@ def start_preview_server(api, port: int = 8799) -> int | None:
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Access-Control-Allow-Origin", "*")
             super().end_headers()
+
+        def do_POST(self):
+            if self.path.split("?")[0] == "/_kemy_err":
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(n).decode("utf-8", "ignore")) if n else {}
+                    getattr(api, "_preview_errors", []).append(d)
+                except Exception:
+                    pass
+                self.send_response(204); self.end_headers(); return
+            self.send_response(404); self.end_headers()
+
+        def do_GET(self):
+            p = self.path.split("?")[0]
+            # injeta o capturador de erro nos HTML servidos
+            if p.endswith("/") or p.endswith(".html") or p.endswith(".htm"):
+                fp = self.translate_path(self.path)
+                if os.path.isdir(fp):
+                    fp = os.path.join(fp, "index.html")
+                try:
+                    body = Path(fp).read_bytes()
+                    if b"</body>" in body:
+                        body = body.replace(b"</body>", ERR_JS + b"</body>", 1)
+                    else:
+                        body = body + ERR_JS
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                except Exception:
+                    pass
+            return super().do_GET()
 
     for p in (port, port + 1, port + 2, 0):
         try:
@@ -3703,6 +3744,7 @@ class WebApi:
         self._obs_port = None
         self._preview_port = None
         self._preview_dir = ""
+        self._preview_errors = []
         self._quitting = False
         self._speaking = False
         self._file_views: dict[str, dict] = {}
@@ -6815,12 +6857,14 @@ class WebApi:
                           "pra renderizar — me diga o framework ou rode o servidor do projeto.", store=False)
                 return
             self._preview_dir = str(base)
+            self._preview_errors = []
             port = getattr(self, "_preview_port", None)
             if port:
                 url = f"http://127.0.0.1:{port}/index.html"
                 try:
                     webbrowser.open(url)
                     self._msg("sys", f"Preview aberto: {url}", store=False)
+                    threading.Thread(target=self._watch_preview_errors, args=(base,), daemon=True).start()
                     return
                 except Exception:
                     pass
@@ -6835,6 +6879,28 @@ class WebApi:
             return
         if kind:
             threading.Thread(target=self._serve_project, args=(base, kind, target), daemon=True).start()
+
+    def _watch_preview_errors(self, base: Path) -> None:
+        """Espera o app rodar no navegador; se der ERRO de JS de verdade, corrige sozinha."""
+        time.sleep(7)
+        errs = list(getattr(self, "_preview_errors", []) or [])
+        if not errs:
+            return
+        uniq = []
+        for e in errs:
+            d = f"{e.get('msg','')} ({e.get('src','')}:{e.get('line','')})".strip()
+            if d and d not in uniq:
+                uniq.append(d)
+        if not uniq:
+            return
+        self._msg("sys", "Detectei erro(s) de JavaScript no app rodando — corrigindo…", store=False)
+        try:
+            if self._autofix_buttons(base, "web", ["ERRO de runtime no navegador: " + u for u in uniq[:8]]):
+                self._ensure_scripts_linked(base)
+                self._preview_errors = []
+                self._open_preview(base)   # reabre ja corrigido
+        except Exception:
+            pass
 
     def _wait_port(self, host: str, port: int, timeout: float, proc=None) -> bool:
         """Espera a porta responder de verdade (ou o processo morrer)."""
