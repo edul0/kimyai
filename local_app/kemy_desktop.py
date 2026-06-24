@@ -6325,7 +6325,7 @@ class WebApi:
         try:
             kind0, _ = self._detect_backend(base)
             if (not kind0) and (base / "index.html").exists():
-                issues = self._check_js_syntax(base) + audit_web_buttons(base)
+                issues = self._check_js_syntax(base) + audit_web_buttons(base) + self._audit_missing_assets(base)
                 if issues and self.boost:
                     if self._autofix_buttons(base, "web", issues):
                         self._ensure_scripts_linked(base)
@@ -6864,7 +6864,7 @@ class WebApi:
         try:
             kind0, _ = self._detect_backend(base)
             if (not kind0) and (base / "index.html").exists():
-                issues = self._check_js_syntax(base) + audit_web_buttons(base)
+                issues = self._check_js_syntax(base) + audit_web_buttons(base) + self._audit_missing_assets(base)
                 if issues and self._autofix_buttons(base, "web", issues):
                     self._ensure_scripts_linked(base)
         except Exception:
@@ -7449,6 +7449,33 @@ class WebApi:
         if files:
             self._save(files, base)
         return bool(files or edits)
+
+    def _audit_missing_assets(self, base: Path) -> list:
+        """Acha referencias no HTML (src/href) a arquivos LOCAIS que NAO existem (ex.: app.js
+        citado mas nao gerado -> app quebra). Deterministico."""
+        issues = []
+        try:
+            htmls = [p for p in base.rglob("*.html") if "node_modules" not in str(p)][:30]
+        except Exception:
+            return issues
+        rx = re.compile(r'(?:src|href)\s*=\s*["\']([^"\'>?#]+\.(?:js|css|png|jpe?g|svg|webp|gif|ico|json|mp3|mp4))["\']', re.I)
+        for h in htmls:
+            try:
+                t = h.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            for ref in set(rx.findall(t)):
+                low = ref.strip().lower()
+                if low.startswith(("http://", "https://", "//", "data:", "mailto:", "tel:")):
+                    continue
+                rel = ref.lstrip("/").split("?")[0].split("#")[0]
+                if not (h.parent / rel).exists() and not (base / rel).exists():
+                    issues.append(f"{h.name}: referencia '{ref}' mas esse arquivo NAO existe (crie-o ou ajuste o caminho).")
+        seen, out = set(), []
+        for i in issues:
+            if i not in seen:
+                seen.add(i); out.append(i)
+        return out[:20]
 
     def _check_js_syntax(self, base: Path) -> list:
         """Checa a sintaxe dos .js com 'node --check' (1 erro de sintaxe mata todos os botoes).
