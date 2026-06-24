@@ -35,5 +35,8 @@ Pillow>=10.0
 pydirectinput>=1.0.4
 pyautogui>=0.9.54
 
+# Computer-use nivel pro: clicar em ELEMENTOS reais (UI Automation do Windows).
+uiautomation>=2.0.18
+
 # Empacotamento do .exe.
 pyinstaller>=6.0

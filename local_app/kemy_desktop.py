@@ -4705,6 +4705,42 @@ class WebApi:
             self._cu_stop = True
             self._msg("sys", "🖱️ Parando o controle do PC…", store=False)
 
+    def _ui_elements(self, max_n: int = 40) -> list:
+        """Lista os ELEMENTOS clicaveis da janela em foco (UI Automation do Windows), com nome e
+        coordenadas REAIS. Clicar por elemento e MUITO mais preciso que chutar pixel."""
+        try:
+            import uiautomation as auto
+        except Exception:
+            return []
+        wanted = {"ButtonControl", "EditControl", "HyperlinkControl", "ListItemControl",
+                  "MenuItemControl", "CheckBoxControl", "ComboBoxControl", "TabItemControl",
+                  "TreeItemControl", "RadioButtonControl", "SplitButtonControl"}
+        els, seen = [], 0
+        try:
+            win = auto.GetForegroundControl()
+            if not win:
+                return []
+            queue = [win]
+            while queue and len(els) < max_n and seen < 600:
+                ctrl = queue.pop(0); seen += 1
+                try:
+                    queue.extend(ctrl.GetChildren())
+                except Exception:
+                    pass
+                try:
+                    ct = ctrl.ControlTypeName
+                    name = (ctrl.Name or "").strip()
+                    if ct in wanted and (name or ct == "EditControl"):
+                        r = ctrl.BoundingRectangle
+                        if r and (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
+                            els.append({"role": ct.replace("Control", ""), "name": name[:50],
+                                        "x": (r.left + r.right) // 2, "y": (r.top + r.bottom) // 2})
+                except Exception:
+                    pass
+        except Exception:
+            return []
+        return els
+
     def _cu_loop(self, goal: str, max_steps: int = 40) -> None:
         import io
         from PIL import ImageGrab
@@ -4716,15 +4752,17 @@ class WebApi:
             return
         self._state("thinking")
         hist: list[str] = []
+        last_sig, stuck = None, 0
         base_prompt = (
-            "Voce CONTROLA o computador olhando a tela pra cumprir o OBJETIVO: " + goal + ".\n"
-            "A tela e um plano de coordenadas NORMALIZADAS de 0 a 1000 (x=0 esquerda,1000 direita; "
-            "y=0 topo,1000 base). Decida a PROXIMA acao e responda SO um JSON:\n"
-            '{\"reason\":\"o que ve e o plano em 1 frase\",\"action\":\"click|double_click|right_click|'
-            'move|type|key|scroll|open_url|wait|done\",\"x\":500,\"y\":500,\"text\":\"...\",'
+            "Voce CONTROLA o computador (Windows) pra cumprir o OBJETIVO: " + goal + ".\n"
+            "PREFIRA clicar nos ELEMENTOS listados (por numero) — e mais preciso que coordenada. "
+            "So use coordenada normalizada (0-1000) se o alvo NAO estiver na lista.\n"
+            "Responda SO um JSON:\n"
+            '{\"reason\":\"o que ve e o proximo passo, 1 frase\",\"action\":\"click_el|click|double_click|'
+            'right_click|type|key|scroll|open_url|wait|done\",\"el\":0,\"x\":500,\"y\":500,\"text\":\"...\",'
             '\"keys\":[\"enter\"],\"amount\":-400,\"url\":\"https://...\"}\n'
-            "Use 'open_url' pra abrir um site direto no navegador. 'type' digita um texto; 'key' aperta "
-            "teclas (ex.: enter, ctrl+a). 'scroll' usa amount (negativo desce). done=true quando concluir.")
+            "click_el usa 'el' (numero do elemento). type digita; key aperta teclas (ex.: enter, ctrl+a). "
+            "open_url abre site no navegador. done=true quando o objetivo estiver cumprido.")
         for step in range(max_steps):
             if self._cu_stop:
                 break
@@ -4733,10 +4771,24 @@ class WebApi:
                 W, H = full.size
                 small = full.copy(); small.thumbnail((1100, 700))
                 buf = io.BytesIO(); small.convert("RGB").save(buf, format="JPEG", quality=70)
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                raw = buf.getvalue()
+                b64 = base64.b64encode(raw).decode("ascii")
             except Exception:
                 time.sleep(0.8); continue
-            ctx = base_prompt + ("\n\nUltimas acoes: " + " | ".join(hist[-5:]) if hist else "")
+            # detecta "tela travada" (nada mudou) pra a IA tentar outra abordagem
+            sig = len(raw)
+            stuck = stuck + 1 if (last_sig is not None and abs(sig - last_sig) < 1200) else 0
+            last_sig = sig
+            els = self._ui_elements()
+            eltxt = ""
+            if els:
+                eltxt = "\n\nELEMENTOS clicaveis (use click_el com o numero):\n" + "\n".join(
+                    f"[{i}] {e['role']}: {e['name'] or '(sem nome)'}" for i, e in enumerate(els))
+            ctx = base_prompt + eltxt
+            if hist:
+                ctx += "\n\nUltimas acoes: " + " | ".join(hist[-5:])
+            if stuck >= 1:
+                ctx += "\n\nATENCAO: a tela nao mudou apos a ultima acao — tente um alvo/abordagem DIFERENTE."
             try:
                 out = self.llm.vision(ctx, b64, "image/jpeg")
             except Exception as e:
@@ -4744,25 +4796,34 @@ class WebApi:
             act = self._parse_game_action(out)
             reason = (act.get("reason") or "").strip()
             if reason:
-                self._msg("sys", f"🖱️ {reason}", store=False); hist.append(reason[:60])
+                self._msg("sys", reason, store=False); hist.append(reason[:60])
             a = (act.get("action") or "").lower()
             if a == "done" or act.get("done"):
-                self._msg("kemy", "✅ Acho que terminei! Confere aí.")
+                self._msg("kemy", "Acho que terminei! Confere aí.")
                 break
+            # alvo: elemento (preciso) ou coordenada normalizada (fallback)
+            px = py = None
+            if a == "click_el" or (act.get("el") is not None and a in ("click", "double_click", "right_click")):
+                try:
+                    e = els[int(act.get("el"))]
+                    px, py = e["x"], e["y"]
+                except Exception:
+                    px = py = None
+            if px is None:
+                try:
+                    px = int(float(act.get("x", 500)) / 1000.0 * W)
+                    py = int(float(act.get("y", 500)) / 1000.0 * H)
+                except Exception:
+                    px, py = W // 2, H // 2
             try:
-                px = int(float(act.get("x", 500)) / 1000.0 * W)
-                py = int(float(act.get("y", 500)) / 1000.0 * H)
-            except Exception:
-                px, py = W // 2, H // 2
-            try:
-                if a in ("click", "double_click", "right_click", "move"):
-                    pyautogui.moveTo(px, py, duration=0.3)
-                    if a == "click":
-                        pyautogui.click()
-                    elif a == "double_click":
+                if a in ("click_el", "click", "double_click", "right_click", "move"):
+                    pyautogui.moveTo(px, py, duration=0.25)
+                    if a == "double_click":
                         pyautogui.doubleClick()
                     elif a == "right_click":
                         pyautogui.rightClick()
+                    elif a != "move":
+                        pyautogui.click()
                 elif a == "type":
                     pyautogui.write(str(act.get("text", "")), interval=0.02)
                 elif a == "key":
@@ -4780,7 +4841,7 @@ class WebApi:
                 elif a == "wait":
                     time.sleep(1.0)
             except pyautogui.FailSafeException:
-                self._msg("kemy", "🛑 Você jogou o mouse no canto — parei na hora!")
+                self._msg("kemy", "Você jogou o mouse no canto — parei na hora!")
                 break
             except Exception as e:
                 self._msg("sys", f"(ação falhou: {e})", store=False)
@@ -4788,9 +4849,9 @@ class WebApi:
         self._cu_running = False
         self._state("idle")
         if not self._cu_stop:
-            self._msg("kemy", "Parei (limite de passos). Me diz se ficou bom ou o que ajustar. 🖱️")
+            self._msg("kemy", "Parei (limite de passos). Me diz se ficou bom ou o que ajustar.")
         else:
-            self._msg("kemy", "Parei o controle do PC. 🖱️")
+            self._msg("kemy", "Parei o controle do PC.")
 
     # ---------------- MINECRAFT (player inteligente via Mineflayer) ----------------
     def _find_minecraft_dir(self) -> Path | None:

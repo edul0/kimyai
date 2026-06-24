@@ -54,6 +54,7 @@ if (-not (Test-Path kemy_version.txt)) { New-Item -ItemType File kemy_version.tx
   --hidden-import "pystray._win32" `
   --hidden-import "pydirectinput" `
   --hidden-import "pyautogui" `
+  --collect-all "uiautomation" `
   local_app\kemy_desktop.py
 
 Write-Host ""
