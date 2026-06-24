@@ -2043,31 +2043,70 @@ class LLMClient:
         keys = self.gemini_keys or ([self.gemini] if self.gemini else [])
         return ([wk] if wk in keys else []) + [k for k in keys if k != wk]
 
+    def _vision_oai(self, prompt: str, image_b64: str, mime: str, url: str, key: str, models: list) -> str | None:
+        """Visao via API OpenAI-compatible (Groq/NVIDIA/OpenRouter) — formato image_url."""
+        content = [{"type": "text", "text": prompt or "Descreva esta imagem em portugues."},
+                   {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}}]
+        for m in models:
+            payload = {"model": m, "messages": [{"role": "user", "content": content}], "max_tokens": 1200}
+            try:
+                data = self._post(url, {"Content-Type": "application/json", "Authorization": f"Bearer {key}",
+                                        "User-Agent": BROWSER_UA}, payload, timeout=60)
+                txt = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                if txt and txt.strip():
+                    return txt
+            except Exception:
+                continue
+        return None
+
     def vision(self, prompt: str, image_b64: str, mime: str) -> str:
-        """Analisa uma imagem (multimodal). Usa Gemini, rodando entre VARIAS chaves se uma esgotar."""
-        if not (self.gemini_keys or self.gemini):
-            raise RuntimeError("Para enviar imagens, configure a chave do Gemini (GEMINI_API_KEY).")
-        payload = {"contents": [{"role": "user", "parts": [
-            {"text": prompt or "Descreva esta imagem em portugues e como posso usa-la."},
-            {"inline_data": {"mime_type": mime, "data": image_b64}},
-        ]}], "generationConfig": {"temperature": 0.5, "maxOutputTokens": 4096}}
+        """Analisa uma imagem (multimodal). Gemini (multi-chave); cai pra Groq/NVIDIA/OpenRouter
+        (modelos de visao) se o Gemini estiver no limite — assim 'ver tela' nao fica refem do Gemini."""
         last = None
-        for key in self._gemini_key_order():
-            for model in self.gemini_models[:3]:
-                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                       f"{model}:generateContent?key={key}")
-                try:
-                    data = self._post(url, {"Content-Type": "application/json"}, payload)
-                    cand = (data.get("candidates") or [])[0]
-                    parts = (cand.get("content") or {}).get("parts") or []
-                    txt = "".join(p.get("text", "") for p in parts)
-                    if txt.strip():
-                        self._working["gemini_key"] = key
-                        return txt
-                except Exception as exc:
-                    last = exc
-                    continue
-        raise RuntimeError(f"Nao consegui analisar a imagem com o Gemini ({last}).")
+        # 1) Gemini (varias chaves)
+        if self.gemini_keys or self.gemini:
+            payload = {"contents": [{"role": "user", "parts": [
+                {"text": prompt or "Descreva esta imagem em portugues e como posso usa-la."},
+                {"inline_data": {"mime_type": mime, "data": image_b64}},
+            ]}], "generationConfig": {"temperature": 0.5, "maxOutputTokens": 4096}}
+            for key in self._gemini_key_order():
+                for model in self.gemini_models[:3]:
+                    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                           f"{model}:generateContent?key={key}")
+                    try:
+                        data = self._post(url, {"Content-Type": "application/json"}, payload)
+                        cand = (data.get("candidates") or [])[0]
+                        parts = (cand.get("content") or {}).get("parts") or []
+                        txt = "".join(p.get("text", "") for p in parts)
+                        if txt.strip():
+                            self._working["gemini_key"] = key
+                            return txt
+                    except Exception as exc:
+                        last = exc
+                        continue
+        # 2) Fallback: visao via Groq / NVIDIA / OpenRouter (quando Gemini esgota/limita)
+        if self.groq:
+            r = self._vision_oai(prompt, image_b64, mime, "https://api.groq.com/openai/v1/chat/completions",
+                                 self.groq, ["meta-llama/llama-4-scout-17b-16e-instruct",
+                                             "meta-llama/llama-4-maverick-17b-128e-instruct",
+                                             "llama-3.2-90b-vision-preview"])
+            if r:
+                return r
+        if self.nvidia_keys:
+            r = self._vision_oai(prompt, image_b64, mime, "https://integrate.api.nvidia.com/v1/chat/completions",
+                                 self.nvidia_keys[0], ["meta/llama-3.2-90b-vision-instruct",
+                                                       "meta/llama-3.2-11b-vision-instruct"])
+            if r:
+                return r
+        if self.openrouter:
+            r = self._vision_oai(prompt, image_b64, mime, "https://openrouter.ai/api/v1/chat/completions",
+                                 self.openrouter, ["meta-llama/llama-3.2-11b-vision-instruct:free",
+                                                   "qwen/qwen2.5-vl-72b-instruct:free"])
+            if r:
+                return r
+        if not (self.gemini_keys or self.gemini or self.groq or self.nvidia_keys or self.openrouter):
+            raise RuntimeError("Para ver imagens, configure a chave do Gemini (ou Groq/NVIDIA).")
+        raise RuntimeError(f"Visão indisponível agora (Gemini no limite e fallbacks falharam: {last}).")
 
     def _openai_compat(self, url: str, key: str, model: str, system: str, messages: list[dict],
                        max_tokens: int = 16000, timeout: float = 60) -> str:
@@ -4564,8 +4603,8 @@ class WebApi:
     def _screen_reply(self, prompt: str) -> str:
         """Tira print da tela e a Kemy analisa (visao). Minimiza a janela antes,
         para capturar o que esta ATRAS do Kemy."""
-        if not self.llm.gemini:
-            return "Pra ver sua tela eu preciso da chave do Gemini configurada."
+        if not (self.llm.gemini_keys or self.llm.gemini or self.llm.groq or self.llm.nvidia_keys):
+            return "Pra ver sua tela eu preciso de uma IA com visão (Gemini, Groq ou NVIDIA)."
         self._msg("sys", "👁️ Olhando sua tela…", store=False)
         try:
             import io
@@ -4633,8 +4672,8 @@ class WebApi:
 
     def play_game(self, goal: str = "") -> None:
         """Modo jogo: a Kemy olha a tela, entende o jogo e joga sozinha (loop visão→tecla)."""
-        if not self.llm.gemini:
-            self._msg("kemy", "Pra jogar eu preciso enxergar a tela — configure a chave do Gemini (GEMINI_API_KEY).")
+        if not (self.llm.gemini_keys or self.llm.gemini or self.llm.groq or self.llm.nvidia_keys):
+            self._msg("kemy", "Pra jogar eu preciso de uma IA com visão (Gemini/Groq/NVIDIA).")
             return
         if getattr(self, "_game_running", False):
             self._msg("sys", "Já estou jogando. Diga 'parar jogo' pra eu parar.", store=False)
@@ -4879,8 +4918,8 @@ class WebApi:
     def computer_use(self, goal: str = "", learn: bool = False, learn_name: str = "") -> None:
         """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa.
         learn=True salva a SEQUENCIA que funcionou como habilidade reutilizavel."""
-        if not self.llm.gemini:
-            self._msg("kemy", "Pra controlar o PC eu preciso enxergar a tela — configure a chave do Gemini.")
+        if not (self.llm.gemini_keys or self.llm.gemini or self.llm.groq or self.llm.nvidia_keys):
+            self._msg("kemy", "Pra controlar o PC eu preciso de uma IA com visão (Gemini/Groq/NVIDIA).")
             return
         if getattr(self, "_cu_running", False):
             self._msg("sys", "Já estou usando o PC. Diga 'parar' pra eu parar.", store=False)
@@ -6249,9 +6288,13 @@ class WebApi:
                 if refs:
                     system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + refs
             self._panel_step(1, "doing")
-            plano = self._plan(text)          # planejamento
+            if complexo:
+                self._msg("sys", "Pesquisando a melhor abordagem e debatendo entre os modelos…", store=False)
+                plano = self._deliberate(text)   # estuda na web + IAs debatem a melhor ideia
+            else:
+                plano = self._plan(text)
             if plano:
-                system += "\n\nPLANO A SEGUIR:\n" + plano
+                system += "\n\nABORDAGEM DECIDIDA (siga):\n" + plano
         # Roteador inteligente: escolhe a melhor IA pra tarefa (silencioso).
         route = self._smart_route(text)
         prefer = route[0] if route else ""
@@ -6355,6 +6398,44 @@ class WebApi:
             return "\n".join(linhas[:12])
         except Exception:
             return ""
+
+    def _deliberate(self, text: str) -> str:
+        """Estuda na WEB a melhor forma de fazer + faz os modelos DEBATEREM a melhor abordagem,
+        e converge numa decisao final (arquitetura/stack/passos) antes de codar."""
+        findings = ""
+        try:
+            findings = web_search("melhor forma de fazer " + text[:120] + " boas praticas arquitetura", limit=5)
+        except Exception:
+            pass
+        provs = self.llm.providers()
+        usr = (text or "")[:900] + (("\n\nPESQUISA WEB (boas praticas atuais):\n" + findings[:2500]) if findings else "")
+        prop_sys = ("Voce e arquiteto de software senior. Em ate 6 linhas proponha a MELHOR abordagem pra "
+                    "atender o pedido: stack/linguagem, arquitetura, bibliotecas e os 2-3 pontos criticos. "
+                    "So a abordagem, sem codigo.")
+        propostas = []
+        for prov in provs[:2]:
+            try:
+                p = self.llm.chat(prop_sys, [{"role": "user", "content": usr}], max_tokens=400, fast=True, prefer=prov)
+                if p and len(p.strip()) > 20:
+                    propostas.append(p.strip())
+            except Exception:
+                pass
+        if not propostas:
+            return ""
+        if len(propostas) < 2:
+            return propostas[0]
+        debate_sys = ("Voce e o arquiteto-CHEFE. Recebeu 2 propostas de engenheiros + a pesquisa web. DEBATA "
+                      "rapidamente (forcas/fraquezas de cada) e DECIDA a MELHOR abordagem final, combinando o "
+                      "melhor dos dois e o que a web indica. Responda SO a DECISAO FINAL, em ate 8 linhas: "
+                      "stack, arquitetura e os passos. Pratico, sem codigo.")
+        dmsgs = [{"role": "user", "content": usr},
+                 {"role": "assistant", "content": "PROPOSTA A:\n" + propostas[0][:2000]},
+                 {"role": "assistant", "content": "PROPOSTA B:\n" + propostas[1][:2000]},
+                 {"role": "user", "content": "Debata e entregue a decisao final (a melhor abordagem)."}]
+        try:
+            return self.llm.chat(debate_sys, dmsgs, max_tokens=600, fast=True) or propostas[0]
+        except Exception:
+            return propostas[0]
 
     def _plan(self, text: str) -> str:
         """Planejamento (chain-of-thought): plano objetivo antes de codar."""
