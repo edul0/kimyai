@@ -5699,6 +5699,32 @@ class WebApi:
             self._msg("kemy", "\n\n".join(parts) + "\n\n(Pra apagar isso, diga 'esquece tudo' ou use o menu.)")
         self._state("idle")
 
+    def export_chat(self) -> None:
+        """Exporta a conversa atual pra um arquivo .md (e abre)."""
+        it = self._cur()
+        if not it or not it.get("log"):
+            self._msg("sys", "Não há conversa pra exportar aqui.", store=False)
+            return
+        lines = [f"# {it.get('title') or 'Conversa com a Kemy'}", ""]
+        for e in it["log"]:
+            who = "Você" if e.get("r") == "user" else ("Kemy" if e.get("r") == "kemy" else "Sistema")
+            lines.append(f"**{who}:** {e.get('t', '')}\n")
+        try:
+            self.workspace_root.mkdir(parents=True, exist_ok=True)
+            dest = self.workspace_root / f"conversa_{int(time.time())}.md"
+            dest.write_text("\n".join(lines), encoding="utf-8")
+        except Exception as exc:
+            self._msg("sys", f"Falha ao exportar: {exc}", store=False)
+            return
+        self._msg("kemy", f"Exportei nossa conversa pra: {dest}")
+        try:
+            if os.name == "nt":
+                os.startfile(str(dest))  # type: ignore[attr-defined]
+            else:
+                webbrowser.open(dest.as_uri())
+        except Exception:
+            pass
+
     def clear_memory(self) -> None:
         """Apaga a memoria aprendida (mantem as Instrucoes que voce escreveu)."""
         self.memories = []
