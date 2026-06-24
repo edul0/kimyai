@@ -1693,14 +1693,14 @@ class LLMClient:
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
         # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
-        # Lidera com modelos FORTES e RESPONSIVOS (DeepSeek-V3.1 / GLM-5.1 / Qwen-Coder).
-        # O DeepSeek-V4-Pro (raciocinio 1.6T) e o mais inteligente porem LENTO -> fica por ultimo
-        # (opt-in via NVIDIA_MODEL=deepseek-ai/deepseek-v4-pro pra quem quiser o maximo e pode esperar).
+        # Lidera com modelos VALIDOS e responsivos no catalogo NVIDIA. GPT-OSS-120B e rapido e
+        # confiavel; GLM-5.1 e frontier; DeepSeek-V4-Pro (lento) e Mistral-Large-3 ficam de opcao.
         self.nvidia_models = _list("NVIDIA_MODEL", [
-            "deepseek-ai/deepseek-v3.1", "zai-org/glm-5.1", "qwen/qwen2.5-coder-32b-instruct",
-            "z-ai/glm-5.1", "mistralai/mistral-large-3-675b-instruct-2512"])
+            "openai/gpt-oss-120b", "zai-org/glm-5.1", "z-ai/glm-5.1",
+            "deepseek-ai/deepseek-v4-pro", "mistralai/mistral-large-3-675b-instruct-2512",
+            "qwen/qwen2.5-coder-32b-instruct"])
         self.nvidia_fast = _list("NVIDIA_FAST", [
-            "qwen/qwen2.5-coder-32b-instruct", "deepseek-ai/deepseek-v3.1", "zai-org/glm-5.1"])
+            "openai/gpt-oss-120b", "zai-org/glm-5.1", "qwen/qwen2.5-coder-32b-instruct"])
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
@@ -1769,27 +1769,44 @@ class LLMClient:
                 fn()
                 results.append((name, model, True, f"{int((time.time()-t0)*1000)}ms"))
             except Exception as e:
-                code = getattr(e, "code", "")
-                results.append((name, model, False, (f"HTTP {code} " if code else "") + str(e)[:90]))
+                msg = str(e); code = getattr(e, "code", "")
+                # "respondeu porem sem texto" (modelo de raciocinio truncado) = ESTA VIVA.
+                if "sem texto" in msg:
+                    results.append((name, model, True, "viva (resposta curta no teste)"))
+                elif code == 503 or "503" in msg:
+                    results.append((name, model, True, "viva (ocupada agora, tente já)"))
+                else:
+                    results.append((name, model, False, (f"HTTP {code} " if code else "") + msg[:90]))
 
         if self.nvidia_keys:
-            m = self.nvidia_models[0]
-            run("NVIDIA", m, lambda: self._nvidia_compat(m, sysp, msgs, 24))
+            # tenta os primeiros modelos NVIDIA ate um responder (ids podem variar por conta)
+            ok = False; last = "falhou"
+            for m in self.nvidia_models[:3]:
+                t0 = time.time()
+                try:
+                    self._nvidia_compat(m, sysp, msgs, 64)
+                    results.append(("NVIDIA", m, True, f"{int((time.time()-t0)*1000)}ms")); ok = True; break
+                except Exception as e:
+                    if "sem texto" in str(e):
+                        results.append(("NVIDIA", m, True, "viva (resposta curta)")); ok = True; break
+                    last = str(e)[:90]
+            if not ok:
+                results.append(("NVIDIA", self.nvidia_models[0], False, last))
         if self.cerebras:
             m = self.cerebras_fast[0]
-            run("Cerebras", m, lambda: self._openai_compat("https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, sysp, msgs, 24))
+            run("Cerebras", m, lambda: self._openai_compat("https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, sysp, msgs, 64))
         if self.groq:
             m = self.groq_fast[0]
-            run("Groq", m, lambda: self._openai_compat("https://api.groq.com/openai/v1/chat/completions", self.groq, m, sysp, msgs, 24))
+            run("Groq", m, lambda: self._openai_compat("https://api.groq.com/openai/v1/chat/completions", self.groq, m, sysp, msgs, 64))
         if self.gemini:
             m = self.gemini_models[0]
-            run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 24))
+            run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 64))
         if self.github:
             m = self.github_fast[0]
-            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 24))
+            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 64))
         if self.mistral:
             m = self.mistral_fast[0]
-            run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 24))
+            run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 64))
         if self.sambanova:
             m = self.sambanova_fast[0]
             run("SambaNova", m, lambda: self._openai_compat("https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, sysp, msgs, 24))
