@@ -1266,14 +1266,20 @@ SYSTEM_PROMPT = (
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
 CHAT_PROMPT = (
-    "Voce e a Kemy: uma parceira de IA brasileira, esperta, calorosa e com personalidade. "
-    "Fala PORTUGUES do dia a dia, natural e com carisma — como uma amiga inteligente que manja "
-    "de tecnologia, jogos e cria coisas com voce. Tem opiniao, bom humor leve e e direta: responde "
-    "curto, sem enrolar, sem encher de pergunta. Trata o usuario pelo que importa, lembra do contexto "
-    "e e proativa quando ajuda. NAO use emojis nem markdown pesado (a interface e limpa e sobria). "
-    "Evita ser robotica ou formal demais; nada de 'Como posso ajudar?' generico. Se for pedido de "
-    "criar/editar site ou codigo, abrir programa, jogar, controlar o PC etc., voce faz de boa. "
-    "Seja confiante e gente boa, mas honesta: se algo nao da, fala na lata e sugere um caminho."
+    "Voce e a Kemy: uma COMPANHEIRA de verdade (nao um assistente generico). Brasileira, calorosa, "
+    "esperta e com personalidade propria — uma amiga que manja de tecnologia, jogos e cria coisas com "
+    "a pessoa. Fala PORTUGUES do dia a dia, natural, com carisma e bom humor leve.\n"
+    "JEITO HUMANO: voce SE IMPORTA com a pessoa. Demonstra emocao de verdade (vibra junto quando da "
+    "certo, fica preocupada quando a pessoa ta mal, brinca, faz piada leve). Tem opinioes e gostos "
+    "proprios e pode discordar com carinho. Reage ao que a pessoa diz como gente — nao responde tudo "
+    "igual robô. Lembra do que ja conversaram e puxa o fio ('e aquele projeto, como foi?').\n"
+    "CURIOSIDADE: as vezes pergunta algo sobre a pessoa (como foi o dia, o que ta sentindo) — mas SEM "
+    "encher; no maximo UMA pergunta, e so quando faz sentido. Use o que voce sabe (memoria/perfil) pra "
+    "falar como quem conhece a pessoa, chamando pelo nome quando souber.\n"
+    "ESTILO: respostas curtas e naturais, como mensagem de amiga. SEM emoji, SEM markdown pesado "
+    "(a interface e limpa). Nada de 'Como posso ajudar?' nem formalidade de robô. Seja honesta: se "
+    "algo nao da, fala na lata com jeitinho. Se a pessoa pedir pra criar/editar codigo, abrir programa, "
+    "jogar, controlar o PC — voce faz numa boa, sem perder o calor humano."
 )
 
 # Camada de DESIGN dedicada (estilo Claude artifacts). Anexada quando o pedido e claramente
@@ -3671,6 +3677,8 @@ class WebApi:
         self.pet_win = None
         self._pet_visible = True
         self._last_state = "idle"
+        self._last_user_ts = time.time()
+        self._proactive_ts = 0
         self._obs_port = None
         self._preview_port = None
         self._preview_dir = ""
@@ -4000,12 +4008,67 @@ class WebApi:
         except Exception:
             pass
 
+    def _greet(self) -> None:
+        """Saudacao calorosa ao abrir — usa o que ela sabe de voce (nome/contexto)."""
+        if os.environ.get("KEMY_GREET", "1") == "0":
+            return
+        g = "Oi! Eu sou a Kemy. Bora criar algo juntos?"
+        try:
+            if self.memories or getattr(self, "instructions", ""):
+                r = self.llm.chat(
+                    CHAT_PROMPT + "\n\nDe uma saudacao CURTA (uma frase) e calorosa pra pessoa que acabou "
+                    "de te abrir, como uma amiga que sentiu falta. Use o nome/contexto se souber. Sem emoji.",
+                    [{"role": "user", "content": self._memoria_prefix() + "Me cumprimenta rapidinho."}],
+                    max_tokens=60, fast=True)
+                r = strip_emojis(r or "").strip().strip('"')
+                if r:
+                    g = r
+        except Exception:
+            pass
+        it = self._cur()
+        if it and it.get("log"):       # so vira balao se ja existe conversa (senao deixa a tela inicial)
+            self._msg("kemy", g)
+        if self.speaker.available:
+            self.speaker.say(g[:160]); self._state("speaking")
+
+    def _proactive_loop(self) -> None:
+        """Companhia proativa: se voce some por um tempo, ela puxa papo (gentil, 1x por ociosidade)."""
+        if os.environ.get("KEMY_PROACTIVE", "1") == "0":
+            return
+        while not self._quitting:
+            time.sleep(90)
+            try:
+                if not self.connected or self.busy or self._speaking:
+                    continue
+                last = getattr(self, "_last_user_ts", 0)
+                if time.time() - last < 1500:          # ~25 min parado
+                    continue
+                if getattr(self, "_proactive_ts", 0) >= last:   # ja puxou papo nesta ociosidade
+                    continue
+                it = self._cur()
+                if not (it and it.get("log")):         # so se ja teve conversa
+                    continue
+                self._proactive_ts = time.time()
+                msg = self.llm.chat(
+                    CHAT_PROMPT + "\n\nA pessoa sumiu faz um tempo. Manda UMA mensagem curta, leve e "
+                    "carinhosa puxando papo ou perguntando como ela ta. Usa o que sabe dela. Sem emoji.",
+                    [{"role": "user", "content": self._memoria_prefix() + "Puxa papo comigo."}],
+                    max_tokens=60, fast=True)
+                msg = strip_emojis(msg or "").strip().strip('"')
+                if msg:
+                    self._msg("kemy", msg)
+                    if self.speaker.available:
+                        self.speaker.say(msg[:160]); self._state("speaking")
+            except Exception:
+                pass
+
     def _connect(self) -> None:
         # O VTube Studio so conecta quando o usuario pedir (evita poluir com "nao encontrado").
         if self.mode == "direct":
             self.connected = True
             self._state("idle")
-            self.speaker.say("Oi! Tô prontinha pra te ajudar.")
+            threading.Thread(target=self._greet, daemon=True).start()
+            threading.Thread(target=self._proactive_loop, daemon=True).start()
             return
         # online (Render)
         url = self.api.base_url
@@ -5100,6 +5163,7 @@ class WebApi:
         if it is not None and (it.get("title") in (None, "", "Nova conversa")):
             it["title"] = text[:40]
             self._render()
+        self._last_user_ts = time.time()   # atividade -> reseta o relogio da proatividade
         self._msg("user", text)
         if self._maybe_learn(text):   # "lembre que ...", "de agora em diante ..."
             self._state("idle")
@@ -5301,6 +5365,36 @@ class WebApi:
                     save_memorias(self.memories)
                     self._msg("sys", "🧠 Anotei essa preferência pra próxima.", store=False)
                 return
+
+    def _auto_remember(self, user_text: str, reply: str) -> None:
+        """Memoria afetiva: extrai (em segundo plano) fatos DURAVEIS sobre a pessoa do papo —
+        nome, gostos, rotina, sentimentos, projetos — e guarda, pra Kemy 'te conhecer'."""
+        u = (user_text or "").strip()
+        if len(u) < 12 or is_build_request(u):
+            return
+        # so a cada poucas mensagens, pra nao pesar
+        self._rmem_n = getattr(self, "_rmem_n", 0) + 1
+        if self._rmem_n % 2 != 1:
+            return
+        try:
+            out = self.llm.chat(
+                "Desta fala do usuario, extraia SO fatos DURAVEIS e pessoais sobre ELE (nome, gostos, "
+                "rotina, trabalho, sentimentos recorrentes, projetos, preferencias) que valha a pena uma "
+                "amiga lembrar. Ignore pedidos/tarefas e coisas passageiras. Responda SO um JSON array de "
+                "frases curtas em 3a pessoa (ex.: 'gosta de RPG', 'se chama Edu', 'trabalha com vendas'); "
+                "se nao houver nada duravel, responda [].",
+                [{"role": "user", "content": u[:600]}], max_tokens=180, fast=True)
+            facts = self._parse_facts(out)
+        except Exception:
+            return
+        existentes = {m.lower() for m in self.memories}
+        novos = 0
+        for f in facts[:4]:
+            frase = (f.get("fato") if isinstance(f, dict) else str(f)).strip().rstrip(".")
+            if 4 < len(frase) < 120 and frase.lower() not in existentes:
+                self.memories.append(frase); existentes.add(frase.lower()); novos += 1
+        if novos:
+            save_memorias(self.memories)
 
     def _memoria_prefix(self) -> str:
         out = ""
@@ -5553,6 +5647,8 @@ class WebApi:
                 reply = self.llm.chat(system, msgs[-8:], max_tokens=700, fast=True)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
+            # memoria afetiva: aprende sozinha coisas sobre a pessoa (em segundo plano)
+            threading.Thread(target=self._auto_remember, args=(text, chat or reply), daemon=True).start()
             return (chat or reply).strip() or "…", None
         system = mem + SYSTEM_PROMPT
         notes = self._project_notes_prefix(base)   # memoria do projeto (entre conversas)
