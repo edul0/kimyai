@@ -5640,7 +5640,10 @@ class WebApi:
         u = (user_text or "").strip()
         if len(u) < 12 or is_build_request(u):
             return
-        # so a cada poucas mensagens, pra nao pesar
+        # so quando a fala soa PESSOAL (economiza cota e evita ruido)
+        if not re.search(r"(?i)\b(eu |meu |minha |me chamo|sou |moro|trabalho|gosto|amo|odeio|prefiro|"
+                         r"meu nome|tenho |estudo|jogo |curto|to |tô |estou|sinto|queria|sonho)\b", u):
+            return
         self._rmem_n = getattr(self, "_rmem_n", 0) + 1
         if self._rmem_n % 2 != 1:
             return
