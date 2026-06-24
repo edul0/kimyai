@@ -6808,7 +6808,10 @@ class WebApi:
                 "Faca SO a tarefa atual do plano, COMPLETA e funcional. Crie/edite arquivos "
                 "(<<<FILE>>>/<<<EDIT>>>); se precisar instalar/rodar/testar, use ```kemy-run. NAO refaca o "
                 "que ja existe. Lembre: todo botao/rota tem que funcionar e os dados persistem no banco.")
-        usr = (f"OBJETIVO GERAL: {objective}\nPLANO: {plan}\nTAREFA ATUAL: {task}\n\n"
+        approach = getattr(self, "_agent_approach", "") or ""
+        usr = (f"OBJETIVO GERAL: {objective}\n"
+               + (f"ABORDAGEM DECIDIDA (siga):\n{approach}\n" if approach else "")
+               + f"PLANO: {plan}\nTAREFA ATUAL: {task}\n\n"
                f"ARQUIVOS ATUAIS:\n{files_ctx or '(vazio)'}\n\nSAIDA ANTERIOR:\n{last_output[-1200:] or '(nada)'}")
         try:
             reply = self.llm.chat(sysp, [{"role": "user", "content": usr}], max_tokens=16000, prefer=prefer)
@@ -6833,7 +6836,13 @@ class WebApi:
         """Agente autônomo (objetivo → entrega) com painel ao vivo: planeja em tarefas, executa
         uma a uma (gera, roda, corrige) e entrega o resultado pronto/rodando — estilo Manus."""
         base.mkdir(parents=True, exist_ok=True)
-        self._msg("kemy", "🤖 Modo agente ligado! Vou planejar isso e entregar pronto. Acompanha no painel 👇")
+        self._msg("kemy", "🤖 Modo agente ligado! Vou pesquisar a melhor abordagem, planejar e entregar pronto. Acompanha no painel 👇")
+        # deliberacao: pesquisa na web + debate entre modelos a melhor abordagem
+        self._agent_approach = ""
+        try:
+            self._agent_approach = self._deliberate(text)
+        except Exception:
+            pass
         plan = self._agent_plan(text) or ["Montar o projeto", "Implementar as funcionalidades",
                                           "Rodar e corrigir", "Entregar funcionando"]
         # garante uma etapa final de verificacao/entrega
