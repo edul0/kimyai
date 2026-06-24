@@ -1698,10 +1698,11 @@ class LLMClient:
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
         # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
-        # Lidera com modelos VALIDOS e responsivos no catalogo NVIDIA. GPT-OSS-120B e rapido e
-        # confiavel; GLM-5.1 e frontier; DeepSeek-V4-Pro (lento) e Mistral-Large-3 ficam de opcao.
+        # Pra CODIGO, lidera com o FRONTIER (GLM-5.1); gpt-oss-120b fica de reserva confiavel,
+        # e DeepSeek-V4-Pro / Mistral-Large-3 como opcao. (Cada provedor usa um modelo DIFERENTE:
+        # NVIDIA=GLM, Cerebras=Qwen-Coder-480B, Groq=Kimi-K2 — diversidade de especialistas.)
         self.nvidia_models = _list("NVIDIA_MODEL", [
-            "openai/gpt-oss-120b", "zai-org/glm-5.1", "z-ai/glm-5.1",
+            "zai-org/glm-5.1", "z-ai/glm-5.1", "openai/gpt-oss-120b",
             "deepseek-ai/deepseek-v4-pro", "mistralai/mistral-large-3-675b-instruct-2512",
             "qwen/qwen2.5-coder-32b-instruct"])
         self.nvidia_fast = _list("NVIDIA_FAST", [
@@ -1883,12 +1884,18 @@ class LLMClient:
         if prefer:  # revisao cruzada: tenta um provedor diferente primeiro
             attempts.sort(key=lambda a: 0 if a[0] == prefer else 1)
         for prov, model, fn in attempts:
+            if prov in getattr(self, "_dead_provs", set()):
+                continue
             try:
                 res = fn()
                 self._working[("fast:" if fast else "") + prov] = model
                 return res
             except Exception as exc:
                 errors.append(f"{prov}/{model}: {exc}")
+                # chave invalida/proibida (401/403) -> desativa o provedor nesta sessao
+                code = getattr(exc, "code", None)
+                if code in (401, 403) or "401" in str(exc) or "Unauthorized" in str(exc):
+                    self._dead_provs = getattr(self, "_dead_provs", set()) | {prov}
         # Diagnostico claro de QUAIS provedores tem chave (NVIDIA some quando nao ha chave nvapi-).
         have = [n for n, k in (("nvidia", self.nvidia), ("cerebras", self.cerebras), ("groq", self.groq),
                                ("gemini", self.gemini), ("mistral", self.mistral), ("github", self.github),
