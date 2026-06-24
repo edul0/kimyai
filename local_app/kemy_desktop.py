@@ -6085,6 +6085,7 @@ class WebApi:
             self._git_snapshot(base, "kemy: " + text[:60])   # 6) Git: foto pra desfazer
         if panel_on:
             self._panel_step(4, "done"); self._panel_step(5, "doing")
+        self._preview_fix_used = False   # libera 1 auto-fix de erro de runtime por geracao
         self._open_preview(base)                         # abre o preview SEMPRE no fim
         if panel_on:
             self._panel_step(5, "done"); self._panel_done()
@@ -6952,6 +6953,9 @@ class WebApi:
                 uniq.append(d)
         if not uniq:
             return
+        if getattr(self, "_preview_fix_used", False):
+            return                                # ja consertou uma vez nesta geracao
+        self._preview_fix_used = True
         self._msg("sys", "Detectei erro(s) de JavaScript no app rodando — corrigindo…", store=False)
         try:
             if self._autofix_buttons(base, "web", ["ERRO de runtime no navegador: " + u for u in uniq[:8]]):
