@@ -1329,7 +1329,20 @@ SYSTEM_PROMPT = (
     "conteudo proprio ou royalty-free (Flux/Pollinations gera original). Nao copie sites alheios 1:1.\n"
     "   - SEGURANCA = base ISO 27001 (regra 20). Gere os textos legais como MODELO e avise CLARAMENTE: "
     "'isto e um modelo inicial — revise com um advogado antes de usar em producao'. Voce nao da consultoria "
-    "juridica, so prepara a estrutura de conformidade."
+    "juridica, so prepara a estrutura de conformidade.\n"
+    "23) INTEGRACOES FISCAIS / GOVERNO / NOTAS FISCAIS (Brasil — SO quando o sistema precisar, ex.: ERP que "
+    "emite NF-e/NFC-e/NFS-e, ou consulta dados fiscais):\n"
+    "   - NAO implemente SEFAZ na unha (SOAP + assinatura XML + certificado A1/A3) — e complexo, regulado e "
+    "quebra facil. Use um GATEWAY de API fiscal por REST: SIEG (api.sieg.com), Focus NFe, NFe.io, PlugNotas "
+    "ou Tecnospeed. Leia a chave/credencial de variavel de ambiente (ex.: SIEG_API_KEY, NFE_API_KEY), NUNCA "
+    "fixa no codigo. Faca a camada de servico (emitir, consultar, cancelar, baixar XML/DANFE).\n"
+    "   - SIEG: API REST pra enviar/consultar/baixar documentos fiscais (NF-e/NFC-e/CT-e); use SIEG_API_KEY "
+    "do ambiente e os endpoints oficiais. gov.br/outras APIs gov: OAuth2/token do ambiente.\n"
+    "   - SEMPRE comece em HOMOLOGACAO (sandbox) antes de PRODUCAO. Avise CLARAMENTE que emitir nota exige: "
+    "certificado digital da empresa, CNPJ/Inscricao Estadual, regime tributario e cadastro no provedor — e "
+    "que o ideal e validar com o CONTADOR. Voce monta a INTEGRACAO; a parte fiscal/tributaria e do contador.\n"
+    "   - Calculos de imposto (ICMS/IPI/PIS/COFINS/ISS) e CFOP/NCM: nunca chute aliquota; deixe configuravel "
+    "e avise que os valores fiscais devem ser confirmados pelo contador."
 )
 
 # Prompt LEVE para bate-papo (respostas rapidas, sem o peso das regras de codigo).
