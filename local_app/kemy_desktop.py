@@ -7447,8 +7447,27 @@ def run_webview(host: str, port: int) -> bool:
         pass
 
     webview.start()
+    # Limpeza ao fechar: para fala, encerra servidores de dev, bot do Minecraft e tarefas.
+    try:
+        api._quitting = True
+    except Exception:
+        pass
     try:
         api.speaker.stop()
+    except Exception:
+        pass
+    for p in list(getattr(api, "_servers", []) or []):
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    try:
+        if getattr(api, "_mc_proc", None):
+            api._mc_proc.terminate()
+    except Exception:
+        pass
+    try:
+        api._cu_stop = True; api._game_stop = True; api._sd_stop = True
     except Exception:
         pass
     return True
