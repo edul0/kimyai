@@ -4550,6 +4550,7 @@ class WebApi:
         "SUPABASE_URL", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
         "SIEG_API_KEY", "NFE_API_KEY",
         "KEMY_VOICE", "KEMY_ELEVENLABS_KEY", "KEMY_ELEVENLABS_VOICE",
+        "KEMY_TV_IP",
         "MC_HOST", "MC_PORT", "MC_USER", "MC_AUTH", "MC_VERSION",
     ]
     SECRET_KEYS = {"NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
@@ -4909,6 +4910,100 @@ class WebApi:
                       store=False)
         except Exception as e:
             self._msg("sys", f"Falha ao ligar o modo celular: {e}", store=False)
+
+    # ===================== JARVIS: controle da TV (Android TV / Philco) via ADB =====================
+    TV_APPS = {
+        "youtube": "com.google.android.youtube.tv", "netflix": "com.netflix.ninja",
+        "prime": "com.amazon.amazonvideo.livingroom", "primevideo": "com.amazon.amazonvideo.livingroom",
+        "disney": "com.disney.disneyplus", "disney+": "com.disney.disneyplus",
+        "globoplay": "com.globo.globotv", "max": "com.wbd.stream", "hbo": "com.wbd.stream",
+        "spotify": "com.spotify.tv.android", "youtube music": "com.google.android.youtube.tvmusic",
+    }
+    TV_KEYS = {"power": "26", "voldown": "25", "volup": "24", "mute": "164", "home": "3",
+               "back": "4", "playpause": "85", "ok": "23", "up": "19", "down": "20",
+               "left": "21", "right": "22", "next": "87", "prev": "88"}
+
+    def _find_adb(self) -> str:
+        import shutil
+        for c in ("adb", "adb.exe"):
+            p = shutil.which(c)
+            if p:
+                return p
+        for cand in (config_dir() / "platform-tools" / "adb.exe", Path("platform-tools") / "adb.exe"):
+            if cand.exists():
+                return str(cand)
+        return ""
+
+    def _tv_adb(self, args: list) -> tuple:
+        """Roda um comando adb na TV. Retorna (ok, saida)."""
+        adb = self._find_adb()
+        ip = (self.env_vars.get("KEMY_TV_IP") or "").strip()
+        if not adb:
+            return False, "no-adb"
+        if not ip:
+            return False, "no-ip"
+        host = ip if ":" in ip else ip + ":5555"
+        try:
+            subprocess.run([adb, "connect", host], capture_output=True, timeout=8, **proc_quiet())
+            p = subprocess.run([adb, "-s", host] + args, capture_output=True, text=True, timeout=12, **proc_quiet())
+            return p.returncode == 0, (p.stdout or p.stderr or "").strip()
+        except Exception as e:
+            return False, str(e)
+
+    def _tv_key(self, name: str) -> bool:
+        code = self.TV_KEYS.get(name)
+        if not code:
+            return False
+        ok, _ = self._tv_adb(["shell", "input", "keyevent", code])
+        return ok
+
+    def _maybe_tv(self, text: str) -> bool:
+        """Comandos de TV (precisa citar 'tv'/'televisao' pra nao confundir com o volume do PC)."""
+        low = (text or "").strip().lower()
+        if not re.search(r"\b(tv|televis\w+|smart\s*tv)\b", low):
+            return False
+
+        def run(action: str, label: str) -> bool:
+            ok, info = self._tv_adb(["shell", "input", "keyevent", self.TV_KEYS[action]])
+            if ok:
+                self._say_reply(label)
+            elif info == "no-adb":
+                self._say_reply("Pra controlar a TV eu preciso do ADB instalado no PC. Quer que eu te ensine? "
+                                "(é o 'platform-tools' do Android — rápido)")
+            elif info == "no-ip":
+                self._say_reply("Falta o IP da TV. Vai em Configurações → Dispositivos e coloca o KEMY_TV_IP "
+                                "(o IP que aparece na rede da TV).")
+            else:
+                self._say_reply("Tentei mas a TV não respondeu. Confere se a 'Depuração ADB pela rede' está "
+                                "ligada na TV e se ela está na mesma rede.")
+            return True
+
+        if re.search(r"\b(liga|ligar|desliga|desligar|ligue|desligue)\b", low):
+            return run("power", "Mandei ligar/desligar a TV. 📺")
+        if re.search(r"\b(aumenta|sobe|subir|mais)\b.*\b(volume|som)\b", low) or "aumenta o volume" in low:
+            return run("volup", "Aumentei o volume da TV. 🔊")
+        if re.search(r"\b(abaixa|diminui|baixa|menos)\b.*\b(volume|som)\b", low):
+            return run("voldown", "Abaixei o volume da TV. 🔉")
+        if re.search(r"\b(muta|mudo|silencia|sem som)\b", low):
+            return run("mute", "Mutei a TV. 🔇")
+        if re.search(r"\b(pausa|pausar|play|continua|despausa)\b", low):
+            return run("playpause", "Play/pause na TV. ⏯️")
+        if re.search(r"\b(menu|in[íi]cio|home|tela inicial)\b", low):
+            return run("home", "Voltei pra tela inicial da TV. 🏠")
+        for nome, pkg in self.TV_APPS.items():
+            if nome in low and re.search(r"\b(abr\w+|coloca|p[õo]e|inicia|abre)\b", low):
+                ok, info = self._tv_adb(["shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"])
+                if ok:
+                    self._say_reply(f"Abrindo {nome.title()} na TV. 📺")
+                elif info in ("no-adb", "no-ip"):
+                    self._say_reply("Configura o ADB e o IP da TV primeiro (Configurações → Dispositivos).")
+                else:
+                    self._say_reply(f"Não consegui abrir {nome} — a 'Depuração ADB pela rede' tá ligada na TV?")
+                return True
+        # citou TV mas nao entendi a acao
+        self._say_reply("Posso ligar/desligar, mudar volume, dar play/pause e abrir apps (Netflix, YouTube…) "
+                        "na TV. O que você quer?")
+        return True
 
     def mobile_ask(self, text: str) -> str:
         """Processa uma mensagem vinda do celular e devolve a resposta em texto.
@@ -6187,6 +6282,8 @@ class WebApi:
         if self._app_command(text):   # comandos de controle do app (voz ou texto)
             return
         if self._maybe_reminder(text):   # relógio/lembrete/timer/agenda (Jarvis)
+            return
+        if self._maybe_tv(text):   # controle da TV (Android TV via ADB)
             return
         # No Minecraft: a fala vira ação no jogo (cérebro do bot).
         if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
