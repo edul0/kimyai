@@ -1421,6 +1421,29 @@ APP_DESIGN_PROMPT = (
     "(CRUD completo persistido). O resultado deve parecer um SaaS real em producao, nao um rascunho.\n"
 )
 
+# Telas de AUTENTICACAO (login/cadastro/recuperar senha) — caso especifico que os modelos erram muito
+# (sai desalinhado, feio ou sem funcionar). Spec rigida pra sair sempre como um card centralizado pro.
+AUTH_PROMPT = (
+    "\n\n=== TELA DE AUTENTICACAO (login/cadastro) — SIGA A RISCA ===\n"
+    "NAO e landing page: e uma tela FOCADA. Entregue um app web (HTML+CSS+JS) impecavel:\n"
+    "1) LAYOUT: um unico CARD centralizado na tela (vertical E horizontal) — use "
+    "`body{min-height:100vh;display:grid;place-items:center}` e `.card{width:100%;max-width:400px}`. "
+    "Fundo com gradiente/mesh suave. Card com padding generoso (32-40px), borda-radius 16px, sombra suave. "
+    "NADA de hero gigante, menu, secoes de marketing ou depoimentos.\n"
+    "2) CONTEUDO: logo/titulo no topo, subtitulo curto; campos com <label> (E-mail, Senha) e bons "
+    "placeholders; botao primario full-width 'Entrar'; link 'Esqueci minha senha' e 'Criar conta'; "
+    "opcao 'lembrar de mim'. Tudo alinhado e com espacamento consistente.\n"
+    "3) FUNCIONA DE VERDADE (client-side, sem backend): validacao real (e-mail valido, senha min. 6), "
+    "mensagens de erro inline POR CAMPO, estado de loading no botao. Como nao ha servidor, faca um login "
+    "DEMO honesto: credenciais de teste fixas (mostre na tela: ex. admin@demo.com / 123456) que, ao acertar, "
+    "salva sessao no localStorage e mostra sucesso/redireciona pra uma pagina simples; ao errar, mostra erro. "
+    "Cadastro salva o usuario no localStorage. NUNCA deixe o botao sem acao.\n"
+    "4) DETALHES PRO: focus-visible nos campos, mostrar/ocultar senha (olhinho), responsivo no mobile, "
+    "transicoes suaves. Acessivel (labels ligadas aos inputs, contraste AA).\n"
+    "5) SEGURANCA honesta: deixe claro em comentario que login real exige backend/hash; aqui e demo "
+    "client-side. Nao invente que e seguro pra producao.\n"
+)
+
 # Palavras que indicam pedido de criar/editar codigo ou executar algo (usa o prompt completo).
 BUILD_HINTS = (
     "site", "página", "pagina", "landing", "app", "aplicativo", "programa", "código",
@@ -6562,8 +6585,13 @@ class WebApi:
         app_like = any(k in text.lower() for k in (
             "erp", "sistema", "plataforma", "painel", "admin", "crud", "dashboard", "gestao", "gestão",
             "estoque", "vendas", "financeiro", "cadastro", "relatório", "relatorio", "saas"))
-        if design_req:
-            system += APP_DESIGN_PROMPT if app_like else DESIGN_PROMPT
+        is_auth = any(k in text.lower() for k in (
+            "login", "log in", "entrar", "autentic", "cadastro", "cadastrar", "sign in", "sign up",
+            "signin", "signup", "criar conta", "recuperar senha", "esqueci", "tela de acesso"))
+        if design_req or is_auth:
+            system += APP_DESIGN_PROMPT if (app_like or is_auth) else DESIGN_PROMPT
+        if is_auth:
+            system += AUTH_PROMPT   # spec rigida pra login/cadastro nao sair zoado
         # Painel "ver ela trabalhar" (checklist ao vivo). Substitui o spam de status no chat.
         panel_on = self.boost
         if panel_on:
@@ -7148,6 +7176,9 @@ class WebApi:
         elif any(k in obj_l for k in ("erp", "sistema", "painel", "admin", "crud", "dashboard",
                                       "gestao", "gestão", "estoque", "saas")):
             design_block = APP_DESIGN_PROMPT
+        if any(k in obj_l for k in ("login", "entrar", "autentic", "cadastro", "cadastrar",
+                                    "sign in", "sign up", "signin", "signup", "criar conta")):
+            design_block = APP_DESIGN_PROMPT + AUTH_PROMPT
         sysp = (self._memoria_prefix() + SYSTEM_PROMPT + design_block + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
                 "Faca SO a tarefa atual do plano, COMPLETA e funcional. Crie/edite arquivos "
                 "(<<<FILE>>>/<<<EDIT>>>); se precisar instalar/rodar/testar, use ```kemy-run. NAO refaca o "
