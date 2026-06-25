@@ -4719,10 +4719,51 @@ class WebApi:
         return (f"[AGORA: {self.DOW_PT[n.weekday()]}, {n.day} de {self.MES_PT[n.month-1]} de {n.year}, "
                 f"{n.strftime('%H:%M')}]")
 
+    def _battery_status(self):
+        """(percent, plugado) no Windows via ctypes (sem dependencia). None se nao der pra ler."""
+        try:
+            import ctypes
+
+            class SPS(ctypes.Structure):
+                _fields_ = [("ACLineStatus", ctypes.c_byte), ("BatteryFlag", ctypes.c_byte),
+                            ("BatteryLifePercent", ctypes.c_byte), ("Reserved1", ctypes.c_byte),
+                            ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+            s = SPS()
+            if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(s)):
+                return None
+            pct = int(s.BatteryLifePercent)
+            if pct == 255 or s.BatteryFlag == 128:   # 255/128 = sem bateria (desktop)
+                return None
+            return pct, (s.ACLineStatus == 1)
+        except Exception:
+            return None
+
+    def _check_system(self) -> None:
+        """Consciencia de sistema: avisa bateria baixa (1x) — base pra mais alertas depois."""
+        try:
+            st = self._battery_status()
+            if not st:
+                return
+            pct, plugado = st
+            if plugado:
+                self._batt_warned = False
+            elif pct <= 20 and not self._batt_warned and not self.busy:
+                self._batt_warned = True
+                msg = (f"🔋 Sua bateria tá em {pct}% e não tá carregando — melhor colocar pra carregar."
+                       if pct > 10 else f"🔋 Atenção: bateria em {pct}%! Conecta o carregador antes que desligue.")
+                self._say_reply(msg)
+        except Exception:
+            pass
+
     def _reminder_loop(self) -> None:
-        """A cada 15s verifica lembretes/timers/agenda vencidos e AVISA em voz na hora certa."""
+        """A cada 15s verifica lembretes/timers/agenda vencidos e AVISA em voz na hora certa.
+        Tambem checa consciencia de sistema (bateria)."""
+        tick = 0
         while not self._quitting:
             time.sleep(15)
+            tick += 1
+            if tick % 8 == 0:   # ~a cada 2 min
+                self._check_system()
             try:
                 now = time.time()
                 due = [r for r in self.reminders if not r.get("done") and r.get("ts", 0) <= now]
