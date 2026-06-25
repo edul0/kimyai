@@ -1738,6 +1738,16 @@ def audit_unfinished(base: Path) -> list[str]:
             corpo = corpo.replace(";", "").strip()
             if not corpo:
                 issues.append(f"{fn}(): a funcao do botao esta VAZIA (so stub) — implemente a acao de verdade.")
+    # PERSISTENCIA: cadastra/edita dados (CRUD) mas NAO salva em lugar nenhum -> perde tudo ao recarregar.
+    crud_intent = bool(re.search(r"\.push\s*\(|function\s+(?:salvar|adicionar|cadastr|criar|incluir|"
+                                 r"registrar|nov[ao]|add|edit|atualizar|remover|excluir|deletar)\w*",
+                                 alljs, re.I))
+    renders = bool(re.search(r"innerhtml|appendchild|insertrow|createelement|insertadjacent", alljs, re.I))
+    persists = bool(re.search(r"localstorage|sessionstorage|indexeddb|firebase|supabase|"
+                             r"fetch\s*\(|axios|xmlhttprequest|\.save\s*\(", alljs, re.I))
+    if crud_intent and renders and not persists:
+        issues.append("o app cadastra/edita dados mas NAO persiste (sem localStorage nem banco) — "
+                      "perde tudo ao recarregar a pagina; salve e carregue do localStorage.")
     seen, out = set(), []
     for i in issues:
         if i not in seen:
