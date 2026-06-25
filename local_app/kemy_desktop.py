@@ -1823,11 +1823,11 @@ class LLMClient:
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
-        # Lidera com gemini-2.5-flash (estavel, cota boa); cai pro -latest/2.0 se preciso.
-        # gemini-flash-latest as vezes da 429/limite momentaneo; 2.5-flash e mais firme.
-        # O Gemini 3 PRO via API e PAGO -> opt-in: GEMINI_PRIMARY_MODEL=gemini-3-pro
+        # Lidera com gemini-3-flash-preview (gratis, sucessor do 2.5 Flash); cai pro -latest/2.5 se preciso.
+        # Pro models (Gemini 3 Pro) sao PAGOS -> opt-in: GEMINI_PRIMARY_MODEL=gemini-3-pro
         self.gemini_models = _list("GEMINI_PRIMARY_MODEL",
-                                   ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite"])
+                                   ["gemini-3-flash-preview", "gemini-flash-latest", "gemini-2.5-flash",
+                                    "gemini-3.1-flash-lite", "gemini-2.0-flash"])
         self.openai_models = _list("OPENAI_MODEL", ["gpt-4o-mini"])
         # Claude (Anthropic API, PAGO) — melhor pra codigo. Use chave ANTHROPIC_API_KEY.
         self.claude_models = _list("CLAUDE_MODEL", ["claude-sonnet-4-6", "claude-3-5-sonnet-latest"])
