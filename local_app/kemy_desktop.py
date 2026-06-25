@@ -1392,6 +1392,35 @@ DESIGN_PROMPT = (
     "acabamento como se fosse pro portfolio.\n"
 )
 
+# Design para APLICACOES (ERP/painel/dashboard/admin/CRUD/SaaS interno). A linguagem visual aqui
+# e DIFERENTE de site de marketing: densidade de dados, eficiencia e clareza vencem 'respiro' e hero.
+# (Antes esses sistemas saiam crus porque levavam conselho de landing page.)
+APP_DESIGN_PROMPT = (
+    "\n\n=== MODO APLICACAO (UI de PRODUTO: ERP/painel/dashboard nivel Linear/Notion/Stripe/Vercel) ===\n"
+    "Isto NAO e site de marketing — e uma ferramenta de trabalho. Nada de hero gigante, depoimentos ou "
+    "secoes de 100px de respiro. Otimize para DENSIDADE, CLAREZA e EFICIENCIA.\n"
+    "1) DESIGN TOKENS em :root (bg, surface, surface-2, border, primary/primary-600, text, text-muted, "
+    "success/warn/danger) + modo claro E escuro coerentes, contraste WCAG AA. Tipografia Inter/system-ui, "
+    "corpo 13-14px, numeros tabulares (font-variant-numeric: tabular-nums) em tabelas.\n"
+    "2) LAYOUT DE APP: sidebar de navegacao fixa (icones+rotulo, item ativo destacado) + topbar com busca, "
+    "breadcrumb e acoes; area de conteudo com largura total (NAO centralize em 1200px como landing). "
+    "Espacamento compacto e consistente (base 4/8).\n"
+    "3) TABELAS DE VERDADE: cabecalho fixo (sticky), zebra/hover na linha, alinhamento (texto a esq, numeros "
+    "a dir), ordenacao por coluna, paginacao ou scroll virtual, selecao por checkbox, acoes por linha. "
+    "Toolbar acima com busca + filtros + botao primario ('Novo').\n"
+    "4) FORMULARIOS/CRUD em MODAL ou drawer lateral, com labels claras, validacao inline e mensagens de erro; "
+    "botao primario a direita. Confirmacao antes de excluir.\n"
+    "5) FEEDBACK: toasts pra sucesso/erro, estados de loading (skeleton/spinner), EMPTY STATE caprichado "
+    "(ilustracao/icone + texto + CTA) quando a lista esta vazia, e estado de erro. Nada de tela morta.\n"
+    "6) DASHBOARD: cards de KPI no topo (numero grande + label + variacao), graficos simples (Chart.js/SVG) "
+    "quando fizer sentido. Hierarquia clara: o que importa primeiro.\n"
+    "7) COMPONENTES consistentes: botoes (primario/secundario/ghost/danger) com hover/active/focus-visible; "
+    "badges de status (cores semanticas); inputs/selects/tabs padronizados; bordas 8-12px; sombras sutis. "
+    "Atalhos de teclado quando ajudar (ex.: '/' foca a busca).\n"
+    "8) DADOS REAIS de exemplo (linhas plausiveis ja populadas), nunca 'Item 1/2/3'. Todo botao FUNCIONA "
+    "(CRUD completo persistido). O resultado deve parecer um SaaS real em producao, nao um rascunho.\n"
+)
+
 # Palavras que indicam pedido de criar/editar codigo ou executar algo (usa o prompt completo).
 BUILD_HINTS = (
     "site", "página", "pagina", "landing", "app", "aplicativo", "programa", "código",
@@ -6282,8 +6311,12 @@ class WebApi:
             "estoque", "vendas", "financeiro", "tela", "modo escuro", "modo claro"))
         # 🎨 Modo Design dedicado: pedido claramente de UI/visual ganha o design-system premium
         # e SEMPRE usa o melhor modelo disponivel (NVIDIA frontier / GPT-5).
+        # App/ERP/painel recebe a linguagem de PRODUTO (densidade/tabela/sidebar); site recebe a de marketing.
+        app_like = any(k in text.lower() for k in (
+            "erp", "sistema", "plataforma", "painel", "admin", "crud", "dashboard", "gestao", "gestão",
+            "estoque", "vendas", "financeiro", "cadastro", "relatório", "relatorio", "saas"))
         if design_req:
-            system += DESIGN_PROMPT
+            system += APP_DESIGN_PROMPT if app_like else DESIGN_PROMPT
         # Painel "ver ela trabalhar" (checklist ao vivo). Substitui o spam de status no chat.
         panel_on = self.boost
         if panel_on:
@@ -6311,6 +6344,7 @@ class WebApi:
                 system += "\n\nABORDAGEM DECIDIDA (siga):\n" + plano
         # Roteador inteligente: escolhe a melhor IA pra tarefa (silencioso).
         route = self._smart_route(text)
+        self._last_route = route
         prefer = route[0] if route else ""
         if panel_on:
             self._panel_step(0, "done"); self._panel_step(1, "done"); self._panel_step(2, "doing")
@@ -6390,8 +6424,10 @@ class WebApi:
             {"role": "user", "content": "Revise com olhar critico de senior e reentregue a VERSAO FINAL, "
              "completa, funcional e bonita. Se ja estiver perfeita, devolva igual."},
         ]
-        provs = self.llm.providers()
-        prefer = provs[1] if len(provs) > 1 else ""   # outro modelo = olhar fresco (revisao cruzada)
+        # Revisor = OUTRO modelo (olhar fresco), mas ainda ESPECIALISTA na categoria da tarefa:
+        # usa o 2o da rota inteligente (ex.: em codigo, Cerebras Qwen-Coder revisa o Kimi K2).
+        route = getattr(self, "_last_route", None) or self.llm.providers()
+        prefer = route[1] if len(route) > 1 else (route[0] if route else "")
         try:
             improved = self.llm.chat(review_sys, rmsgs, max_tokens=16000, prefer=prefer)
             if improved and (FILE_RE.search(improved) or EDIT_RE.search(improved) or len(improved) > 200):
@@ -6818,7 +6854,19 @@ class WebApi:
         route = self._smart_route(objective + " " + task)
         prefer = route[0] if route else ""
         files_ctx = relevant_project_files(base, task + " " + objective) or read_project_files(base)
-        sysp = (self._memoria_prefix() + SYSTEM_PROMPT + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
+        # Guia de design tambem no modo agente (antes saia cru): app/ERP -> linguagem de produto.
+        obj_l = (objective + " " + task).lower()
+        design_block = ""
+        if any(k in obj_l for k in ("site", "landing", "página", "pagina", "design", "ui", "interface",
+                                    "loja", "portfolio", "portfólio", "blog", "tema", "layout")):
+            app_like = any(k in obj_l for k in ("erp", "sistema", "plataforma", "painel", "admin", "crud",
+                                                "dashboard", "gestao", "gestão", "estoque", "vendas",
+                                                "financeiro", "cadastro", "saas"))
+            design_block = APP_DESIGN_PROMPT if app_like else DESIGN_PROMPT
+        elif any(k in obj_l for k in ("erp", "sistema", "painel", "admin", "crud", "dashboard",
+                                      "gestao", "gestão", "estoque", "saas")):
+            design_block = APP_DESIGN_PROMPT
+        sysp = (self._memoria_prefix() + SYSTEM_PROMPT + design_block + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
                 "Faca SO a tarefa atual do plano, COMPLETA e funcional. Crie/edite arquivos "
                 "(<<<FILE>>>/<<<EDIT>>>); se precisar instalar/rodar/testar, use ```kemy-run. NAO refaca o "
                 "que ja existe. Lembre: todo botao/rota tem que funcionar e os dados persistem no banco.")
