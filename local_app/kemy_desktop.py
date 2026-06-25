@@ -1804,9 +1804,13 @@ class LLMClient:
         # Mistral (api.mistral.ai) — OpenAI-compatible, free tier ~1B tokens/mes. Codestral e otimo pra codigo.
         self.mistral_models = _list("MISTRAL_MODEL", ["codestral-latest", "mistral-large-latest", "mistral-small-latest"])
         self.mistral_fast = _list("MISTRAL_FAST", ["mistral-small-latest", "open-mistral-nemo"])
-        # GitHub Models (models.github.ai) — GPT-5/GPT-4o/o3/DeepSeek de graca via PAT do GitHub.
-        self.github_models = _list("GITHUB_MODEL", ["openai/gpt-5", "openai/gpt-4o", "openai/o3-mini", "deepseek/DeepSeek-V3-0324"])
-        self.github_fast = _list("GITHUB_FAST", ["openai/gpt-5-mini", "openai/gpt-4o-mini", "openai/gpt-4o"])
+        # GitHub Models (models.github.ai) — GPT-5/GPT-4.1/GPT-4o de graca via PAT do GitHub.
+        # gpt-5-chat (preview) e o GPT-5 liberado pra contas comuns; gpt-5 'full' depende de rollout
+        # por org. Fallback pra gpt-4.1/gpt-4o (sempre disponiveis) garante que o provedor sempre funcione.
+        self.github_models = _list("GITHUB_MODEL", ["openai/gpt-5-chat", "openai/gpt-5", "openai/gpt-4.1",
+                                                    "openai/gpt-4o", "deepseek/DeepSeek-V3-0324"])
+        self.github_fast = _list("GITHUB_FAST", ["openai/gpt-5-chat", "openai/gpt-4o-mini",
+                                                 "openai/gpt-4.1-mini", "openai/gpt-4o"])
         # SambaNova (api.sambanova.ai) — DeepSeek/Qwen rapidos, tier gratis.
         self.sambanova_models = _list("SAMBANOVA_MODEL", ["DeepSeek-V3-0324", "Qwen2.5-Coder-32B-Instruct", "DeepSeek-R1"])
         self.sambanova_fast = _list("SAMBANOVA_FAST", ["Qwen2.5-Coder-32B-Instruct", "DeepSeek-V3-0324"])
@@ -1904,8 +1908,22 @@ class LLMClient:
             m = self.gemini_models[0]
             run("Gemini", m, lambda: self._gemini(sysp, msgs, m, 64))
         if self.github:
-            m = self.github_fast[0]
-            run("GitHub (GPT-5)", m, lambda: self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 64))
+            # tenta varios ids ate um responder (gpt-5 depende de rollout por org; cai pro 4.1/4o)
+            ok = False; last = "falhou"
+            for m in (self.github_fast + ["openai/gpt-4o"])[:4]:
+                t0 = time.time()
+                try:
+                    self._openai_compat("https://models.github.ai/inference/chat/completions", self.github, m, sysp, msgs, 64)
+                    results.append(("GitHub", m, True, f"{int((time.time()-t0)*1000)}ms")); ok = True; break
+                except Exception as e:
+                    em = str(e)
+                    if "sem texto" in em:
+                        results.append(("GitHub", m, True, "viva (resposta curta)")); ok = True; break
+                    if getattr(e, "code", "") == 429 or "429" in em:
+                        results.append(("GitHub", m, True, "viva (no limite — espera um pouco)")); ok = True; break
+                    last = em[:90]
+            if not ok:
+                results.append(("GitHub", self.github_fast[0], False, last))
         if self.mistral:
             m = self.mistral_fast[0]
             run("Mistral", m, lambda: self._openai_compat("https://api.mistral.ai/v1/chat/completions", self.mistral, m, sysp, msgs, 64))
@@ -6627,7 +6645,7 @@ class WebApi:
         if prov == "groq":
             return "Kimi K2 (código)"
         if prov == "github":
-            return "GPT-5 (design)"
+            return "GPT-5 (gpt-5-chat)"
         names = {"nvidia": "NVIDIA (Kimi K2.6 / GLM-5.1 / DeepSeek-V4-Pro)", "cerebras": "Cerebras (Qwen-Coder 480B)",
                  "gemini": "Gemini 3", "mistral": "Mistral (Codestral)",
                  "sambanova": "SambaNova", "openai": "OpenAI", "openrouter": "OpenRouter"}
