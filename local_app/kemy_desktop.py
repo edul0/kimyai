@@ -3906,6 +3906,126 @@ def _find_avatar_html() -> Path | None:
     return None
 
 
+def lan_ip() -> str:
+    """Descobre o IP da maquina na rede local (pra o celular acessar a Kemy)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))   # nao envia nada; so descobre a interface de saida
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+MOBILE_PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0a0c10"><title>Kemy</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+ *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+ body{margin:0;height:100vh;display:flex;flex-direction:column;background:#0a0c10;color:#eafff9;
+   font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+ header{padding:14px 16px;font-weight:800;border-bottom:1px solid #1b2330;display:flex;align-items:center;gap:8px}
+ .dot{width:9px;height:9px;border-radius:50%;background:#3ce7c8;box-shadow:0 0 8px #3ce7c8}
+ #log{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+ .m{max-width:84%;padding:10px 13px;border-radius:14px;line-height:1.4;white-space:pre-wrap;word-wrap:break-word}
+ .u{align-self:flex-end;background:#1d6fe0;color:#fff;border-bottom-right-radius:4px}
+ .k{align-self:flex-start;background:#141a24;border:1px solid #1b2330;border-bottom-left-radius:4px}
+ .sys{align-self:center;color:#8aa;font-size:13px}
+ form{display:flex;gap:8px;padding:10px;border-top:1px solid #1b2330;background:#0c0f14}
+ input,button{font-size:16px;border-radius:12px;border:1px solid #26303f;background:#10151c;color:#eafff9;padding:12px}
+ #t{flex:1} button{background:#1d6fe0;color:#fff;font-weight:700;border:none;min-width:64px}
+ #pin{position:fixed;inset:0;background:#0a0c10;display:flex;flex-direction:column;align-items:center;
+   justify-content:center;gap:14px;padding:24px;text-align:center}
+</style></head><body>
+<header><span class="dot"></span> Kemy</header>
+<div id="log"></div>
+<form id="f"><input id="t" placeholder="Fala comigo…" autocomplete="off"><button>➤</button></form>
+<div id="pin"><h2>Conectar à Kemy</h2><p>Digite o PIN que aparece no app do PC.</p>
+ <input id="pinv" inputmode="numeric" placeholder="PIN" style="font-size:22px;text-align:center;width:160px">
+ <button onclick="setpin()">Entrar</button></div>
+<script>
+ var PIN=localStorage.getItem("kemy_pin")||"";
+ function add(t,c){var d=document.createElement("div");d.className="m "+c;d.textContent=t;
+   var l=document.getElementById("log");l.appendChild(d);l.scrollTop=l.scrollHeight;return d;}
+ function setpin(){PIN=document.getElementById("pinv").value.trim();localStorage.setItem("kemy_pin",PIN);
+   document.getElementById("pin").style.display="none";add("Conectado! Pode falar 😊","sys");}
+ if(PIN)document.getElementById("pin").style.display="none";
+ document.getElementById("f").addEventListener("submit",function(e){e.preventDefault();
+   var i=document.getElementById("t");var txt=i.value.trim();if(!txt)return;i.value="";add(txt,"u");
+   var k=add("…","k");var box=document.getElementById("log").lastChild;
+   fetch("/ask",{method:"POST",headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({text:txt,pin:PIN})}).then(function(r){return r.json();}).then(function(d){
+     if(d.error){box.textContent="⚠ "+d.error; if(d.error.indexOf("PIN")>=0){document.getElementById("pin").style.display="flex";}}
+     else box.textContent=d.reply||"(sem resposta)";
+     document.getElementById("log").scrollTop=9e9;
+   }).catch(function(){box.textContent="⚠ sem conexão com o PC";});
+ });
+</script></body></html>"""
+
+
+def start_mobile_server(api, port: int = 8800) -> int | None:
+    """Sobe um servidor na REDE LOCAL (0.0.0.0) pro celular conversar com a Kemy.
+    Protegido por PIN (ela controla o PC, entao nao pode ser aberto)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            return
+
+        def _send(self, code, body, ctype):
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/manifest.json":
+                self._send(200, json.dumps({"name": "Kemy", "short_name": "Kemy", "display": "standalone",
+                           "background_color": "#0a0c10", "theme_color": "#0a0c10", "start_url": "/"}),
+                           "application/json")
+            else:
+                self._send(200, MOBILE_PAGE, "text/html; charset=utf-8")
+
+        def do_POST(self):
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            except Exception:
+                body = {}
+            if str(body.get("pin", "")) != str(getattr(api, "_mobile_pin", "")):
+                self._send(200, json.dumps({"error": "PIN incorreto"}), "application/json")
+                return
+            txt = (body.get("text") or "").strip()
+            if not txt:
+                self._send(200, json.dumps({"reply": ""}), "application/json")
+                return
+            try:
+                reply = api.mobile_ask(txt)
+            except Exception as e:
+                reply = f"Falhei: {e}"
+            self._send(200, json.dumps({"reply": reply}), "application/json")
+
+    for p in (port, port + 1, port + 2, 0):
+        try:
+            srv = ThreadingHTTPServer(("0.0.0.0", p), Handler)
+            real = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            return real
+        except Exception:
+            continue
+    return None
+
+
 def start_obs_server(api, port: int = 8777) -> int | None:
     """Sobe um servidor HTTP local leve que serve o avatar transparente (avatar.html) e o
     estado da Kemy em /state, pra usar como Browser Source no OBS. Retorna a porta usada."""
@@ -4206,6 +4326,9 @@ class WebApi:
         self.knowledge = load_conhecimento()
         self.reminders = load_reminders()   # lembretes/timers/agenda (Jarvis)
         self._batt_warned = False
+        self._mobile_port = None
+        self._mobile_pin = ""
+        self._mobile_lock = threading.Lock()
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -4725,6 +4848,48 @@ class WebApi:
             self.speaker.say(strip_emojis(msg)[:300]); self._state("speaking")
         else:
             self._state("idle")
+
+    # ===================== JARVIS: acesso pelo celular =====================
+    def connect_mobile(self) -> None:
+        """Liga (1x) o servidor mobile e mostra o link + PIN pra parear o celular."""
+        try:
+            if not self._mobile_port:
+                import random
+                self._mobile_pin = f"{random.randint(0, 9999):04d}"
+                self._mobile_port = start_mobile_server(self, 8800)
+            if not self._mobile_port:
+                self._msg("sys", "Não consegui abrir o servidor do celular (porta ocupada?).", store=False)
+                return
+            url = f"http://{lan_ip()}:{self._mobile_port}"
+            self._msg("kemy", "📱 Pra usar no celular (mesma rede Wi-Fi):\n"
+                      f"1) Abra no navegador do celular: {url}\n"
+                      f"2) Digite o PIN: {self._mobile_pin}\n"
+                      "Dica: no Chrome do Android, menu → 'Adicionar à tela inicial' vira um app.",
+                      store=False)
+        except Exception as e:
+            self._msg("sys", f"Falha ao ligar o modo celular: {e}", store=False)
+
+    def mobile_ask(self, text: str) -> str:
+        """Processa uma mensagem vinda do celular e devolve a resposta em texto.
+        Usa o mesmo cérebro do desktop (a tela do PC espelha o que rolar)."""
+        text = (text or "").strip()
+        if not text:
+            return ""
+        with self._mobile_lock:
+            # tempo/lembrete respondem direto (e ja avisam por voz no PC)
+            try:
+                if self._maybe_reminder(text):
+                    last = self._cur()
+                    log = (last or {}).get("log") or []
+                    return log[-1]["t"] if log and log[-1].get("r") == "kemy" else "Feito."
+            except Exception:
+                pass
+            try:
+                self._msg("user", f"📱 {text}")
+                chat, _ = self._process_direct(text)
+                return (chat or "Feito.").strip()
+            except Exception as e:
+                return f"Falhei: {e}"
 
     def _connect(self) -> None:
         # O VTube Studio so conecta quando o usuario pedir (evita poluir com "nao encontrado").
