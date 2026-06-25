@@ -1536,6 +1536,32 @@ def parse_llm_files(text: str) -> tuple[list[dict], str]:
     return files, chat
 
 
+def extract_office_text(path: Path, ext: str, max_chars: int = 15000) -> str:
+    """Extrai texto de .docx/.pptx SEM dependencia extra (sao zips de XML). Pega o texto dos
+    paragrafos (Word) / slides (PowerPoint)."""
+    try:
+        parts: list[str] = []
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            if ext == ".docx":
+                targets = [n for n in names if n == "word/document.xml"]
+            else:  # .pptx — varios slides na ordem
+                targets = sorted([n for n in names if re.match(r"ppt/slides/slide\d+\.xml$", n)],
+                                 key=lambda n: int(re.search(r"(\d+)", n).group(1)))
+            for n in targets:
+                xml = z.read(n).decode("utf-8", "ignore")
+                # <w:t>...</w:t> (Word) e <a:t>...</a:t> (PowerPoint) carregam o texto visivel
+                for m in re.findall(r"<(?:w|a):t[^>]*>(.*?)</(?:w|a):t>", xml, re.DOTALL):
+                    txt = re.sub(r"<[^>]+>", "", m)
+                    if txt.strip():
+                        parts.append(txt)
+                parts.append("\n")
+        out = re.sub(r"\n{3,}", "\n\n", " ".join(parts)).strip()
+        return out[:max_chars] or "(documento sem texto extraivel — pode ser so imagens)"
+    except Exception as exc:
+        return f"(nao consegui ler o {ext}: {exc})"
+
+
 def extract_excel(path: Path, max_rows: int = 200) -> str:
     """Extrai os dados de uma planilha .xlsx como texto (tabela)."""
     try:
@@ -4610,6 +4636,31 @@ class WebApi:
         if not res:
             return
         path = Path(res[0] if isinstance(res, (list, tuple)) else res)
+        self._route_attachment(path, prompt)
+
+    def attach_data(self, name: str = "arquivo", b64: str = "", prompt: str = "") -> None:
+        """Recebe um arquivo COLADO ou ARRASTADO na UI (bytes em base64 do navegador). Salva num
+        temporario e roteia igual ao anexo normal (imagem->visao, PDF/doc/planilha/texto->leitura)."""
+        try:
+            raw = base64.b64decode((b64 or "").split(",")[-1])  # tolera data: URL (data:...;base64,XXXX)
+        except Exception as exc:
+            self._msg("sys", f"Não consegui ler o arquivo colado/arrastado: {exc}", store=False)
+            return
+        if not raw:
+            return
+        safe = re.sub(r"[^\w.\-]+", "_", (name or "arquivo"))[:80] or "arquivo"
+        if "." not in safe:
+            safe += ".png"   # paste de imagem normalmente vem sem nome/extensao
+        try:
+            tmp = Path(tempfile.gettempdir()) / ("kemy_anexo_" + safe)
+            tmp.write_bytes(raw)
+        except Exception as exc:
+            self._msg("sys", f"Não consegui salvar o arquivo colado: {exc}", store=False)
+            return
+        self._route_attachment(tmp, prompt)
+
+    def _route_attachment(self, path: Path, prompt: str = "") -> None:
+        """Roteia um anexo (de dialogo, colar ou arrastar) pro leitor certo."""
         ext = path.suffix.lower()
         self._msg("user", f"[arquivo: {path.name}] {prompt}".strip())
         self.busy = True
@@ -4643,13 +4694,18 @@ class WebApi:
                 reply = self.llm.chat(CHAT_PROMPT, [{"role": "user", "content":
                         f"{prompt or 'Analise esta planilha e me dê os principais insights.'}\n\n"
                         f"DADOS DA PLANILHA ({path.name}):\n{data}"}], max_tokens=2500)
+            elif ext in (".docx", ".pptx"):
+                data = extract_office_text(path, ext)
+                reply = self.llm.chat(CHAT_PROMPT, [{"role": "user", "content":
+                        f"{prompt or 'Leia este documento e me dê um resumo com os pontos principais.'}\n\n"
+                        f"CONTEUDO DE {path.name}:\n{data}"}], max_tokens=2500)
             elif ext in (".csv", ".txt", ".md", ".json", ".log", ".html", ".css", ".js", ".py", ".xml", ".yml", ".ini"):
                 content = path.read_text(encoding="utf-8", errors="ignore")[:15000]
                 reply = self.llm.chat(CHAT_PROMPT, [{"role": "user", "content":
                         f"{prompt or 'Analise este arquivo.'}\n\nARQUIVO {path.name}:\n{content}"}], max_tokens=2500)
             else:
                 reply = (f"Não sei ler o formato {ext or 'desconhecido'} ainda. Eu leio: imagem, PDF, vídeo, "
-                         "Excel (.xlsx), CSV e arquivos de texto/código.")
+                         "Word (.docx), PowerPoint (.pptx), Excel (.xlsx), CSV e arquivos de texto/código.")
         except Exception as exc:
             reply = f"Não consegui ler o arquivo: {exc}"
         self.busy = False

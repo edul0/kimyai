@@ -205,7 +205,9 @@
   .cn{width:50px;flex:none;text-align:right;padding-right:14px;color:#4d5566;user-select:none}
   .cc{white-space:pre;color:#d6deeb}
   /* composer */
-  .composer{position:relative;padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+  .composer{position:relative;padding:12px 18px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;transition:box-shadow .15s,background .15s}
+  .composer.dragover{background:rgba(60,231,200,.08);box-shadow:inset 0 0 0 2px var(--acc,#3ce7c8)}
+  .composer.dragover::after{content:"Solte para anexar (imagem, PDF, Word, Excel…)";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--acc,#3ce7c8);pointer-events:none;background:rgba(10,12,16,.55)}
   .stopbtn{display:none;position:absolute;top:-44px;left:50%;transform:translateX(-50%);align-items:center;gap:7px;
     background:rgba(255,80,80,.16);border:1px solid rgba(255,90,90,.5);color:#ff9b9b;border-radius:20px;
     padding:7px 16px;font-weight:700;font-size:13px;cursor:pointer;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.4)}
@@ -311,7 +313,7 @@
       <div class="composer">
         <button class="stopbtn" id="stopBtn" onclick="api('stop_all')"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Parar</button>
         <div class="row">
-          <button class="iconbtn" title="Anexar arquivo (imagem, PDF, vídeo, Excel, CSV…)" onclick="api('attach_file', document.getElementById('inp').value)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"/></svg></button>
+          <button class="iconbtn" title="Anexar arquivo — ou cole (Ctrl+V) / arraste imagem, PDF, Word, Excel, CSV…" onclick="api('attach_file', document.getElementById('inp').value)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"/></svg></button>
           <input class="input" id="inp" placeholder="Peça algo: crie um site, edite o código, abra um app…" />
           <button class="send" onclick="sendText()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>Enviar</button>
         </div>
@@ -610,6 +612,46 @@
     if(e.key==="ArrowUp" && !i.value.trim() && _hist.length){ _hi=Math.max(0,_hi-1); i.value=_hist[_hi]||""; e.preventDefault(); }
     else if(e.key==="ArrowDown" && _hi>=0){ _hi=Math.min(_hist.length,_hi+1); i.value=_hist[_hi]||""; }
   });
+
+  // ===== Colar (Ctrl+V) e Arrastar arquivos na caixa de texto =====
+  function sendFileToKemy(file){
+    if(!file) return;
+    if(file.size > 18*1024*1024){ addMsg("sys","Esse arquivo é grande demais (máx ~18MB)."); return; }
+    var r=new FileReader();
+    r.onload=function(){
+      var inp=document.getElementById("inp");
+      var prompt=(inp.value||"").trim();
+      var nome=file.name||("colado"+(/(png|jpe?g|gif|webp)/i.test(file.type)? (file.type.indexOf("png")>=0?".png":".jpg"):""));
+      try{
+        if(window.pywebview&&pywebview.api&&pywebview.api.attach_data){
+          addMsg("sys","📎 Enviando "+nome+"…");
+          pywebview.api.attach_data(nome, r.result, prompt);
+          inp.value="";
+        }
+      }catch(e){ addMsg("sys","Não consegui anexar: "+e); }
+    };
+    r.onerror=function(){ addMsg("sys","Falha ao ler o arquivo."); };
+    r.readAsDataURL(file);
+  }
+  // Colar imagem (ou arquivo) do clipboard
+  document.getElementById("inp").addEventListener("paste",function(e){
+    var items=(e.clipboardData||{}).items||[]; var achou=false;
+    for(var i=0;i<items.length;i++){ if(items[i].kind==="file"){ var f=items[i].getAsFile(); if(f){ sendFileToKemy(f); achou=true; } } }
+    if(achou) e.preventDefault();   // tinha arquivo -> nao cola caminho/binario como texto
+  });
+  // Arrastar e soltar (na caixa ou em qualquer lugar da janela)
+  (function(){
+    var comp=document.querySelector(".composer")||document.body;
+    function stop(e){ e.preventDefault(); e.stopPropagation(); }
+    ["dragenter","dragover"].forEach(function(ev){ window.addEventListener(ev,function(e){ stop(e);
+      if(comp&&comp.classList) comp.classList.add("dragover"); }); });
+    ["dragleave","drop"].forEach(function(ev){ window.addEventListener(ev,function(e){ stop(e);
+      if(comp&&comp.classList) comp.classList.remove("dragover"); }); });
+    window.addEventListener("drop",function(e){
+      var files=(e.dataTransfer||{}).files||[];
+      for(var i=0;i<files.length;i++) sendFileToKemy(files[i]);
+    });
+  })();
   // Esc fecha qualquer modal; clicar fora (no fundo) tambem fecha.
   document.addEventListener("keydown",function(e){ if(e.key==="Escape"){
     document.querySelectorAll('[id$="Modal"]').forEach(function(m){ m.style.display='none'; });
