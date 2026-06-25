@@ -1444,6 +1444,15 @@ def is_build_request(text: str) -> bool:
     return any(k in t for k in BUILD_HINTS)
 
 
+def _chat_tier_params(tier: str):
+    """(max_tokens, fast, prefer) por nivel de conversa — economiza a cota do GPT-5."""
+    if tier == "hard":
+        return 3500, False, "github"      # GPT-5 (gpt-5-chat) — raciocinio pesado
+    if tier == "smart":
+        return 2500, True, "cerebras"      # gpt-oss-120b — rapido E inteligente
+    return 800, True, ""                    # casual — Gemini Flash (snappy)
+
+
 FILE_RE = re.compile(r"<<<FILE:\s*(.+?)>>>\s*\n(.*?)<<<END>>>", re.DOTALL)
 EDIT_RE = re.compile(r"<<<EDIT:\s*(.+?)>>>\s*\n(.*?)<<<ENDEDIT>>>", re.DOTALL)
 SR_RE = re.compile(r"<<<SEARCH>>>\s*\n(.*?)\n<<<REPLACE>>>\s*\n(.*?)(?=\n?<<<SEARCH>>>|\Z)", re.DOTALL)
@@ -5840,34 +5849,40 @@ class WebApi:
             self._msg("kemy", f"Não consegui tirar o print: {exc}")
             self._after_speak()
 
-    def _smart_chat_needed(self, text: str) -> bool:
-        """Decide se a conversa exige um modelo de FRONTEIRA (GPT-5/GLM-5.1) em vez do rapido.
-        True para pergunta/explicacao/opiniao/raciocinio ou mensagem longa; False para saudacao/papo curto."""
+    def _chat_tier(self, text: str) -> str:
+        """Classifica a conversa em 3 niveis pra ECONOMIZAR a cota do GPT-5:
+        - 'casual': saudacao/papo curto  -> Gemini Flash (rapido)
+        - 'smart' : pergunta comum        -> Cerebras gpt-oss-120b (quase instantaneo e inteligente)
+        - 'hard'  : codigo/matematica/analise profunda/raciocinio -> GPT-5 (so aqui gasta a cota)."""
         t = (text or "").strip().lower()
         if len(t) < 6:
-            return False
-        # Saudacao/papo curtissimo -> rapido (snappy).
+            return "casual"
         saudacoes = ("oi", "ola", "olá", "eai", "e ai", "opa", "bom dia", "boa tarde", "boa noite",
                      "tudo bem", "tudo bom", "blz", "beleza", "valeu", "obrigad", "tchau", "kkk", "haha",
                      "como vc ta", "como voce esta", "como vc esta", "ok", "tá", "ta bom", "show")
         if t in saudacoes or (len(t) < 22 and any(t.startswith(s) for s in saudacoes)):
-            return False
-        # Gatilhos de raciocinio/conteudo -> modelo forte.
-        gatilhos = ("por que", "porque", "pq ", "como ", "qual", "quais", "quando", "onde", "quem",
-                    "o que", "oque", "explica", "explique", "ensina", "ensine", "me ajuda", "ajuda",
-                    "ajude", "resolve", "resolva", "calcula", "calcule", "compara", "compare", "diferenc",
-                    "melhor", "vale a pena", "acha", "opini", "sugest", "sugere", "ideia", "ideias",
-                    "analisa", "analise", "resume", "resuma", "traduz", "escreve", "escreva", "crie",
-                    "planeja", "estrateg", "passo a passo", "code", "codigo", "código", "erro", "bug",
-                    "deveria", "recomend", "?")
-        if any(g in t for g in gatilhos):
-            return True
-        # Mensagem longa = provavelmente algo que exige reflexao.
-        return len(t) >= 80
+            return "casual"
+        # DIFICIL (vale o GPT-5): codigo, matematica, depuracao, comparacao/analise, arquitetura, plano.
+        hard = ("codigo", "código", " code", "bug", "depura", "debug", "stack trace", "exception",
+                "algoritmo", "sql", "regex", "refator", "arquitetura", "otimiz", "optimiz",
+                "calcula", "calcule", "equa", "matemat", "demonstr", "prova ", "passo a passo",
+                "compara", "compare", "diferenca entre", "diferença entre", "analis", "estrateg",
+                "estratég", "planeja", "projeta", "compila", "deduz", "raciocin", "erro no",
+                "por que", "porque", "pq ")
+        if any(k in t for k in hard) or len(t) >= 220:
+            return "hard"
+        # MEDIA (Cerebras, rapido+esperto): perguntas gerais, explicacao leve, escrever, ideias.
+        smart = ("qual", "quais", "quando", "onde", "quem", "o que", "oque", "explica", "explique",
+                 "como ", "ensina", "ensine", "sugest", "sugere", "ideia", "acha", "opini",
+                 "recomend", "vale a pena", "resume", "resuma", "traduz", "escreve", "escreva",
+                 "crie", "ajuda", "ajude", "resolve", "deveria", "?")
+        if any(k in t for k in smart) or len(t) >= 80:
+            return "smart"
+        return "casual"
 
-    def _chat_streaming(self, system: str, msgs: list, smart: bool = False) -> str:
+    def _chat_streaming(self, system: str, msgs: list, tier: str = "casual") -> str:
         """Stream da resposta de conversa para a UI (texto em tempo real).
-        smart=True: usa modelo de fronteira (GPT-5/GLM-5.1) com mais tokens — papo que exige raciocinio."""
+        tier: 'hard'=GPT-5 (raciocinio pesado), 'smart'=Cerebras gpt-oss-120b, 'casual'=Gemini Flash."""
         self._js("startStream()")
         buf = {"t": "", "last": 0.0}
 
@@ -5882,11 +5897,9 @@ class WebApi:
                 buf["t"] = ""
                 buf["last"] = now
 
+        mt, fa, pf = _chat_tier_params(tier)
         try:
-            full = self.llm.chat_stream(system, msgs, on_chunk,
-                                        max_tokens=(3500 if smart else 800),
-                                        fast=(not smart),
-                                        prefer=("github" if smart else ""))
+            full = self.llm.chat_stream(system, msgs, on_chunk, max_tokens=mt, fast=fa, prefer=pf)
         finally:
             if buf["t"]:
                 try:
@@ -6332,23 +6345,23 @@ class WebApi:
         mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
-            # Papo que exige raciocinio (pergunta/explicacao/opiniao/conta) -> modelo de FRONTEIRA
-            # (GPT-5 do GitHub na frente), mais tokens e mais memoria. Saudacao/papo curto fica rapido.
-            smart = self._smart_chat_needed(text)
-            if smart:
+            # 3 niveis pra economizar a cota do GPT-5: casual->Gemini Flash, smart->Cerebras gpt-oss-120b,
+            # hard->GPT-5. Pergunta dificil ganha resposta aprofundada + mais memoria.
+            tier = self._chat_tier(text)
+            if tier != "casual":
                 system += ("\n\n=== MODO RESPOSTA APROFUNDADA ===\nA pessoa fez uma pergunta/pedido que merece "
                            "uma resposta INTELIGENTE e COMPLETA. Pense com calma (passo a passo internamente) e "
                            "responda com profundidade real: explique o porque, de exemplos concretos, considere "
                            "alternativas e seja precisa. Pode usar a extensao que precisar (sem encher linguica). "
                            "Mantenha seu jeito caloroso e natural, mas aqui a PRIORIDADE e ser util e certeira — "
                            "nada de resposta rasa de uma linha. Se nao tiver certeza, diga o que sabe e o que checar.")
-            hist_n = 18 if smart else 8
+            hist_n = 18 if tier == "hard" else (12 if tier == "smart" else 8)
             try:
-                reply = self._chat_streaming(system, msgs[-hist_n:], smart=smart)   # resposta em tempo real
+                reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
                 self._streamed_done = True
             except Exception:
-                reply = self.llm.chat(system, msgs[-hist_n:], max_tokens=(3500 if smart else 700),
-                                      fast=(not smart), prefer=("github" if smart else ""))
+                mt, fa, pf = _chat_tier_params(tier)
+                reply = self.llm.chat(system, msgs[-hist_n:], max_tokens=mt, fast=fa, prefer=pf)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
             # memoria afetiva: aprende sozinha coisas sobre a pessoa (em segundo plano)
