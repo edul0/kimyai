@@ -5027,6 +5027,104 @@ class WebApi:
             except Exception as e:
                 return f"Falhei: {e}"
 
+    # ===================== JARVIS: sincronia na nuvem (Supabase, grátis) =====================
+    def _sb_creds(self):
+        v = self.env_vars or {}
+        url = (v.get("SUPABASE_URL") or v.get("KIMI_SUPABASE_URL") or "").rstrip("/")
+        key = (v.get("SUPABASE_ANON_KEY") or v.get("KIMI_SUPABASE_ANON_KEY") or "").strip()
+        return (url, key) if (url and key) else (None, None)
+
+    def _cloud_enabled(self) -> bool:
+        return all(self._sb_creds())
+
+    def _sb_req(self, method: str, path: str, body=None, prefer: str = ""):
+        url, key = self._sb_creds()
+        if not url:
+            raise RuntimeError("Supabase não configurado")
+        headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        if prefer:
+            headers["Prefer"] = prefer
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url + "/rest/v1/" + path, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read().decode("utf-8", "ignore")
+            return json.loads(raw) if raw.strip() else None
+
+    @staticmethod
+    def _union(a: list, b: list) -> list:
+        """Une duas listas (strings ou dicts) sem duplicar."""
+        out, seen = [], set()
+        for x in (a or []) + (b or []):
+            k = json.dumps(x, sort_keys=True, ensure_ascii=False) if isinstance(x, (dict, list)) else str(x)
+            if k not in seen:
+                seen.add(k); out.append(x)
+        return out
+
+    def _local_payload(self) -> dict:
+        return {"memories": self.memories, "skills": self.skills, "knowledge": self.knowledge,
+                "instructions": self.instructions, "reminders": self.reminders}
+
+    def cloud_sync(self, announce: bool = True) -> bool:
+        """Puxa da nuvem + mescla + salva local, depois envia o resultado (merge bidirecional)."""
+        if not self._cloud_enabled():
+            if announce:
+                self._msg("sys", "Pra sincronizar na nuvem, configura SUPABASE_URL e SUPABASE_ANON_KEY "
+                          "em Configurações → Banco/Deploy (grátis). Depois rode o SQL que está no menu.", store=False)
+            return False
+        try:
+            remote = {}
+            try:
+                rows = self._sb_req("GET", "kemy_sync?id=eq.me&select=data")
+                if rows and isinstance(rows, list) and rows:
+                    remote = rows[0].get("data") or {}
+            except Exception:
+                remote = {}
+            # mescla nuvem + local (sem perder nada)
+            self.memories = self._union(remote.get("memories"), self.memories)[-3000:]
+            self.skills = self._union(remote.get("skills"), self.skills)[-2000:]
+            self.knowledge = self._union(remote.get("knowledge"), self.knowledge)[-20000:]
+            self.reminders = self._union(remote.get("reminders"), self.reminders)[-200:]
+            ri = remote.get("instructions") or ""
+            if len(ri) > len(self.instructions or ""):
+                self.instructions = ri
+            # salva local
+            save_memorias(self.memories); save_skills(self.skills)
+            save_conhecimento(self.knowledge); save_reminders(self.reminders)
+            save_instructions(self.instructions)
+            # envia o resultado mesclado (upsert)
+            self._sb_req("POST", "kemy_sync", [{"id": "me", "data": self._local_payload()}],
+                         prefer="resolution=merge-duplicates")
+            if announce:
+                self._msg("kemy", "☁️ Sincronizei tudo com a nuvem — memória, habilidades, conhecimento e agenda "
+                          "estão salvos e iguais em todos os seus aparelhos.")
+            return True
+        except Exception as e:
+            if announce:
+                self._msg("sys", f"Não consegui sincronizar agora: {e}", store=False)
+            return False
+
+    def cloud_sql(self) -> None:
+        """Mostra o SQL (1x) pra criar a tabela de sync no Supabase."""
+        sql = ("create table if not exists kemy_sync (id text primary key, data jsonb, "
+               "updated_at timestamptz default now());\n"
+               "alter table kemy_sync enable row level security;\n"
+               "create policy kemy_all on kemy_sync for all using (true) with check (true);")
+        self._msg("kemy", "Pra ligar a sincronia na nuvem (Supabase), cola e roda isto no SQL Editor do "
+                  "seu projeto Supabase (1x):\n\n" + sql + "\n\nDepois é só usar normal — eu sincronizo sozinha.")
+
+    def _cloud_loop(self) -> None:
+        """Sincroniza ao iniciar e a cada ~10 min (silencioso)."""
+        if not self._cloud_enabled():
+            return
+        self.cloud_sync(announce=False)
+        while not self._quitting:
+            time.sleep(600)
+            try:
+                if self._cloud_enabled():
+                    self.cloud_sync(announce=False)
+            except Exception:
+                pass
+
     def _connect(self) -> None:
         # O VTube Studio so conecta quando o usuario pedir (evita poluir com "nao encontrado").
         if self.mode == "direct":
@@ -5035,6 +5133,7 @@ class WebApi:
             threading.Thread(target=self._greet, daemon=True).start()
             threading.Thread(target=self._proactive_loop, daemon=True).start()
             threading.Thread(target=self._reminder_loop, daemon=True).start()
+            threading.Thread(target=self._cloud_loop, daemon=True).start()
             return
         # online (Render)
         url = self.api.base_url
