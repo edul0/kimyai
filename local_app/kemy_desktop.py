@@ -1918,7 +1918,7 @@ class LLMClient:
         return results
 
     def chat(self, system: str, messages: list[dict], max_tokens: int = 16000, fast: bool = False,
-             prefer: str = "") -> str:
+             prefer: str = "", prefer_model: str = "") -> str:
         errors: list[str] = []
         # fast=True (bate-papo/voz) usa modelos menores e rapidos; senao usa os de codigo.
         cb_models = self.cerebras_fast if fast else self.cerebras_models
@@ -1931,7 +1931,14 @@ class LLMClient:
 
         def add(prov: str, models: list[str], maker) -> None:
             wk = self._working.get(("fast:" if fast else "") + prov)
-            chosen = [wk] if wk in models else models
+            # prefer_model (lead por tarefa: ex. Kimi K2.6 p/ codigo, GLM-5.1 p/ design) tem prioridade
+            # sobre o cache, mas mantem o resto como fallback.
+            if prefer_model and prefer_model in models:
+                chosen = [prefer_model] + [m for m in models if m != prefer_model]
+            elif wk in models:
+                chosen = [wk]
+            else:
+                chosen = models
             for m in chosen:
                 attempts.append((prov, m, maker(m)))
 
@@ -6391,12 +6398,14 @@ class WebApi:
         route = self._smart_route(text)
         self._last_route = route
         prefer = route[0] if route else ""
+        # Dentro da NVIDIA, escolhe o lider por tarefa: Kimi K2.6 (codigo/ERP) ou GLM-5.1 (design/UI).
+        nv_lead = self._nvidia_lead(text, app_like)
         if panel_on:
             self._panel_step(0, "done"); self._panel_step(1, "done"); self._panel_step(2, "doing")
         if self.boost and complexo and len(self.llm.providers()) >= 2:
-            reply = self._moa(system, hist, text, route)  # Mixture of Agents (especialistas)
+            reply = self._moa(system, hist, text, route, prefer_model=nv_lead)  # Mixture of Agents
         else:
-            reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer)
+            reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer, prefer_model=nv_lead)
         if panel_on:
             self._panel_step(2, "done")
         if self.boost:
@@ -6541,6 +6550,19 @@ class WebApi:
         except Exception:
             return ""
 
+    def _nvidia_lead(self, text: str, app_like: bool) -> str:
+        """Escolhe qual modelo da NVIDIA lidera ESTA tarefa: Kimi K2.6 pra codigo pesado
+        (ERP/backend/sistema), GLM-5.1 pra design/UI/site. Vazio = ordem padrao."""
+        cat = getattr(self, "_last_cat", "") or ""
+        t = (text or "").lower()
+        code_heavy = ("erp", "sistema", "backend", "api", "servidor", "django", "flask", "fastapi",
+                      "node", "sql", "banco", "crud", "refator", "algoritmo", "classe", "script")
+        if cat == "code" or app_like or any(k in t for k in code_heavy):
+            return "moonshotai/kimi-k2.6"
+        if cat == "design":
+            return "zai-org/glm-5.1"
+        return ""
+
     def _route(self, text: str) -> list:
         """Roteia a tarefa pra MELHOR IA: classifica o pedido e ordena os provedores por
         especialidade (cada IA boa no que faz). Retorna a lista de provedores em ordem."""
@@ -6611,14 +6633,15 @@ class WebApi:
                  "sambanova": "SambaNova", "openai": "OpenAI", "openrouter": "OpenRouter"}
         return names.get(prov, prov)
 
-    def _moa(self, system: str, msgs: list, text: str, route: list | None = None) -> str:
+    def _moa(self, system: str, msgs: list, text: str, route: list | None = None, prefer_model: str = "") -> str:
         """Mixture of Agents: 2 ESPECIALISTAS (modelos diferentes, escolhidos pela tarefa)
         geram, e um modelo forte junta o melhor dos dois."""
         provs = route or self.llm.providers()
         drafts = []
         for prov in provs[:2]:
             try:
-                d = self.llm.chat(system, msgs, max_tokens=16000, prefer=prov)
+                d = self.llm.chat(system, msgs, max_tokens=16000, prefer=prov,
+                                  prefer_model=(prefer_model if prov == "nvidia" else ""))
                 if d:
                     drafts.append(d)
             except Exception:
@@ -6921,8 +6944,10 @@ class WebApi:
                + (f"ABORDAGEM DECIDIDA (siga):\n{approach}\n" if approach else "")
                + f"PLANO: {plan}\nTAREFA ATUAL: {task}\n\n"
                f"ARQUIVOS ATUAIS:\n{files_ctx or '(vazio)'}\n\nSAIDA ANTERIOR:\n{last_output[-1200:] or '(nada)'}")
+        nv_lead = self._nvidia_lead(objective + " " + task, bool(design_block == APP_DESIGN_PROMPT))
         try:
-            reply = self.llm.chat(sysp, [{"role": "user", "content": usr}], max_tokens=16000, prefer=prefer)
+            reply = self.llm.chat(sysp, [{"role": "user", "content": usr}], max_tokens=16000,
+                                  prefer=prefer, prefer_model=nv_lead)
         except Exception as e:
             return False, last_output, f"erro ({e})"
         files, chat = parse_llm_files(reply)
