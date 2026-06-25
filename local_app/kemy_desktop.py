@@ -2187,7 +2187,7 @@ class LLMClient:
         last_err: Exception | None = None
         for key in order:
             try:
-                res = self._openai_compat(url, key, model, system, messages, max_tokens, timeout=120)
+                res = self._openai_compat(url, key, model, system, messages, max_tokens, timeout=90)
                 self._working["nvidia_key"] = key
                 return res
             except Exception as exc:
@@ -5798,6 +5798,27 @@ class WebApi:
         self.busy = True
         self._state("thinking")
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
+        threading.Thread(target=self._busy_heartbeat, daemon=True).start()
+
+    def _busy_heartbeat(self) -> None:
+        """Enquanto ela trabalha, garante que NUNCA pareca 'morta': avisa que segue nisso.
+        Nao mata o processamento — os timeouts de rede ja limitam o pior caso."""
+        t0 = time.time()
+        avisos = [(28, "Ainda trabalhando nisso… os modelos grátis às vezes levam alguns segundos 😉"),
+                  (80, "Tarefa pesada, mas continuo nela — já já entrego.")]
+        enviados = set()
+        while getattr(self, "busy", False):
+            time.sleep(2)
+            el = time.time() - t0
+            for limite, msg in avisos:
+                if el >= limite and limite not in enviados:
+                    enviados.add(limite)
+                    try:
+                        self._msg("sys", msg, store=False)
+                    except Exception:
+                        pass
+            if el > 240:   # passou de 4min: para de avisar (algo penou; timeouts de rede assumem)
+                break
 
     def _maybe_learn(self, text: str) -> bool:
         """Aprende quando o usuario ensina/corrige (memoria persistente)."""
@@ -6576,15 +6597,20 @@ class WebApi:
         nv_lead = self._nvidia_lead(text, app_like)
         if panel_on:
             self._panel_step(0, "done"); self._panel_step(1, "done"); self._panel_step(2, "doing")
-        if self.boost and complexo and len(self.llm.providers()) >= 2:
+        usou_moa = self.boost and complexo and len(self.llm.providers()) >= 2
+        if usou_moa:
             reply = self._moa(system, hist, text, route, prefer_model=nv_lead)  # Mixture of Agents
         else:
             reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer, prefer_model=nv_lead)
         if panel_on:
             self._panel_step(2, "done")
-        if self.boost:
+        # Revisao cruzada SO quando NAO houve MoA (a sintese do MoA ja e uma revisao) -> evita
+        # empilhar mais uma chamada lenta e a Kemy "travar" em pedidos complexos.
+        if self.boost and not usou_moa:
             self._panel_step(3, "doing")
             reply = self._refine(system, hist, text, reply)   # revisao cruzada
+            self._panel_step(3, "done")
+        elif panel_on:
             self._panel_step(3, "done")
         if panel_on:
             self._panel_step(4, "doing")
@@ -6814,17 +6840,25 @@ class WebApi:
 
     def _moa(self, system: str, msgs: list, text: str, route: list | None = None, prefer_model: str = "") -> str:
         """Mixture of Agents: 2 ESPECIALISTAS (modelos diferentes, escolhidos pela tarefa)
-        geram, e um modelo forte junta o melhor dos dois."""
+        geram EM PARALELO, e um modelo forte junta o melhor dos dois (metade do tempo de espera)."""
         provs = route or self.llm.providers()
-        drafts = []
-        for prov in provs[:2]:
+        drafts: list = []
+        results: dict = {}
+
+        def gen(i: int, prov: str) -> None:
             try:
-                d = self.llm.chat(system, msgs, max_tokens=16000, prefer=prov,
-                                  prefer_model=(prefer_model if prov == "nvidia" else ""))
-                if d:
-                    drafts.append(d)
+                results[i] = self.llm.chat(system, msgs, max_tokens=16000, prefer=prov,
+                                           prefer_model=(prefer_model if prov == "nvidia" else ""))
             except Exception:
-                pass
+                results[i] = None
+
+        ths = []
+        for i, prov in enumerate(provs[:2]):
+            t = threading.Thread(target=gen, args=(i, prov), daemon=True)
+            t.start(); ths.append(t)
+        for t in ths:
+            t.join(timeout=100)
+        drafts = [results[i] for i in sorted(results) if results.get(i)]
         if len(drafts) < 2:
             return drafts[0] if drafts else self.llm.chat(system, msgs, max_tokens=16000)
         synth_sys = (system + "\n\nVoce recebeu DUAS solucoes de modelos diferentes para o mesmo pedido. "
