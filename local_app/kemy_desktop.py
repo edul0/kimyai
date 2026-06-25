@@ -1795,8 +1795,9 @@ class LLMClient:
         # e DeepSeek-V4-Pro / Mistral-Large-3 como opcao. (Cada provedor usa um modelo DIFERENTE:
         # NVIDIA=GLM, Cerebras=Qwen-Coder-480B, Groq=Kimi-K2 — diversidade de especialistas.)
         self.nvidia_models = _list("NVIDIA_MODEL", [
-            "zai-org/glm-5.1", "z-ai/glm-5.1", "openai/gpt-oss-120b",
-            "deepseek-ai/deepseek-v4-pro", "mistralai/mistral-large-3-675b-instruct-2512",
+            "zai-org/glm-5.1", "z-ai/glm-5.1", "moonshotai/kimi-k2.6",
+            "deepseek-ai/deepseek-v4-pro", "openai/gpt-oss-120b",
+            "mistralai/mistral-large-3-675b-instruct-2512",
             "qwen/qwen2.5-coder-32b-instruct"])
         self.nvidia_fast = _list("NVIDIA_FAST", [
             "openai/gpt-oss-120b", "zai-org/glm-5.1", "qwen/qwen2.5-coder-32b-instruct"])
@@ -6559,8 +6560,9 @@ class WebApi:
         writing = ("explica", "resuma", "resumo", "escreve", "escreva", "texto", "redaç", "artigo",
                    "ideia", "planeje", "plano", "estrateg", "estratég", "analise", "análise", "traduz")
         if any(k in t for k in code):
-            # Kimi K2 (Groq) primeiro pra codigo; depois Cerebras Qwen-Coder e NVIDIA DeepSeek.
-            return order(["groq", "cerebras", "nvidia", "mistral", "sambanova", "github"])
+            # NVIDIA primeiro (Kimi K2.6 / GLM-5.1 / DeepSeek-V4-Pro = melhor trio de codigo gratis);
+            # cai pro Groq (Kimi K2 rapido) e Cerebras (Qwen-Coder), que sao gratis e nao expiram.
+            return order(["nvidia", "groq", "cerebras", "mistral", "sambanova", "github"])
         if any(k in t for k in design):
             # Design/UI: GPT-5 (GitHub) e GLM-5.1/DeepSeek (NVIDIA) sao os melhores gratis.
             return order(["github", "nvidia", "gemini", "cerebras", "groq"])
@@ -6586,7 +6588,7 @@ class WebApi:
         except Exception:
             return base
         mapping = {
-            "code": ["groq", "cerebras", "nvidia", "mistral", "sambanova", "github"],
+            "code": ["nvidia", "groq", "cerebras", "mistral", "sambanova", "github"],
             "design": ["github", "nvidia", "gemini", "cerebras", "groq"],
             "writing": ["gemini", "github", "nvidia", "groq", "cerebras"],
             "reasoning": ["nvidia", "github", "groq", "gemini", "cerebras"],
@@ -6604,7 +6606,7 @@ class WebApi:
             return "Kimi K2 (código)"
         if prov == "github":
             return "GPT-5 (design)"
-        names = {"nvidia": "NVIDIA (DeepSeek-V4 / GLM-5.1)", "cerebras": "Cerebras (Qwen-Coder 480B)",
+        names = {"nvidia": "NVIDIA (Kimi K2.6 / GLM-5.1 / DeepSeek-V4-Pro)", "cerebras": "Cerebras (Qwen-Coder 480B)",
                  "gemini": "Gemini 3", "mistral": "Mistral (Codestral)",
                  "sambanova": "SambaNova", "openai": "OpenAI", "openrouter": "OpenRouter"}
         return names.get(prov, prov)
