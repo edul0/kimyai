@@ -1643,6 +1643,82 @@ def audit_web_buttons(base: Path) -> list[str]:
     return out[:40]
 
 
+def audit_unfinished(base: Path) -> list[str]:
+    """Acha sinais de entrega CRUA/INACABADA num app web client-side (deterministico, alta precisao):
+    placeholder ('lorem ipsum', 'Item 1/2/3', 'texto aqui'), TODO/FIXME, funcao-stub (corpo vazio)
+    chamada por botao, e pagina SEM NENHUM CSS (a cara 'crua'). Pra a IA finalizar antes de entregar."""
+    issues: list[str] = []
+    try:
+        htmls = [p for p in base.rglob("*.html") if "node_modules" not in str(p)][:30]
+        jss = [p for p in base.rglob("*.js") if "node_modules" not in str(p)][:40]
+        csss = [p for p in base.rglob("*.css") if "node_modules" not in str(p)]
+    except Exception:
+        return issues
+    if not htmls:
+        return issues
+    alljs = ""
+    for j in jss:
+        try:
+            alljs += "\n" + j.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+    for h in htmls:   # inclui o JS inline do HTML (apps client-side costumam ter <script> no index)
+        try:
+            ht = h.read_text(encoding="utf-8", errors="ignore")
+            alljs += "\n" + "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", ht, re.DOTALL | re.IGNORECASE))
+        except Exception:
+            pass
+    PLACEHOLDERS = ("lorem ipsum", "texto aqui", "seu texto aqui", "titulo aqui", "título aqui",
+                    "conteudo aqui", "conteúdo aqui", "descricao aqui", "descrição aqui",
+                    "your text here", "placeholder text", "exemplo de texto", "nome do produto aqui")
+    for h in htmls:
+        try:
+            t = h.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        rel = h.name
+        low = t.lower()
+        inline_js = "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.DOTALL | re.IGNORECASE))
+        for ph in PLACEHOLDERS:
+            if ph in low:
+                issues.append(f"{rel}: tem texto de placeholder ('{ph}') — troque por conteudo real.")
+                break
+        # 'Item 1' + 'Item 2' (lista de exemplo nao preenchida)
+        if re.search(r"\bitem\s*1\b", low) and re.search(r"\bitem\s*2\b", low):
+            issues.append(f"{rel}: usa 'Item 1/Item 2…' de exemplo — preencha com dados reais plausiveis.")
+        # TODO/FIXME entregue no codigo
+        if re.search(r"(?i)\b(todo|fixme)\b|xxxxx", t + inline_js):
+            issues.append(f"{rel}: ha TODO/FIXME/placeholder no codigo — finalize o que ficou pendente.")
+        # pagina SEM nenhum CSS (cru): sem <style>, sem stylesheet, sem style=, e sem .css no projeto
+        has_style = ("<style" in low) or ("stylesheet" in low) or ("style=" in low)
+        body = re.sub(r"(?is)<script\b.*?</script>", "", t)
+        body_txt = re.sub(r"(?s)<[^>]+>", "", body).strip()
+        if not has_style and not csss and len(body_txt) > 80:
+            issues.append(f"{rel}: pagina SEM nenhum CSS (visual cru) — adicione um design-system com estilo proprio.")
+    # funcao-stub (corpo vazio / so comentario / so console.log) chamada por um botao
+    called = set()
+    for h in htmls:
+        try:
+            called |= set(re.findall(r"on(?:click|submit|change|input)\s*=\s*['\"]\s*([A-Za-z_$][\w$]*)\s*\(",
+                                     h.read_text(encoding="utf-8", errors="ignore")))
+        except Exception:
+            pass
+    for fn in called:
+        m = re.search(r"function\s+" + re.escape(fn) + r"\s*\([^)]*\)\s*\{(.*?)\}", alljs, re.DOTALL)
+        if m:
+            corpo = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.DOTALL)
+            corpo = re.sub(r"//.*", "", corpo)
+            corpo = re.sub(r"console\.(log|debug|info)\([^)]*\)\s*;?", "", corpo)
+            corpo = corpo.replace(";", "").strip()
+            if not corpo:
+                issues.append(f"{fn}(): a funcao do botao esta VAZIA (so stub) — implemente a acao de verdade.")
+    seen, out = set(), []
+    for i in issues:
+        if i not in seen:
+            seen.add(i); out.append(i)
+    return out[:30]
+
+
 def audit_dead_controls(base: Path) -> list[str]:
     """Acha botoes/links 'mortos' em templates HTML (deterministico, alta precisao):
     href vazio/#, e referencias {% url 'nome' %} para rotas que NAO existem nas urls.py.
@@ -6463,6 +6539,11 @@ class WebApi:
                 if issues and self.boost:
                     if self._autofix_buttons(base, "web", issues):
                         self._ensure_scripts_linked(base)
+                # Acabamento: pega entrega crua/inacabada (placeholder, TODO, stub, sem CSS) e finaliza.
+                if self.boost:
+                    crus = audit_unfinished(base)
+                    if crus:
+                        self._autofix_quality(base, crus)
         except Exception:
             pass
         # Reforco de seguranca: avisa (e nao deixa passar) chave de API vazando no codigo.
@@ -7041,6 +7122,9 @@ class WebApi:
                 issues = self._check_js_syntax(base) + audit_web_buttons(base) + self._audit_missing_assets(base)
                 if issues and self._autofix_buttons(base, "web", issues):
                     self._ensure_scripts_linked(base)
+                crus = audit_unfinished(base)   # acabamento: tira o 'cru' (placeholder/TODO/stub/sem CSS)
+                if crus:
+                    self._autofix_quality(base, crus)
         except Exception:
             pass
         self._maybe_make_pdf(base, text, [])
@@ -7615,6 +7699,37 @@ class WebApi:
             reply = self.llm.chat(sysp, [{"role": "user", "content": user}], max_tokens=16000)
         except Exception as e:
             self._msg("sys", f"Não consegui ligar os botões agora ({e}).", store=False)
+            return False
+        files, _ = parse_llm_files(reply)
+        edits = parse_edits(reply)
+        if edits:
+            self._apply_edits(edits, base)
+        if files:
+            self._save(files, base)
+        return bool(files or edits)
+
+    def _autofix_quality(self, base: Path, issues: list) -> bool:
+        """Finaliza entrega CRUA/inacabada: troca placeholder por conteudo real, resolve TODO,
+        implementa funcao-stub e adiciona design quando falta. Retorna True se mudou algo."""
+        if not issues:
+            return False
+        self._msg("sys", "Dando o acabamento profissional (tirando o 'cru')…", store=False)
+        files_ctx = read_project_files(base)
+        sysp = (SYSTEM_PROMPT + APP_DESIGN_PROMPT + "\n\n=== ACABAMENTO PROFISSIONAL (tirar o 'cru') ===\n"
+                "O app abaixo tem sinais de entrega inacabada/amadora. Conserte TUDO de verdade: troque "
+                "placeholder/'Item 1/2/3'/'texto aqui' por conteudo real e plausivel (PT-BR); resolva os "
+                "TODO/FIXME; implemente as funcoes que estao vazias (stub) com a logica real; e se a pagina "
+                "estiver sem estilo, adicione um design-system proprio (tokens, tipografia, layout, componentes "
+                "caprichados) — nivel produto de verdade, nao rascunho. Mantenha TODAS as funcoes/CRUD que ja "
+                "funcionam. Reentregue SOMENTE os arquivos alterados em <<<FILE: caminho>>>…<<<END>>> (ou "
+                "edicoes <<<EDIT>>>). Sem explicacao.")
+        user = "SINAIS DE ENTREGA CRUA/INACABADA:\n- " + "\n- ".join(issues) + "\n\nARQUIVOS ATUAIS:\n" + files_ctx
+        try:
+            # design/qualidade -> lider GLM-5.1 na NVIDIA
+            reply = self.llm.chat(sysp, [{"role": "user", "content": user}], max_tokens=16000,
+                                  prefer_model="zai-org/glm-5.1")
+        except Exception as e:
+            self._msg("sys", f"Não consegui dar o acabamento agora ({e}).", store=False)
             return False
         files, _ = parse_llm_files(reply)
         edits = parse_edits(reply)
