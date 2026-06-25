@@ -186,6 +186,26 @@ def save_memorias(mems: list) -> None:
         pass
 
 
+def reminders_file() -> Path:
+    return config_dir() / "kemy_lembretes.json"
+
+
+def load_reminders() -> list:
+    """Lembretes/timers agendados (sobrevivem a reiniciar o app)."""
+    try:
+        d = json.loads(reminders_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_reminders(rem: list) -> None:
+    try:
+        reminders_file().write_text(json.dumps(rem[-200:], ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def instructions_file() -> Path:
     return config_dir() / "kemy_instrucoes.txt"
 
@@ -4184,6 +4204,8 @@ class WebApi:
         self.instructions = load_instructions()
         self.skills = load_skills()
         self.knowledge = load_conhecimento()
+        self.reminders = load_reminders()   # lembretes/timers/agenda (Jarvis)
+        self._batt_warned = False
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -4563,6 +4585,147 @@ class WebApi:
             except Exception:
                 pass
 
+    # ===================== JARVIS: relógio, lembretes, timers, agenda =====================
+    DOW_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+    MES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+              "setembro", "outubro", "novembro", "dezembro"]
+
+    def _now_context(self) -> str:
+        """Linha de contexto com data/hora ATUAL — pra ela sempre saber 'agora' (relógio/calendário)."""
+        n = datetime.datetime.now()
+        return (f"[AGORA: {self.DOW_PT[n.weekday()]}, {n.day} de {self.MES_PT[n.month-1]} de {n.year}, "
+                f"{n.strftime('%H:%M')}]")
+
+    def _reminder_loop(self) -> None:
+        """A cada 15s verifica lembretes/timers/agenda vencidos e AVISA em voz na hora certa."""
+        while not self._quitting:
+            time.sleep(15)
+            try:
+                now = time.time()
+                due = [r for r in self.reminders if not r.get("done") and r.get("ts", 0) <= now]
+                for r in due:
+                    r["done"] = True
+                    kind = r.get("kind", "lembrete")
+                    txt = r.get("text", "")
+                    if kind == "timer":
+                        aviso = f"⏰ Timer! {txt}".strip() or "⏰ Seu timer acabou!"
+                    else:
+                        aviso = f"⏰ Lembrete: {txt}" if txt else "⏰ Você pediu pra eu te lembrar de algo agora."
+                    self._msg("kemy", aviso)
+                    if self.speaker.available:
+                        self.speaker.say(aviso.replace("⏰", "").strip()[:200]); self._state("speaking")
+                if due:
+                    self.reminders = [r for r in self.reminders if not r.get("done")]
+                    save_reminders(self.reminders)
+            except Exception:
+                pass
+
+    def _parse_reminder(self, text: str):
+        """Entende pedidos de tempo em PT-BR. Retorna (ts_unix, texto, kind) ou None.
+        Cobre: 'timer de 10 min', 'me lembra de X em 2h', 'me lembra de X às 15h', 'amanhã às 9h de X'."""
+        t = (text or "").strip()
+        low = t.lower()
+        now = datetime.datetime.now()
+        UNIT = {"seg": 1, "segundo": 1, "segundos": 1, "min": 60, "minuto": 60, "minutos": 60,
+                "h": 3600, "hora": 3600, "horas": 3600}
+
+        def limpa(s: str) -> str:
+            s = re.sub(r"(?i)\b(me\s+|p[õo]e?\s+|coloca\w*\s+|cria\w*\s+|marca\w*\s+|seta\s+|agenda\w*\s+)", " ", s)
+            s = re.sub(r"(?i)\b(lembr\w+|avis\w+|um|uma|de|do|da|que|pra|para|sobre|hoje|amanh[ãa]|"
+                       r"timer|temporizador|alarme|despert\w+)\b", " ", s)
+            return re.sub(r"\s+", " ", s).strip(" .,:-") or ""
+
+        # 1) TIMER / relativo: "timer de 10 min", "daqui 2 horas", "em 30 segundos"
+        m = re.search(r"(?i)\b(?:timer|temporizador|alarme|despertador|daqui\s*a?|em)\b[^\d]{0,12}"
+                      r"(\d{1,4})\s*(seg\w*|min\w*|h\b|hora\w*|horas)", low)
+        if m:
+            secs = int(m.group(1)) * UNIT.get(re.sub(r"(uto|utos|ora|oras|undo|undos)$", "", m.group(2))[:3], 60)
+            kind = "timer" if re.search(r"(?i)\b(timer|temporizador|alarme|despertador)\b", low) else "lembrete"
+            corpo = limpa(re.sub(re.escape(m.group(0)), "", t, flags=re.I))
+            return now.timestamp() + secs, corpo, kind
+
+        # 2) HORÁRIO absoluto: "às 15h", "as 15:30", "9 horas" (+ 'amanhã')
+        m = re.search(r"(?i)\b(?:[àa]s?|para as|pras)\s*(\d{1,2})(?:[:h](\d{2}))?\s*(h|horas|hrs)?\b", low)
+        if not m:
+            m = re.search(r"(?i)\b(\d{1,2})[:h](\d{2})\b", low)
+        if m and re.search(r"(?i)\b(lembr\w+|avis\w+|alarme|despert\w+|reuni\w+|consulta|compromisso|"
+                           r"[àa]s?\s*\d)", low):
+            hh = int(m.group(1)); mm = int(m.group(2) or 0)
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                alvo = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                if "amanh" in low:
+                    alvo += datetime.timedelta(days=1)
+                elif alvo <= now:
+                    alvo += datetime.timedelta(days=1)   # ja passou hoje -> amanha
+                corpo = limpa(re.sub(re.escape(m.group(0)), "", t, flags=re.I))
+                return alvo.timestamp(), corpo, "lembrete"
+        return None
+
+    def _maybe_reminder(self, text: str) -> bool:
+        """Intercepta pedidos de relógio/lembrete/timer/agenda. Retorna True se tratou."""
+        low = (text or "").strip().lower()
+        # Relógio / calendário: responde na hora
+        if re.search(r"(?i)^(que horas|qual.*hora|horas s[ãa]o)\b", low):
+            n = datetime.datetime.now()
+            self._say_reply(f"Agora são {n.strftime('%H:%M')}.")
+            return True
+        if re.search(r"(?i)\b(que dia (é|e) hoje|qual.*data|data de hoje|que dia (é|e) amanh)", low):
+            n = datetime.datetime.now()
+            d = n + (datetime.timedelta(days=1) if "amanh" in low else datetime.timedelta())
+            self._say_reply(f"Hoje é {self.DOW_PT[n.weekday()]}, {n.day} de {self.MES_PT[n.month-1]} de {n.year}."
+                            if "amanh" not in low else
+                            f"Amanhã é {self.DOW_PT[d.weekday()]}, {d.day} de {self.MES_PT[d.month-1]}.")
+            return True
+        # Listar agenda / lembretes
+        if re.search(r"(?i)\b(meus lembretes|minha agenda|meus alarmes|meus timers|o que tenho (pra|para) hoje)\b", low):
+            ativos = sorted([r for r in self.reminders if not r.get("done")], key=lambda r: r.get("ts", 0))
+            if not ativos:
+                self._say_reply("Você não tem nenhum lembrete ou compromisso agendado.")
+            else:
+                linhas = []
+                for r in ativos[:20]:
+                    dt = datetime.datetime.fromtimestamp(r.get("ts", 0))
+                    quando = dt.strftime("%d/%m %H:%M")
+                    linhas.append(f"• {quando} — {r.get('text') or r.get('kind','lembrete')}")
+                self._say_reply("Sua agenda:\n" + "\n".join(linhas))
+            return True
+        # Cancelar
+        if re.search(r"(?i)\b(cancela|apaga|limpa|remove)\b.*\b(lembrete|alarme|timer|agenda|compromisso)", low):
+            self.reminders = []
+            save_reminders(self.reminders)
+            self._say_reply("Pronto, limpei todos os lembretes e a agenda.")
+            return True
+        # Criar lembrete/timer/compromisso
+        if re.search(r"(?i)\b(lembr\w+|avis\w+|timer|temporizador|alarme|despert\w+|daqui|reuni\w+|"
+                     r"compromisso|consulta|[àa]s?\s*\d{1,2}[:h])", low):
+            parsed = self._parse_reminder(text)
+            if parsed:
+                ts, corpo, kind = parsed
+                self.reminders.append({"ts": ts, "text": corpo, "kind": kind, "done": False})
+                save_reminders(self.reminders)
+                dt = datetime.datetime.fromtimestamp(ts)
+                falta = ts - time.time()
+                if kind == "timer" or falta < 3600:
+                    mins = max(1, int(round(falta / 60)))
+                    quando = f"em {mins} min" if mins < 60 else dt.strftime("%H:%M")
+                else:
+                    hoje = datetime.datetime.now().date()
+                    dia = "hoje" if dt.date() == hoje else ("amanhã" if (dt.date() - hoje).days == 1
+                                                            else dt.strftime("%d/%m"))
+                    quando = f"{dia} às {dt.strftime('%H:%M')}"
+                alvo = (f" de \"{corpo}\"" if corpo else "")
+                self._say_reply(f"Combinado! Te {'aviso' if kind=='timer' else 'lembro'}{alvo} {quando}. ⏰")
+                return True
+        return False
+
+    def _say_reply(self, msg: str) -> None:
+        """Responde no chat + voz e volta pro idle (atalho pros handlers do Jarvis)."""
+        self._msg("kemy", msg)
+        if self.speaker.available and msg:
+            self.speaker.say(strip_emojis(msg)[:300]); self._state("speaking")
+        else:
+            self._state("idle")
+
     def _connect(self) -> None:
         # O VTube Studio so conecta quando o usuario pedir (evita poluir com "nao encontrado").
         if self.mode == "direct":
@@ -4570,6 +4733,7 @@ class WebApi:
             self._state("idle")
             threading.Thread(target=self._greet, daemon=True).start()
             threading.Thread(target=self._proactive_loop, daemon=True).start()
+            threading.Thread(target=self._reminder_loop, daemon=True).start()
             return
         # online (Render)
         url = self.api.base_url
@@ -4584,6 +4748,7 @@ class WebApi:
             pass
         self.connected = True
         self._state("idle")
+        threading.Thread(target=self._reminder_loop, daemon=True).start()
 
     def new_convo(self) -> None:
         self._add()
@@ -5815,6 +5980,8 @@ class WebApi:
             return
         if self._app_command(text):   # comandos de controle do app (voz ou texto)
             return
+        if self._maybe_reminder(text):   # relógio/lembrete/timer/agenda (Jarvis)
+            return
         # No Minecraft: a fala vira ação no jogo (cérebro do bot).
         if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
             threading.Thread(target=self.mc_brain, args=(text, "você"), daemon=True).start()
@@ -6555,7 +6722,7 @@ class WebApi:
             return self._autonomous_agent(text, base), None
         mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
         if not build:
-            system = mem + CHAT_PROMPT + (web or "")
+            system = mem + CHAT_PROMPT + "\n" + self._now_context() + (web or "")
             # 3 niveis pra economizar a cota do GPT-5: casual->Gemini Flash, smart->Cerebras gpt-oss-120b,
             # hard->GPT-5. Pergunta dificil ganha resposta aprofundada + mais memoria.
             tier = self._chat_tier(text)
