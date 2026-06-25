@@ -2177,7 +2177,8 @@ class LLMClient:
         raise RuntimeError(f"resposta sem texto ({err})")
 
     # ---- Streaming (resposta em tempo real) ----
-    def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700, fast: bool = True) -> str:
+    def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700,
+                    fast: bool = True, prefer: str = "") -> str:
         cb = self.cerebras_fast if fast else self.cerebras_models
         gq = self.groq_fast if fast else self.groq_models
         nv = self.nvidia_fast if fast else self.nvidia_models
@@ -2216,6 +2217,8 @@ class LLMClient:
         keys = {"cerebras": self.cerebras, "groq": self.groq, "nvidia": self.nvidia,
                 "sambanova": self.sambanova, "github": self.github,
                 "mistral": self.mistral, "openrouter": self.openrouter, "openai": self.openai}
+        if prefer:  # papo "inteligente": tenta o modelo preferido (ex.: GPT-5) primeiro
+            order.sort(key=lambda a: 0 if a[0] == prefer else 1)
         errs = []
         for prov, model in order:
             try:
@@ -5811,8 +5814,34 @@ class WebApi:
             self._msg("kemy", f"Não consegui tirar o print: {exc}")
             self._after_speak()
 
-    def _chat_streaming(self, system: str, msgs: list) -> str:
-        """Stream da resposta de conversa para a UI (texto em tempo real)."""
+    def _smart_chat_needed(self, text: str) -> bool:
+        """Decide se a conversa exige um modelo de FRONTEIRA (GPT-5/GLM-5.1) em vez do rapido.
+        True para pergunta/explicacao/opiniao/raciocinio ou mensagem longa; False para saudacao/papo curto."""
+        t = (text or "").strip().lower()
+        if len(t) < 6:
+            return False
+        # Saudacao/papo curtissimo -> rapido (snappy).
+        saudacoes = ("oi", "ola", "olá", "eai", "e ai", "opa", "bom dia", "boa tarde", "boa noite",
+                     "tudo bem", "tudo bom", "blz", "beleza", "valeu", "obrigad", "tchau", "kkk", "haha",
+                     "como vc ta", "como voce esta", "como vc esta", "ok", "tá", "ta bom", "show")
+        if t in saudacoes or (len(t) < 22 and any(t.startswith(s) for s in saudacoes)):
+            return False
+        # Gatilhos de raciocinio/conteudo -> modelo forte.
+        gatilhos = ("por que", "porque", "pq ", "como ", "qual", "quais", "quando", "onde", "quem",
+                    "o que", "oque", "explica", "explique", "ensina", "ensine", "me ajuda", "ajuda",
+                    "ajude", "resolve", "resolva", "calcula", "calcule", "compara", "compare", "diferenc",
+                    "melhor", "vale a pena", "acha", "opini", "sugest", "sugere", "ideia", "ideias",
+                    "analisa", "analise", "resume", "resuma", "traduz", "escreve", "escreva", "crie",
+                    "planeja", "estrateg", "passo a passo", "code", "codigo", "código", "erro", "bug",
+                    "deveria", "recomend", "?")
+        if any(g in t for g in gatilhos):
+            return True
+        # Mensagem longa = provavelmente algo que exige reflexao.
+        return len(t) >= 80
+
+    def _chat_streaming(self, system: str, msgs: list, smart: bool = False) -> str:
+        """Stream da resposta de conversa para a UI (texto em tempo real).
+        smart=True: usa modelo de fronteira (GPT-5/GLM-5.1) com mais tokens — papo que exige raciocinio."""
         self._js("startStream()")
         buf = {"t": "", "last": 0.0}
 
@@ -5828,7 +5857,10 @@ class WebApi:
                 buf["last"] = now
 
         try:
-            full = self.llm.chat_stream(system, msgs, on_chunk, max_tokens=700, fast=True)
+            full = self.llm.chat_stream(system, msgs, on_chunk,
+                                        max_tokens=(3500 if smart else 800),
+                                        fast=(not smart),
+                                        prefer=("github" if smart else ""))
         finally:
             if buf["t"]:
                 try:
@@ -6274,11 +6306,23 @@ class WebApi:
         mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
         if not build:
             system = mem + CHAT_PROMPT + (web or "")
+            # Papo que exige raciocinio (pergunta/explicacao/opiniao/conta) -> modelo de FRONTEIRA
+            # (GPT-5 do GitHub na frente), mais tokens e mais memoria. Saudacao/papo curto fica rapido.
+            smart = self._smart_chat_needed(text)
+            if smart:
+                system += ("\n\n=== MODO RESPOSTA APROFUNDADA ===\nA pessoa fez uma pergunta/pedido que merece "
+                           "uma resposta INTELIGENTE e COMPLETA. Pense com calma (passo a passo internamente) e "
+                           "responda com profundidade real: explique o porque, de exemplos concretos, considere "
+                           "alternativas e seja precisa. Pode usar a extensao que precisar (sem encher linguica). "
+                           "Mantenha seu jeito caloroso e natural, mas aqui a PRIORIDADE e ser util e certeira — "
+                           "nada de resposta rasa de uma linha. Se nao tiver certeza, diga o que sabe e o que checar.")
+            hist_n = 18 if smart else 8
             try:
-                reply = self._chat_streaming(system, msgs[-8:])   # resposta em tempo real
+                reply = self._chat_streaming(system, msgs[-hist_n:], smart=smart)   # resposta em tempo real
                 self._streamed_done = True
             except Exception:
-                reply = self.llm.chat(system, msgs[-8:], max_tokens=700, fast=True)
+                reply = self.llm.chat(system, msgs[-hist_n:], max_tokens=(3500 if smart else 700),
+                                      fast=(not smart), prefer=("github" if smart else ""))
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
             # memoria afetiva: aprende sozinha coisas sobre a pessoa (em segundo plano)
