@@ -4176,13 +4176,14 @@ class WebApi:
         "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
         "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY", "OPENROUTER_API_KEY",
         "SUPABASE_URL", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
+        "SIEG_API_KEY", "NFE_API_KEY",
         "KEMY_VOICE", "KEMY_ELEVENLABS_KEY", "KEMY_ELEVENLABS_VOICE",
         "MC_HOST", "MC_PORT", "MC_USER", "MC_AUTH", "MC_VERSION",
     ]
     SECRET_KEYS = {"NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
                    "GITHUB_MODELS_TOKEN", "MISTRAL_API_KEY", "SAMBANOVA_API_KEY",
                    "OPENROUTER_API_KEY", "SUPABASE_ANON_KEY", "KEMY_NETLIFY_TOKEN",
-                   "KEMY_ELEVENLABS_KEY"}
+                   "SIEG_API_KEY", "NFE_API_KEY", "KEMY_ELEVENLABS_KEY"}
 
     def get_settings(self) -> dict:
         """Valores atuais pro hub de Configuracoes (chaves vem mascaradas por seguranca)."""
@@ -7550,7 +7551,8 @@ class WebApi:
         try:
             # Passa credenciais de banco (Supabase) pro projeto, se o usuario configurou.
             child_env = dict(os.environ)
-            for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL"):
+            for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL",
+                      "SIEG_API_KEY", "NFE_API_KEY"):
                 v = (getattr(self, "env_vars", {}) or {}).get(k) or (getattr(self, "env_vars", {}) or {}).get("KIMI_" + k)
                 if v:
                     child_env[k] = v
