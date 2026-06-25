@@ -1796,7 +1796,8 @@ class LLMClient:
         self.cerebras_models = _list("CEREBRAS_MODEL", ["qwen-3-coder-480b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507"])
         # Kimi K2 lidera o Groq pra CODIGO (excelente modelo de codigo, gratis e rapido).
         self.groq_models = _list("GROQ_MODEL", ["moonshotai/kimi-k2-instruct", "openai/gpt-oss-120b", "qwen/qwen3-32b"])
-        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "qwen/qwen-2.5-coder-32b-instruct:free"])
+        self.openrouter_models = _list("OPENROUTER_MODEL", ["qwen/qwen3-coder:free", "deepseek/deepseek-r1:free",
+                                                            "qwen/qwen-2.5-coder-32b-instruct:free"])
         # NVIDIA NIM (build.nvidia.com) — OpenAI-compatible, tier gratis. MODELOS DE FRONTEIRA
         # (nivel Claude/GPT) abertos: DeepSeek-V4-Pro 1.6T, GLM-5.1 754B, Mistral-Large-3 675B.
         # IDs alternativos ficam na lista: o que nao existir na conta falha e cai pro proximo.
