@@ -1299,10 +1299,13 @@ SYSTEM_PROMPT = (
     "      - FORMULARIOS/links externos: recursos em https; links externos com rel='noopener noreferrer'; "
     "      sem expor e-mail/telefone de forma raspavel se nao precisar; nao envie dados pra terceiros sem aviso.\n"
     "      - Nao colete/guarde dado sensivel a toa; so o necessario.\n"
-    "   B) LOGIN/AUTENTICACAO: SO quando o app guarda dados PRIVADOS/sensiveis (ERP, painel admin, area do "
-    "cliente, financeiro, cadastros de pessoas) — NAO em site publico/landing/portfolio/blog. Quando precisar: "
-    "tela de login bloqueando o conteudo, senha em HASH (SHA-256 via crypto.subtle, nunca texto puro), botao "
-    "Sair, sessao em sessionStorage.\n"
+    "   B) LOGIN/AUTENTICACAO: por PADRAO NAO tranque o app atras de login — entregue o ERP/painel JA USAVEL "
+    "(o usuario reclama de 'nao sai da tela de login'). So coloque login se o usuario PEDIR explicitamente "
+    "(multiusuario/area do cliente/login). Se colocar: tem que FUNCIONAR DE VERDADE — e um gate na MESMA pagina "
+    "(SPA): uma <section id='login'> e a <section id='app'> escondida; ao acertar as credenciais DEMO (mostre-as "
+    "na tela, ex. admin/admin123), o JS ESCONDE o login e MOSTRA o app de verdade (nunca um beco sem saida). "
+    "Senha em HASH (SHA-256 via crypto.subtle), botao Sair, sessao em sessionStorage. O login tambem segue o "
+    "design-system (estilizado, card centralizado) — nada de HTML cru.\n"
     "   C) SEGURANCA DE VERDADE (multiusuario/empresa): avise que localStorage e local/single-user e ofereca "
     "SUPABASE AUTH + ROW LEVEL SECURITY (RLS): login real, cada usuario so acessa os PROPRIOS dados.\n"
     "   Resumo: TODO projeto sai sem segredo exposto e com dados escapados (anti-vazamento); login so quando "
@@ -1419,6 +1422,9 @@ APP_DESIGN_PROMPT = (
     "Atalhos de teclado quando ajudar (ex.: '/' foca a busca).\n"
     "8) DADOS REAIS de exemplo (linhas plausiveis ja populadas), nunca 'Item 1/2/3'. Todo botao FUNCIONA "
     "(CRUD completo persistido). O resultado deve parecer um SaaS real em producao, nao um rascunho.\n"
+    "9) NAO tranque o sistema atras de login por padrao — entregue o ERP/painel JA ABERTO e usavel. So "
+    "coloque login se for pedido; e se colocar, ele PRECISA entrar de verdade (esconde o login, mostra o app "
+    "na mesma pagina) — nunca deixe preso na tela de login.\n"
 )
 
 # Telas de AUTENTICACAO (login/cadastro/recuperar senha) — caso especifico que os modelos erram muito
@@ -1442,6 +1448,9 @@ AUTH_PROMPT = (
     "transicoes suaves. Acessivel (labels ligadas aos inputs, contraste AA).\n"
     "5) SEGURANCA honesta: deixe claro em comentario que login real exige backend/hash; aqui e demo "
     "client-side. Nao invente que e seguro pra producao.\n"
+    "6) SE for o gate de um app/ERP: o login e a app ficam na MESMA pagina (<section id='login'> + "
+    "<section id='app'> escondida). Ao logar certo, ESCONDA o login e MOSTRE o app de verdade; tenha botao "
+    "Sair. NUNCA deixe o usuario preso na tela de login (esse e o erro #1 a evitar).\n"
 )
 
 # Palavras que indicam pedido de criar/editar codigo ou executar algo (usa o prompt completo).
@@ -1771,6 +1780,21 @@ def audit_unfinished(base: Path) -> list[str]:
     if crud_intent and renders and not persists:
         issues.append("o app cadastra/edita dados mas NAO persiste (sem localStorage nem banco) — "
                       "perde tudo ao recarregar a pagina; salve e carregue do localStorage.")
+    # LOGIN SEM SAIDA: ha campo de senha (gate) mas o JS nunca esconde/mostra secao nem redireciona ->
+    # o usuario clica 'Entrar' e nao sai da tela de login (bug que mais irrita).
+    allhtml = ""
+    for h in htmls:
+        try:
+            allhtml += "\n" + h.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+    tem_login = bool(re.search(r'type\s*=\s*["\']password["\']', allhtml, re.I))
+    revela = bool(re.search(r"\.style\.display|classlist\.(?:add|remove|toggle)|\.hidden\s*=|"
+                           r"removeattribute\(['\"]hidden|location\.(?:href|replace|assign)|"
+                           r"window\.location", alljs, re.I))
+    if tem_login and not revela:
+        issues.append("tem tela de LOGIN mas o botao Entrar nao leva a lugar nenhum (o JS nao esconde o "
+                      "login nem mostra o app/redireciona) — usuario fica preso. Faca o login revelar o app.")
     seen, out = set(), []
     for i in issues:
         if i not in seen:
