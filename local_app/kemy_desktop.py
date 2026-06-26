@@ -154,6 +154,26 @@ def proc_quiet(**extra) -> dict:
     return kw
 
 
+_SINGLETON_HANDLE = None
+
+
+def single_instance_ok() -> bool:
+    """True se somos a unica Kemy aberta; False se ja existe outra rodando.
+    Evita 2 instancias brigando por portas/WebView2 (causa de travar no boot)."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        h = ctypes.windll.kernel32.CreateMutexW(None, False, "KemyDesktopSingletonMutex")
+        if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
+            return False
+        global _SINGLETON_HANDLE
+        _SINGLETON_HANDLE = h   # mantem o handle vivo enquanto o app roda
+        return True
+    except Exception:
+        return True
+
+
 def cleanup_update_leftovers() -> None:
     """Remove pastas residuais de updates (kemy_old_* / kemy_new_*) ao lado do app."""
     try:
@@ -9128,32 +9148,33 @@ def run_webview(host: str, port: int) -> bool:
         if getattr(api, "_companion_done", False):
             return
         api._companion_done = True
-        # Mascote flutuante no desktop: janela transparente, sem moldura, sempre no topo,
-        # carregando a MESMA pagina do avatar (sincroniza fala). Criada UMA vez, apos a
-        # janela principal carregar (evita o conflito de 2 janelas WebView2 no boot).
-        url = api.obs_url()
-        if url and os.environ.get("KEMY_PET", "1") != "0":
-            mw, mh = 280, 340
-            mx, my = _corner_pos(mw, mh)
-            pet = None
-            # Tenta transparente; se o WebView2 nao suportar (erro), refaz SEM transparencia
-            # pra pelo menos abrir a janela do mascote.
-            for kw in ({"transparent": True}, {"background_color": "#070a12"}):
-                try:
-                    pet = webview.create_window(
-                        "Kemy", url=url + "?nolabel=1",
-                        width=mw, height=mh, x=mx, y=my,
-                        frameless=True, easy_drag=True, on_top=True, **kw)
-                    break
-                except Exception:
-                    pet = None
-                    continue
-            api.pet_win = pet
-            api._pet_visible = bool(pet)
+        # Bandeja primeiro (leve e seguro).
         try:
             _start_tray(api, win)
         except Exception:
             pass
+        # Mascote flutuante: 2a janela WebView2 -> criada com ATRASO, num thread, DEPOIS da
+        # principal estabilizar (criar 2 WebView2 ao mesmo tempo no boot e a causa de travar).
+        url = api.obs_url()
+        if url and os.environ.get("KEMY_PET", "1") != "0":
+            def _make_pet():
+                time.sleep(3.5)
+                mw, mh = 280, 340
+                mx, my = _corner_pos(mw, mh)
+                pet = None
+                for kw in ({"transparent": True}, {"background_color": "#070a12"}):
+                    try:
+                        pet = webview.create_window(
+                            "Kemy", url=url + "?nolabel=1",
+                            width=mw, height=mh, x=mx, y=my,
+                            frameless=True, easy_drag=True, on_top=True, **kw)
+                        break
+                    except Exception:
+                        pet = None
+                        continue
+                api.pet_win = pet
+                api._pet_visible = bool(pet)
+            threading.Thread(target=_make_pet, daemon=True).start()
 
     try:
         win.events.loaded += lambda: _setup_companion()
@@ -9236,6 +9257,9 @@ def main() -> int:
         run_server(args.host, args.port)
         return 0
     os.chdir(ROOT_DIR)
+    # Instancia unica: se ja ha uma Kemy aberta, nao abre outra (2 instancias travam o boot).
+    if not args.classic and not single_instance_ok():
+        return 0
     cleanup_update_leftovers()
     # Propaga o .env (incl. voz: KEMY_VOICE/KEMY_ELEVENLABS_*) pro os.environ — sem isso o
     # Speaker nao via a voz personalizada configurada no .env.
