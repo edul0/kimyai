@@ -8896,6 +8896,29 @@ class WebApi:
     def check_update(self) -> None:
         threading.Thread(target=self._do_update, daemon=True).start()
 
+    def _kill_children(self) -> None:
+        """Encerra processos-filho (servidores dev, Node/Minecraft, voz) pra LIBERAR os arquivos
+        da pasta antes da troca da atualizacao — senao o move falha e volta a versao antiga."""
+        self._quitting = True
+        try:
+            self.speaker.stop()
+        except Exception:
+            pass
+        for p in list(getattr(self, "_servers", []) or []):
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        try:
+            if getattr(self, "_mc_proc", None):
+                self._mc_proc.terminate()
+        except Exception:
+            pass
+        try:
+            self._cu_stop = True; self._game_stop = True; self._sd_stop = True
+        except Exception:
+            pass
+
     def _do_update(self) -> None:
         try:
             req = urllib.request.Request(RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "KemyDesktop"})
@@ -8946,21 +8969,35 @@ class WebApi:
             self._msg("sys", "🔄 Trocando para a versao nova e reiniciando…", store=False)
             app = str(EXE_DIR)
             exe = str(EXE_DIR / "KemyDesktop.exe")
+            pid = os.getpid()
             bat = Path(tempfile.gettempdir()) / f"kemy_update_{token}.bat"
-            # Troca de pasta inteira (atomica). Se nao conseguir mover a pasta atual (arquivo
-            # travado), reabre a versao ATUAL intacta em vez de deixar quebrada.
+            # Libera os arquivos ANTES da troca (mata os processos-filho que travam a pasta).
+            try:
+                self._kill_children()
+            except Exception:
+                pass
+            # Troca atomica da pasta. Mata o exe/WebView2 (liberam handles) e TENTA MOVER varias
+            # vezes; so cai no fallback (reabrir a atual) se realmente nao conseguir.
             script = (
                 "@echo off\r\n"
-                "timeout /t 3 /nobreak >nul\r\n"
-                f'move "{app}" "{old_dir}" >nul 2>&1\r\n'
-                f'if exist "{app}" ( timeout /t 2 /nobreak >nul & move "{app}" "{old_dir}" >nul 2>&1 )\r\n'
-                f'if exist "{app}" ( timeout /t 3 /nobreak >nul & move "{app}" "{old_dir}" >nul 2>&1 )\r\n'
-                f'if exist "{app}" goto fallback\r\n'
+                "setlocal enabledelayedexpansion\r\n"
+                "timeout /t 2 /nobreak >nul\r\n"
+                f'taskkill /f /pid {pid} >nul 2>&1\r\n'
+                'taskkill /f /im KemyDesktop.exe >nul 2>&1\r\n'
+                'taskkill /f /im msedgewebview2.exe >nul 2>&1\r\n'
+                "timeout /t 2 /nobreak >nul\r\n"
+                "set moved=0\r\n"
+                "for /l %%i in (1,1,8) do (\r\n"
+                "  if !moved!==0 (\r\n"
+                f'    move "{app}" "{old_dir}" >nul 2>&1\r\n'
+                f'    if not exist "{app}" set moved=1\r\n'
+                "    if !moved!==0 timeout /t 2 /nobreak >nul\r\n"
+                "  )\r\n"
+                ")\r\n"
+                "if !moved!==0 goto fallback\r\n"
                 f'move "{new_dir}" "{app}" >nul 2>&1\r\n'
                 f'start "" "{exe}"\r\n'
                 f'rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
-                f'if exist "{old_dir}" ( timeout /t 2 /nobreak >nul & rmdir /s /q "{old_dir}" >nul 2>&1 )\r\n'
-                f'if exist "{old_dir}" ( timeout /t 3 /nobreak >nul & rmdir /s /q "{old_dir}" >nul 2>&1 )\r\n'
                 'del "%~f0"\r\n'
                 'goto :eof\r\n'
                 ':fallback\r\n'
