@@ -8248,8 +8248,10 @@ class WebApi:
             if "<html" not in t.lower():
                 continue
             orig = t
-            if "<html" in t and "lang=" not in t.split(">", 1)[0]:
-                t = re.sub(r"<html\b", "<html lang=\"pt-BR\"", t, count=1)
+            # Olha a TAG <html ...> de verdade (nao o <!DOCTYPE>, que era o bug do lang triplicado).
+            mh = re.search(r"<html\b([^>]*)>", t, re.IGNORECASE)
+            if mh and "lang=" not in mh.group(1).lower():
+                t = t[:mh.start()] + '<html lang="pt-BR"' + mh.group(1) + ">" + t[mh.end():]
             if "charset" not in t.lower() and "<head" in t.lower():
                 t = re.sub(r"(<head[^>]*>)", r"\1\n  <meta charset=\"utf-8\">", t, count=1, flags=re.IGNORECASE)
             if "viewport" not in t.lower() and "<head" in t.lower():
