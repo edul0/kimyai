@@ -5135,13 +5135,19 @@ class WebApi:
 
     def _cloud_loop(self) -> None:
         """Sincronia em TEMPO REAL: a cada poucos segundos, envia se o local mudou e puxa se a
-        nuvem mudou (detecta por updated_at, sem desperdicio). Silencioso."""
-        if not self._cloud_enabled():
-            return
+        nuvem mudou (detecta por updated_at, sem desperdicio). Silencioso. Espera as chaves
+        aparecerem (se forem configuradas depois de abrir o app)."""
         self._cloud_pushed_hash = ""
         self._cloud_remote_ts = None
-        self.cloud_sync(announce=False)   # primeira sincronia completa
+        did_initial = False
         while not self._quitting:
+            if not self._cloud_enabled():
+                did_initial = False        # se desligar/trocar, refaz a sincronia completa depois
+                time.sleep(8)
+                continue
+            if not did_initial:
+                self.cloud_sync(announce=False)   # primeira sincronia completa ao ligar
+                did_initial = True
             time.sleep(5)
             if not self._cloud_enabled():
                 continue
