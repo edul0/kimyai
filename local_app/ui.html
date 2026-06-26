@@ -202,8 +202,16 @@
   .idefile:hover{background:#1b2129}
   .idefile.sel{background:#1f6feb33;color:#fff}
   .idemain{flex:1;display:flex;flex-direction:column;min-width:0}
-  .idetitle{padding:8px 14px;border-bottom:1px solid var(--line);color:#8b949e;font-size:13px;font-family:Consolas,monospace}
-  .idepre{flex:1;overflow:auto;padding:8px 0;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.5}
+  .idetitlebar{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);background:#0f141b}
+  .idetitle{flex:1;color:#8b949e;font-size:13px;font-family:Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .idebtn{background:#21262d;border:1px solid #30363d;color:#e6edf3;font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .idebtn:hover{background:#2a313a}
+  .idebtn.save{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .idebtn.save:hover{background:#3b82f6}
+  .idebtn.save:disabled{opacity:.5;cursor:default}
+  #ideEditor{flex:1;width:100%;box-sizing:border-box;border:0;outline:none;resize:none;background:#0d1117;color:#d6deeb;
+    font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.55;padding:12px 14px;tab-size:2;white-space:pre;overflow:auto}
+  .idehint{padding:4px 14px;font-size:11.5px;color:#6b7480;border-top:1px solid var(--line);background:#0f141b}
   .cline{display:flex}
   .cn{width:50px;flex:none;text-align:right;padding-right:14px;color:#4d5566;user-select:none}
   .cc{white-space:pre;color:#d6deeb}
@@ -349,7 +357,15 @@
       <div class="idehead"><span>🗂️ Código do projeto</span><button onclick="closeIde()">✕</button></div>
       <div class="idebody">
         <div class="idefiles" id="ideFiles"></div>
-        <div class="idemain"><div class="idetitle" id="ideTitle">selecione um arquivo</div><div class="idepre" id="ideContent"></div></div>
+        <div class="idemain">
+          <div class="idetitlebar">
+            <span class="idetitle" id="ideTitle">selecione um arquivo</span>
+            <button class="idebtn" id="ideCopy" onclick="copyCode()">📋 Copiar tudo</button>
+            <button class="idebtn save" id="ideSave" onclick="saveCode()" disabled>💾 Salvar</button>
+          </div>
+          <textarea id="ideEditor" spellcheck="false" placeholder="selecione um arquivo à esquerda"></textarea>
+          <div class="idehint" id="ideHint">Você pode editar aqui e clicar em Salvar — a Kemy lê a sua versão.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -576,22 +592,47 @@
     document.getElementById('ideModal').style.display='flex';
     if(list&&list.length){ box.firstChild.classList.add('sel'); viewProjectFile(list[0].path); }
   }
+  var _ideRel="", _ideSaved="";
   function viewProjectFile(rel){
     if(!(window.pywebview&&pywebview.api&&pywebview.api.read_project_file))return;
     pywebview.api.read_project_file(rel).then(function(v){
       if(!v||!v.path)return;
+      _ideRel=v.path; _ideSaved=v.content||"";
       document.getElementById('ideTitle').textContent=v.path;
-      var pre=document.getElementById('ideContent'); pre.innerHTML='';
-      (v.content||'').split('\n').forEach(function(ln,i){
-        var row=document.createElement('div'); row.className='cline';
-        var n=document.createElement('span'); n.className='cn'; n.textContent=(i+1);
-        var c=document.createElement('span'); c.className='cc'; c.textContent=(ln!==''?ln:' ');
-        row.appendChild(n); row.appendChild(c); pre.appendChild(row);
-      });
-      pre.scrollTop=0;
+      var ed=document.getElementById('ideEditor'); ed.value=_ideSaved; ed.scrollTop=0;
+      _ideDirty(false);
+    });
+  }
+  function _ideDirty(on){ var b=document.getElementById('ideSave');
+    b.disabled=!on; b.textContent=on?'💾 Salvar *':'💾 Salvar'; }
+  function copyCode(){
+    var ed=document.getElementById('ideEditor');
+    var done=function(){ var b=document.getElementById('ideCopy'); var o=b.textContent;
+      b.textContent='✅ Copiado!'; setTimeout(function(){b.textContent=o;},1400); };
+    try{ navigator.clipboard.writeText(ed.value).then(done,function(){ ed.select(); document.execCommand('copy'); done(); }); }
+    catch(e){ ed.select(); document.execCommand('copy'); done(); }
+  }
+  function saveCode(){
+    if(!_ideRel)return;
+    var ed=document.getElementById('ideEditor');
+    if(!(window.pywebview&&pywebview.api&&pywebview.api.write_project_file))return;
+    pywebview.api.write_project_file(_ideRel, ed.value).then(function(r){
+      if(r&&r.ok){ _ideSaved=ed.value; _ideDirty(false);
+        var h=document.getElementById('ideHint'); h.textContent='✅ Salvo! A Kemy já vê a sua versão.';
+        setTimeout(function(){h.textContent='Você pode editar aqui e clicar em Salvar — a Kemy lê a sua versão.';},2500);
+      } else { document.getElementById('ideHint').textContent='⚠ Não consegui salvar: '+((r&&r.error)||'erro'); }
     });
   }
   function closeIde(){ document.getElementById('ideModal').style.display='none'; }
+  (function(){ var ed=document.getElementById('ideEditor'); if(!ed)return;
+    ed.addEventListener('input',function(){ _ideDirty(ed.value!==_ideSaved); });
+    ed.addEventListener('keydown',function(e){
+      if((e.ctrlKey||e.metaKey)&&String(e.key).toLowerCase()==='s'){ e.preventDefault(); saveCode(); return; }
+      if(e.key==='Tab'){ e.preventDefault(); var s=ed.selectionStart,en=ed.selectionEnd;
+        ed.value=ed.value.slice(0,s)+'  '+ed.value.slice(en); ed.selectionStart=ed.selectionEnd=s+2;
+        _ideDirty(ed.value!==_ideSaved); }
+    });
+  })();
   var _pvUrl="";
   function showPreview(url){ _pvUrl=url; document.getElementById('pvFrame').src=url;
     document.getElementById('previewModal').style.display='flex'; }

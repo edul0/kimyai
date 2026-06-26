@@ -8812,6 +8812,27 @@ class WebApi:
         except Exception:
             return {}
 
+    def write_project_file(self, rel: str, content: str) -> dict:
+        """Salva a edição do usuário no arquivo do projeto (editor estilo Antigravity).
+        A Kemy passa a ler a SUA versão. Protegido contra sair da pasta do projeto."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        try:
+            p = (base / rel).resolve()
+            if base.resolve() not in p.parents and p != base.resolve():
+                return {"ok": False, "error": "caminho inválido"}
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
+            self._msg("sys", f"💾 Você editou {rel} — salvei e já estou lendo a sua versão.", store=False)
+            # foto no git pra dar pra desfazer a edição manual também
+            try:
+                self._git_snapshot(base, f"voce editou {rel}")
+            except Exception:
+                pass
+            return {"ok": True, "path": rel}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def _maybe_run(self, commands: list[str], base: Path) -> None:
         if not commands:
             return
