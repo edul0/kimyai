@@ -4329,6 +4329,8 @@ class WebApi:
         self._mobile_port = None
         self._mobile_pin = ""
         self._mobile_lock = threading.Lock()
+        self._cloud_pushed_hash = ""
+        self._cloud_remote_ts = None
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -5064,39 +5066,58 @@ class WebApi:
         return {"memories": self.memories, "skills": self.skills, "knowledge": self.knowledge,
                 "instructions": self.instructions, "reminders": self.reminders}
 
+    def _payload_hash(self) -> str:
+        try:
+            return str(hash(json.dumps(self._local_payload(), sort_keys=True, ensure_ascii=False)))
+        except Exception:
+            return ""
+
+    def _cloud_merge(self, remote: dict) -> None:
+        """Mescla a nuvem no local (union sem duplicar) e salva."""
+        remote = remote or {}
+        self.memories = self._union(remote.get("memories"), self.memories)[-3000:]
+        self.skills = self._union(remote.get("skills"), self.skills)[-2000:]
+        self.knowledge = self._union(remote.get("knowledge"), self.knowledge)[-20000:]
+        self.reminders = self._union(remote.get("reminders"), self.reminders)[-200:]
+        ri = remote.get("instructions") or ""
+        if len(ri) > len(self.instructions or ""):
+            self.instructions = ri
+        save_memorias(self.memories); save_skills(self.skills)
+        save_conhecimento(self.knowledge); save_reminders(self.reminders)
+        save_instructions(self.instructions)
+
+    def _cloud_push(self) -> None:
+        """Envia o estado local pra nuvem (upsert) e marca o que foi enviado."""
+        rep = self._sb_req("POST", "kemy_sync", [{"id": "me", "data": self._local_payload()}],
+                           prefer="resolution=merge-duplicates,return=representation")
+        self._cloud_pushed_hash = self._payload_hash()
+        try:
+            if rep and isinstance(rep, list) and rep:
+                self._cloud_remote_ts = rep[0].get("updated_at")   # nao re-puxa o proprio envio
+        except Exception:
+            pass
+
     def cloud_sync(self, announce: bool = True) -> bool:
-        """Puxa da nuvem + mescla + salva local, depois envia o resultado (merge bidirecional)."""
+        """Sincronia bidirecional: puxa+mescla da nuvem e envia o local. Usado no botao e no loop."""
         if not self._cloud_enabled():
             if announce:
                 self._msg("sys", "Pra sincronizar na nuvem, configura SUPABASE_URL e SUPABASE_ANON_KEY "
-                          "em Configurações → Banco/Deploy (grátis). Depois rode o SQL que está no menu.", store=False)
+                          "em Configurações → Banco/Deploy (grátis). Depois rode o SQL do menu.", store=False)
             return False
         try:
             remote = {}
             try:
-                rows = self._sb_req("GET", "kemy_sync?id=eq.me&select=data")
+                rows = self._sb_req("GET", "kemy_sync?id=eq.me&select=data,updated_at")
                 if rows and isinstance(rows, list) and rows:
                     remote = rows[0].get("data") or {}
+                    self._cloud_remote_ts = rows[0].get("updated_at")
             except Exception:
                 remote = {}
-            # mescla nuvem + local (sem perder nada)
-            self.memories = self._union(remote.get("memories"), self.memories)[-3000:]
-            self.skills = self._union(remote.get("skills"), self.skills)[-2000:]
-            self.knowledge = self._union(remote.get("knowledge"), self.knowledge)[-20000:]
-            self.reminders = self._union(remote.get("reminders"), self.reminders)[-200:]
-            ri = remote.get("instructions") or ""
-            if len(ri) > len(self.instructions or ""):
-                self.instructions = ri
-            # salva local
-            save_memorias(self.memories); save_skills(self.skills)
-            save_conhecimento(self.knowledge); save_reminders(self.reminders)
-            save_instructions(self.instructions)
-            # envia o resultado mesclado (upsert)
-            self._sb_req("POST", "kemy_sync", [{"id": "me", "data": self._local_payload()}],
-                         prefer="resolution=merge-duplicates")
+            self._cloud_merge(remote)
+            self._cloud_push()
             if announce:
-                self._msg("kemy", "☁️ Sincronizei tudo com a nuvem — memória, habilidades, conhecimento e agenda "
-                          "estão salvos e iguais em todos os seus aparelhos.")
+                self._msg("kemy", "☁️ Sincronizado! Memória, habilidades, conhecimento e agenda salvos na nuvem "
+                          "e iguais em todos os seus aparelhos — agora em tempo real.")
             return True
         except Exception as e:
             if announce:
@@ -5113,15 +5134,28 @@ class WebApi:
                   "seu projeto Supabase (1x):\n\n" + sql + "\n\nDepois é só usar normal — eu sincronizo sozinha.")
 
     def _cloud_loop(self) -> None:
-        """Sincroniza ao iniciar e a cada ~10 min (silencioso)."""
+        """Sincronia em TEMPO REAL: a cada poucos segundos, envia se o local mudou e puxa se a
+        nuvem mudou (detecta por updated_at, sem desperdicio). Silencioso."""
         if not self._cloud_enabled():
             return
-        self.cloud_sync(announce=False)
+        self._cloud_pushed_hash = ""
+        self._cloud_remote_ts = None
+        self.cloud_sync(announce=False)   # primeira sincronia completa
         while not self._quitting:
-            time.sleep(600)
+            time.sleep(5)
+            if not self._cloud_enabled():
+                continue
             try:
-                if self._cloud_enabled():
-                    self.cloud_sync(announce=False)
+                # 1) PUXA se a nuvem mudou (outro aparelho alterou)
+                rows = self._sb_req("GET", "kemy_sync?id=eq.me&select=data,updated_at")
+                if rows and isinstance(rows, list) and rows:
+                    rt = rows[0].get("updated_at")
+                    if rt and rt != self._cloud_remote_ts:
+                        self._cloud_merge(rows[0].get("data") or {})
+                        self._cloud_remote_ts = rt
+                # 2) ENVIA se o local mudou (na hora)
+                if self._payload_hash() != getattr(self, "_cloud_pushed_hash", ""):
+                    self._cloud_push()
             except Exception:
                 pass
 
