@@ -7853,6 +7853,18 @@ class WebApi:
             self._agent_approach = self._deliberate(text)
         except Exception:
             pass
+        # ERP/painel/sistema SEM stack pedido -> client-side (1 index.html + JS + localStorage):
+        # previewável na hora e funciona sem servidor. Evita o backend que não abre preview.
+        tl = (text or "").lower()
+        quis_backend = any(k in tl for k in ("backend", "flask", "django", "fastapi", "node", "php",
+                                             "sql", "postgres", "mysql", "api rest", "servidor"))
+        app_like = any(k in tl for k in ("erp", "sistema", "painel", "admin", "crud", "dashboard",
+                                         "gestao", "gestão", "estoque", "vendas", "financeiro", "loja", "app"))
+        if app_like and not quis_backend:
+            self._agent_approach = ("REGRA FIXA: entregue CLIENT-SIDE — um único index.html na RAIZ do projeto "
+                                    "(+ css/js + dados no localStorage), SEM backend/servidor. Tudo tem que abrir "
+                                    "e funcionar só abrindo o index.html. NÃO crie pastas backend/frontend nem "
+                                    "Flask/Django.\n" + (self._agent_approach or ""))
         plan = self._agent_plan(text) or ["Montar o projeto", "Implementar as funcionalidades",
                                           "Rodar e corrigir", "Entregar funcionando"]
         # garante uma etapa final de verificacao/entrega
@@ -7897,9 +7909,20 @@ class WebApi:
         except Exception:
             pass
         self._panel_done()
-        self._open_preview(base)
-        resumo = "\n".join(notes[:6])
-        return f"✅ Entreguei! Trabalhei em {len(plan)} etapas:\n{resumo}\n\nDá uma olhada — me diz se quer ajustar algo."
+        abriu = self._open_preview(base)
+        # Resumo LIMPO (nao despeja o raciocinio): lista o que foi entregue de verdade.
+        try:
+            tops = sorted({p.relative_to(base).parts[0] for p in base.rglob("*")
+                           if p.is_file() and "node_modules" not in str(p) and ".git" not in str(p)})
+            nfiles = sum(1 for p in base.rglob("*") if p.is_file()
+                         and "node_modules" not in str(p) and ".git" not in str(p))
+        except Exception:
+            tops, nfiles = [], 0
+        estrutura = (" — " + ", ".join(tops[:10])) if tops else ""
+        fim = ("Abri o preview pra você ver 👀" if abriu else
+               "Não consegui abrir um preview automático (esse projeto precisa de servidor/backend — "
+               "me diz se quer que eu rode).")
+        return f"✅ Pronto! Montei o projeto ({nfiles} arquivo(s){estrutura}). {fim}\nMe diz se quer ajustar algo."
 
     def _maybe_make_pdf(self, base: Path, text: str, files: list) -> None:
         """Se o usuario pediu PDF, converte o HTML gerado (documento/relatorio) em PDF."""
@@ -8307,14 +8330,30 @@ class WebApi:
             return "node", base / "package.json"
         return None, None
 
-    def _open_preview(self, base: Path) -> None:
-        """Preview inteligente: site estatico abre no navegador; projeto backend
-        (Django/Flask/FastAPI/Node) SOBE O SERVIDOR e abre o localhost — nunca abre
-        um template cru (que mostraria {% %} na tela)."""
-        kind, target = self._detect_backend(base)
+    def _find_index(self, base: Path):
+        """Acha o index.html: na raiz, ou em subpastas comuns de frontend (frontend/public/dist…)."""
         idx = base / "index.html"
+        if idx.exists():
+            return idx
+        for sub in ("frontend", "public", "dist", "build", "web", "site", "app", "client", "src", "static"):
+            cand = base / sub / "index.html"
+            if cand.exists():
+                return cand
+        try:   # ultima tentativa: qualquer index.html no projeto (ignora libs)
+            for p in base.rglob("index.html"):
+                if "node_modules" not in str(p) and ".git" not in str(p):
+                    return p
+        except Exception:
+            pass
+        return None
+
+    def _open_preview(self, base: Path) -> bool:
+        """Preview inteligente: site estatico abre no navegador (acha index.html ate em subpasta);
+        projeto backend (Django/Flask/FastAPI/Node) SOBE O SERVIDOR. Retorna True se abriu algo."""
+        kind, target = self._detect_backend(base)
+        idx = self._find_index(base)
         # Site estatico: serve por http://127.0.0.1 (fetch/modulos/caminhos funcionam; file:// nao).
-        if not kind and idx.exists():
+        if not kind and idx is not None and idx.exists():
             try:
                 txt = idx.read_text(encoding="utf-8", errors="ignore")
             except Exception:
@@ -8322,8 +8361,9 @@ class WebApi:
             if "{%" in txt or "{{" in txt:
                 self._msg("sys", "Esse index.html é um template (tem {% %}). Precisa de um servidor "
                           "pra renderizar — me diga o framework ou rode o servidor do projeto.", store=False)
-                return
-            self._preview_dir = str(base)
+                return False
+            servedir = idx.parent           # serve a pasta onde o index esta (raiz OU frontend/)
+            self._preview_dir = str(servedir)
             self._preview_errors = []
             port = getattr(self, "_preview_port", None)
             if port:
@@ -8331,21 +8371,22 @@ class WebApi:
                 try:
                     webbrowser.open(url)
                     self._msg("sys", f"Preview aberto: {url}", store=False)
-                    threading.Thread(target=self._watch_preview_errors, args=(base,), daemon=True).start()
-                    return
+                    threading.Thread(target=self._watch_preview_errors, args=(servedir,), daemon=True).start()
+                    return True
                 except Exception:
                     pass
-            # fallback file:// se o servidor nao subiu
             try:
-                webbrowser.open(idx.as_uri())
+                webbrowser.open(idx.as_uri()); return True
             except Exception:
                 try:
-                    subprocess.Popen(f'start "" "{idx}"', shell=True)
+                    subprocess.Popen(f'start "" "{idx}"', shell=True); return True
                 except Exception:
                     pass
-            return
+            return False
         if kind:
             threading.Thread(target=self._serve_project, args=(base, kind, target), daemon=True).start()
+            return True
+        return False
 
     def _watch_preview_errors(self, base: Path) -> None:
         """Espera o app rodar no navegador; se der ERRO de JS de verdade, corrige sozinha."""
