@@ -7303,6 +7303,7 @@ class WebApi:
             self._run_and_fix(base, text)                # 4) Roda-e-corrige (Python)
         self._localize_images(base)
         self._ensure_scripts_linked(base)                # garante que app.js/css carreguem no index
+        self._heal_asset_names(base)                      # conserta styles.css vs style.css etc.
         self._polish_html(base)                          # charset/viewport/lang/title (qualidade/SEO/a11y)
         # Verifica o app web: erro de sintaxe no JS (quebra tudo) + botao morto -> conserta.
         try:
@@ -7903,6 +7904,7 @@ class WebApi:
         self._sanitize_python(base)
         self._localize_images(base)
         self._ensure_scripts_linked(base)
+        self._heal_asset_names(base)                      # conserta styles.css vs style.css etc.
         self._polish_html(base)
         try:
             leaks = self._scan_secrets(base)
@@ -8565,6 +8567,40 @@ class WebApi:
         if files:
             self._save(files, base)
         return bool(files or edits)
+
+    def _heal_asset_names(self, base: Path) -> None:
+        """Conserta nome de asset quase igual: ex. o HTML pede 'styles.css' mas o arquivo e
+        'style.css' -> o CSS/JS nao carrega e o app parece quebrado. Cria o arquivo com o
+        nome referenciado a partir do parecido. Deterministico, alta precisao."""
+        import difflib
+        try:
+            htmls = [p for p in base.rglob("*.html") if "node_modules" not in str(p)][:20]
+        except Exception:
+            return
+        rx = re.compile(r'(?:src|href)\s*=\s*["\']([^"\'>?#]+\.(?:js|css))["\']', re.I)
+        existing = {p.name: p for p in base.rglob("*")
+                    if p.is_file() and p.suffix.lower() in (".js", ".css") and "node_modules" not in str(p)}
+        for h in htmls:
+            try:
+                t = h.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            for ref in set(rx.findall(t)):
+                low = ref.strip()
+                if low.startswith(("http://", "https://", "//", "data:")):
+                    continue
+                name = low.split("/")[-1].split("?")[0]
+                if (h.parent / name).exists() or (base / name).exists():
+                    continue
+                cand = difflib.get_close_matches(name, list(existing.keys()), n=1, cutoff=0.82)
+                if cand:
+                    try:
+                        (h.parent / name).write_text(
+                            existing[cand[0]].read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+                        self._msg("sys", f"🔧 Corrigi um nome de arquivo: o HTML pedia '{name}' mas existia "
+                                  f"'{cand[0]}'. Criei '{name}' — era isso que quebrava o CSS/JS.", store=False)
+                    except Exception:
+                        pass
 
     def _audit_missing_assets(self, base: Path) -> list:
         """Acha referencias no HTML (src/href) a arquivos LOCAIS que NAO existem (ex.: app.js
