@@ -9171,33 +9171,30 @@ def run_webview(host: str, port: int) -> bool:
         if getattr(api, "_companion_done", False):
             return
         api._companion_done = True
-        # Bandeja primeiro (leve e seguro).
+        # SO a bandeja (icone) — leve e seguro, roda na propria thread.
+        # O mascote flutuante (2a janela WebView2) foi DESLIGADO do boot: criar 2 janelas
+        # WebView2 (na thread da GUI OU fora dela) era a causa do "Nao esta respondendo".
+        # O avatar continua na janela principal; o overlay do OBS continua via navegador.
+        # Quem quiser o mascote pode ligar com a variavel KEMY_PET=1 (criado na thread da GUI).
         try:
             _start_tray(api, win)
         except Exception:
             pass
-        # Mascote flutuante: 2a janela WebView2 -> criada com ATRASO, num thread, DEPOIS da
-        # principal estabilizar (criar 2 WebView2 ao mesmo tempo no boot e a causa de travar).
-        url = api.obs_url()
-        if url and os.environ.get("KEMY_PET", "1") != "0":
-            def _make_pet():
-                time.sleep(3.5)
+        if os.environ.get("KEMY_PET", "0") == "1":
+            url = api.obs_url()
+            if url:
                 mw, mh = 280, 340
                 mx, my = _corner_pos(mw, mh)
-                pet = None
                 for kw in ({"transparent": True}, {"background_color": "#070a12"}):
                     try:
-                        pet = webview.create_window(
-                            "Kemy", url=url + "?nolabel=1",
-                            width=mw, height=mh, x=mx, y=my,
+                        api.pet_win = webview.create_window(
+                            "Kemy", url=url + "?nolabel=1", width=mw, height=mh, x=mx, y=my,
                             frameless=True, easy_drag=True, on_top=True, **kw)
+                        api._pet_visible = True
                         break
                     except Exception:
-                        pet = None
+                        api.pet_win = None
                         continue
-                api.pet_win = pet
-                api._pet_visible = bool(pet)
-            threading.Thread(target=_make_pet, daemon=True).start()
 
     try:
         win.events.loaded += lambda: _setup_companion()
