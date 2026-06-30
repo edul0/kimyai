@@ -3082,6 +3082,19 @@ class Listener:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def listen_text(self, timeout: float = 6, phrase_limit: float = 8) -> str:
+        """Escuta SÍNCRONA: ouve uma fala e devolve o texto (ou '' se nada). Usado pelo wake word."""
+        if not (self.available and self._mic_ok):
+            return ""
+        try:
+            import speech_recognition as sr
+            with sr.Microphone() as source:
+                self._recognizer.adjust_for_ambient_noise(source, duration=0.15)
+                audio = self._recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
+            return self._recognizer.recognize_google(audio, language="pt-BR") or ""
+        except Exception:
+            return ""
+
 
 # --------------------------------------------------------------------------- #
 # App
@@ -4351,6 +4364,7 @@ class WebApi:
         self._mobile_lock = threading.Lock()
         self._cloud_pushed_hash = ""
         self._cloud_remote_ts = None
+        self.wake_on = False        # wake word "Ei Kemy" (escuta hands-free)
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -5246,6 +5260,7 @@ class WebApi:
             self.continuous = not self.continuous
             self._js(f"setToggle('conv',{json.dumps(self.continuous)})")
             if self.continuous:
+                self.wake_on = False   # exclusivo com o wake word (ambos usam o mic)
                 self._msg("sys", "💬 Modo Conversa ligado: pode falar! Eu escuto, respondo e volto a escutar sozinha.", store=False)
                 if self.connected and not self.busy:
                     self.listen()
@@ -6390,6 +6405,45 @@ class WebApi:
             on_text=lambda t: self._handle(t),
             on_error=self._on_listen_error,
         )
+
+    def toggle_wake(self) -> None:
+        """Liga/desliga o wake word 'Ei Kemy' (escuta hands-free em segundo plano)."""
+        if not self.listener.available:
+            self._msg("sys", "🎤 Microfone indisponível neste PC — não dá pra usar o 'Ei Kemy'.", store=False)
+            return
+        self.wake_on = not self.wake_on
+        if self.wake_on:
+            self.continuous = False   # exclusivo com o modo Conversa (os dois usam o mic)
+            self._js("setToggle('conv',false)")
+            self._msg("kemy", "👂 Pronto! Agora é só dizer \"Ei Kemy\" e falar o que quiser — tô te ouvindo "
+                      "mesmo minimizada.")
+            threading.Thread(target=self._wake_loop, daemon=True).start()
+        else:
+            self._msg("sys", "Wake word desligado.", store=False)
+
+    def _wake_loop(self) -> None:
+        """Escuta em segundo plano; ao ouvir 'Kemy', trata o resto da fala como comando.
+        Tolera variações que o reconhecedor faz (kemi, kemmy, quem é…)."""
+        WAKE = ("kemy", "kemi", "kemmy", "quemy", "kem ", "quem é", "remy", "kely")
+        while not self._quitting and self.wake_on:
+            if self.busy or self._speaking or self.continuous:
+                time.sleep(0.4)
+                continue
+            txt = self.listener.listen_text(timeout=6, phrase_limit=7)
+            if not txt or not self.wake_on:
+                continue
+            low = " " + txt.lower().strip() + " "
+            hit = next((w for w in WAKE if w in low), None)
+            if not hit:
+                continue
+            # comando = o que vem depois do "kemy"
+            i = low.rfind(hit)
+            cmd = txt[max(0, i - 1 + len(hit)):].strip(" ,.!?;:")
+            if not cmd:   # só chamou o nome -> confirma e ouve o comando
+                self._say_reply("Oi! Pode falar.")
+                cmd = self.listener.listen_text(timeout=6, phrase_limit=12)
+            if cmd and cmd.strip() and not self.busy:
+                self._handle(cmd.strip())
 
     def _on_listen_error(self, e: str) -> None:
         self._state("idle")
