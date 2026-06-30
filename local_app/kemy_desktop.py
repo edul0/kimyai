@@ -6525,6 +6525,11 @@ class WebApi:
         if re.match(r"(?i)^(?:publi(?:que|car|ca)|deploy|hosped[ae]|coloca[r]? (?:no ar|online)|sobe[r]? o site|p[oõ]e[r]? (?:no ar|online)|coloca[r]? online)\b", text.strip()):
             self.deploy_site()
             return
+        # Tarefa em 2º PLANO: roda sem travar o chat e avisa quando terminar.
+        if is_build_request(text) and self._wants_background(text):
+            self._run_background(text)
+            self._state("idle")
+            return
         self.busy = True
         self._state("thinking")
         threading.Thread(target=self._process, args=(text,), daemon=True).start()
@@ -7770,6 +7775,35 @@ class WebApi:
                                    "saas", "marketplace", "aplicativo completo", "app completo"))
         return big and len(t) > 25
 
+    def _wants_background(self, text: str) -> bool:
+        t = (text or "").lower()
+        return any(k in t for k in (
+            "segundo plano", "2o plano", "2º plano", "background", "no fundo", "enquanto isso",
+            "enquanto eu", "me avisa quando", "me avise quando", "avisa quando terminar",
+            "deixa rodando", "deixe rodando", "vai fazendo", "trabalha nisso enquanto"))
+
+    def _run_background(self, text: str) -> None:
+        """Tarefa em 2º PLANO: roda o agente numa pasta dedicada SEM travar o chat (nao mexe no
+        self.busy), e AVISA quando terminar. Pode continuar usando a Kemy normalmente."""
+        token = uuid.uuid4().hex[:6]
+        bg = self.workspace_root / f"bg-{token}"
+        self._msg("kemy", "🛠️ Beleza! Vou fazer isso em segundo plano — pode continuar usando normalmente. "
+                  "Te aviso aqui quando terminar.")
+
+        def work():
+            try:
+                res = self._autonomous_agent(text, bg, background=True)
+            except Exception as e:
+                res = f"deu um erro: {e}"
+            try:
+                self._msg("kemy", "✅ Terminei a tarefa que você pediu em segundo plano!\n" + (res or "")
+                          + f"\n(arquivos em: {bg})")
+                if self.speaker.available:
+                    self.speaker.say("Terminei aquela tarefa que você pediu em segundo plano!")
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
     def _run_capture(self, cmds: list, base: Path) -> str:
         outs = []
         for cmd in cmds[:6]:
@@ -7917,11 +7951,13 @@ class WebApi:
         self._gen_graphics(extract_graphic_requests(reply), base)
         return True, out, (chat or task)[:90]
 
-    def _autonomous_agent(self, text: str, base: Path) -> str:
+    def _autonomous_agent(self, text: str, base: Path, background: bool = False) -> str:
         """Agente autônomo (objetivo → entrega) com painel ao vivo: planeja em tarefas, executa
-        uma a uma (gera, roda, corrige) e entrega o resultado pronto/rodando — estilo Manus."""
+        uma a uma (gera, roda, corrige) e entrega o resultado pronto/rodando — estilo Manus.
+        background=True: roda silencioso (sem painel/spam), pra tarefa em 2º plano."""
         base.mkdir(parents=True, exist_ok=True)
-        self._msg("kemy", "🤖 Modo agente ligado! Vou pesquisar a melhor abordagem, planejar e entregar pronto. Acompanha no painel 👇")
+        if not background:
+            self._msg("kemy", "🤖 Modo agente ligado! Vou pesquisar a melhor abordagem, planejar e entregar pronto. Acompanha no painel 👇")
         # deliberacao: pesquisa na web + debate entre modelos a melhor abordagem
         self._agent_approach = ""
         try:
@@ -7945,13 +7981,16 @@ class WebApi:
         # garante uma etapa final de verificacao/entrega
         if not any("rod" in s.lower() or "test" in s.lower() or "entreg" in s.lower() for s in plan):
             plan.append("Rodar e entregar funcionando")
-        self._panel(plan)
+        if not background:
+            self._panel(plan)
         last_output, notes = "", []
         for i, task in enumerate(plan):
-            self._panel_step(i, "doing")
-            self._msg("sys", f"🤖 {i + 1}/{len(plan)}: {task}", store=False)
+            if not background:
+                self._panel_step(i, "doing")
+                self._msg("sys", f"🤖 {i + 1}/{len(plan)}: {task}", store=False)
             ok, last_output, note = self._agent_do_task(text, task, base, plan, last_output)
-            self._panel_step(i, "done" if ok else "fail")
+            if not background:
+                self._panel_step(i, "done" if ok else "fail")
             if note:
                 notes.append(f"• {note}")
         # Entrega: garante deps/scripts e SOBE o servidor / abre o preview (com auto-fix).
@@ -7984,7 +8023,8 @@ class WebApi:
             self._git_snapshot(base, "kemy agente: " + text[:50])
         except Exception:
             pass
-        self._panel_done()
+        if not background:
+            self._panel_done()
         abriu = self._open_preview(base)
         # Resumo LIMPO (nao despeja o raciocinio): lista o que foi entregue de verdade.
         try:
