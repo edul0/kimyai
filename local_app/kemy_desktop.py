@@ -206,6 +206,30 @@ def save_memorias(mems: list) -> None:
         pass
 
 
+def telemetry_file() -> Path:
+    return config_dir() / "kemy_telemetry.jsonl"
+
+
+def log_telemetry(ev: dict) -> None:
+    """Observabilidade LOCAL (sem nuvem): registra cada chamada de IA — provedor, modelo,
+    latencia, sucesso/falha, motivo e se houve fallback. Pra a gente VER onde engasga."""
+    try:
+        ev = dict(ev)
+        ev["ts"] = round(time.time(), 1)
+        f = telemetry_file()
+        # trim barato: se passar de ~1MB, mantem as ultimas ~1500 linhas
+        try:
+            if f.exists() and f.stat().st_size > 1_000_000:
+                linhas = f.read_text(encoding="utf-8", errors="ignore").splitlines()[-1500:]
+                f.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        with f.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def reminders_file() -> Path:
     return config_dir() / "kemy_lembretes.json"
 
@@ -2211,14 +2235,19 @@ class LLMClient:
                 "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages, max_tokens)))
         if prefer:  # revisao cruzada: tenta um provedor diferente primeiro
             attempts.sort(key=lambda a: 0 if a[0] == prefer else 1)
-        for prov, model, fn in attempts:
+        for _idx, (prov, model, fn) in enumerate(attempts):
             if prov in getattr(self, "_dead_provs", set()):
                 continue
+            _t0 = time.time()
             try:
                 res = fn()
                 self._working[("fast:" if fast else "") + prov] = model
+                log_telemetry({"ev": "llm", "prov": prov, "model": model, "ok": True,
+                               "ms": int((time.time() - _t0) * 1000), "fallback": _idx > 0, "fast": fast})
                 return res
             except Exception as exc:
+                log_telemetry({"ev": "llm", "prov": prov, "model": model, "ok": False,
+                               "ms": int((time.time() - _t0) * 1000), "fast": fast, "err": str(exc)[:160]})
                 errors.append(f"{prov}/{model}: {exc}")
                 # chave invalida/proibida (401/403) -> desativa o provedor nesta sessao
                 code = getattr(exc, "code", None)
@@ -7010,6 +7039,51 @@ class WebApi:
             "mascote no desktop e tema claro/escuro.")
         self._msg("kemy", txt)
         self._state("idle")
+
+    def show_telemetry(self) -> None:
+        """Observabilidade: resume o log local de chamadas de IA — por provedor: nº de chamadas,
+        taxa de sucesso, latência média, fallbacks e o último erro. Pra VER onde engasga."""
+        try:
+            lines = telemetry_file().read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            lines = []
+        evs = []
+        for ln in lines[-3000:]:
+            try:
+                d = json.loads(ln)
+                if d.get("ev") == "llm":
+                    evs.append(d)
+            except Exception:
+                pass
+        if not evs:
+            self._msg("kemy", "Ainda não tenho dados de telemetria — use a Kemy um pouco e volte aqui. "
+                      "(Eu registro cada chamada de IA: provedor, latência, sucesso/falha e fallback.)")
+            return
+        agg = {}
+        fb = 0
+        for e in evs:
+            p = e.get("prov", "?")
+            a = agg.setdefault(p, {"n": 0, "ok": 0, "ms": 0, "msn": 0, "lasterr": ""})
+            a["n"] += 1
+            if e.get("ok"):
+                a["ok"] += 1
+                a["ms"] += e.get("ms", 0); a["msn"] += 1
+            else:
+                a["lasterr"] = e.get("err", "")
+            if e.get("ok") and e.get("fallback"):
+                fb += 1
+        linhas = [f"📊 Telemetria (últimas {len(evs)} chamadas de IA):", ""]
+        for p, a in sorted(agg.items(), key=lambda kv: -kv[1]["n"]):
+            taxa = int(100 * a["ok"] / a["n"]) if a["n"] else 0
+            avg = int(a["ms"] / a["msn"]) if a["msn"] else 0
+            linha = f"• {p}: {a['n']} cham., {taxa}% ok, {avg}ms médio"
+            if a["lasterr"]:
+                linha += f" — último erro: {a['lasterr'][:70]}"
+            linhas.append(linha)
+        linhas.append("")
+        linhas.append(f"↪️ Respostas que precisaram de fallback (1ª IA falhou): {fb}")
+        linhas.append("Quanto mais fallback num provedor, mais ele está engasgando — vale trocar a chave ou a ordem.")
+        self._msg("kemy", "\n".join(linhas))
 
     def test_providers(self) -> None:
         """Diagnostico: testa cada IA configurada e diz qual esta viva (e qual a 'inteligencia')."""
