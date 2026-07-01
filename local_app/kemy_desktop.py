@@ -7033,6 +7033,43 @@ class WebApi:
                     self._msg("sys", "🧠 Anotei essa preferência pra próxima.", store=False)
                 return
 
+    def _summary_prefix(self) -> str:
+        """Resumo da conversa atual (contexto do que ja rolou), pra nao perder o fio quando o
+        historico e cortado pela janela de contexto."""
+        it = self._cur()
+        s = (it or {}).get("summary", "") if it else ""
+        return ("RESUMO DA CONVERSA ATE AQUI (o que ja foi conversado/decidido — use como contexto):\n"
+                + s + "\n\n") if s else ""
+
+    def _maybe_summarize_convo(self) -> None:
+        """Conversa longa: resume (incremental) as mensagens antigas num resumo compacto, pra
+        caber na janela de contexto sem perder o essencial. Roda em 2o plano."""
+        it = self._cur()
+        if not it:
+            return
+        log = it.get("log") or []
+        if len(log) < 24 or (len(log) - int(it.get("sum_at", 0))) < 12:
+            return   # so resume a cada +12 mensagens novas
+        prev = it.get("summary", "")
+        novas = log[int(it.get("sum_at", 0)):-10]   # o que entrou desde o ultimo resumo (menos as 10 recentes)
+        if not novas:
+            return
+        corpo = "\n".join(("Kemy" if e.get("r") == "kemy" else "Usuario") + ": " + (e.get("t", "")[:300])
+                          for e in novas[-50:])
+        entrada = (("RESUMO ATE AGORA:\n" + prev + "\n\n") if prev else "") + "NOVAS MENSAGENS:\n" + corpo
+        try:
+            s = self.llm.chat(
+                "Voce mantem a memoria de uma conversa. Atualize o resumo com as novas mensagens, "
+                "guardando fatos, decisoes, preferencias e o contexto do que estao fazendo. Portugues, "
+                "direto, ate 12 linhas. So o resumo atualizado.",
+                [{"role": "user", "content": entrada[:6000]}], max_tokens=420, fast=True)
+            if s and len(s.strip()) > 20:
+                it["summary"] = s.strip()[:1600]
+                it["sum_at"] = len(log)
+                self._save_convos()
+        except Exception:
+            pass
+
     def _add_memory(self, frase: str) -> bool:
         """Adiciona uma lembranca EVITANDO duplicata/quase-duplicata (sobreposicao de palavras).
         Retorna True se guardou. Ex.: 'gosta de RPG' nao entra 2x, nem 'gosta de rpg e games'."""
@@ -7641,6 +7678,7 @@ class WebApi:
                 self._save_convos()
         else:
             self._msg("kemy", chat or "Feito.", save)
+        threading.Thread(target=self._maybe_summarize_convo, daemon=True).start()  # resume conversa longa
         if self.speaker.available and chat:
             self.speaker.say(chat[:600])
             self._state("speaking")
@@ -7669,6 +7707,7 @@ class WebApi:
         if build and self._wants_agent(text):
             return self._autonomous_agent(text, base), None
         mem = self._memoria_prefix(text) + self._knowledge_prefix(text)   # RAG: memoria + conhecimento relevantes
+        mem += self._summary_prefix()   # resumo da conversa longa (não perde o fio)
         if not build:
             system = mem + CHAT_PROMPT + "\n" + self._now_context() + (web or "")
             # 3 niveis pra economizar a cota do GPT-5: casual->Gemini Flash, smart->Cerebras gpt-oss-120b,
