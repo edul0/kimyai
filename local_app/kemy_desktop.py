@@ -2609,6 +2609,69 @@ def _healthcheck(url: str, timeout_seconds: float = 1.8) -> bool:
         return False
 
 
+class TaskStore:
+    """Fila de tarefas de 2º plano em SQLite (ACID) — sobrevive a crash/queda de energia.
+    Guarda o plano e QUAL passo já concluiu, pra RETOMAR de onde parou (não do zero)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = str(path)
+        try:
+            with self._c() as c:
+                c.execute("create table if not exists tasks(id text primary key, prompt text, "
+                          "folder text, plan text, step integer default 0, status text, "
+                          "created real, updated real, result text)")
+        except Exception:
+            pass
+
+    def _c(self):
+        import sqlite3
+        conn = sqlite3.connect(self.path, timeout=10)
+        conn.execute("pragma journal_mode=WAL")   # durabilidade mesmo em crash
+        return conn
+
+    def add(self, tid: str, prompt: str, folder: str) -> None:
+        try:
+            now = time.time()
+            with self._c() as c:
+                c.execute("insert or replace into tasks(id,prompt,folder,plan,step,status,created,updated,result)"
+                          " values(?,?,?,?,?,?,?,?,?)", (tid, prompt, folder, "[]", 0, "running", now, now, ""))
+        except Exception:
+            pass
+
+    def set_plan(self, tid: str, plan: list) -> None:
+        try:
+            with self._c() as c:
+                c.execute("update tasks set plan=?,updated=? where id=?",
+                          (json.dumps(plan), time.time(), tid))
+        except Exception:
+            pass
+
+    def set_step(self, tid: str, step: int) -> None:
+        try:
+            with self._c() as c:
+                c.execute("update tasks set step=?,updated=? where id=?", (step, time.time(), tid))
+        except Exception:
+            pass
+
+    def finish(self, tid: str, status: str, result: str = "") -> None:
+        try:
+            with self._c() as c:
+                c.execute("update tasks set status=?,result=?,updated=? where id=?",
+                          (status, (result or "")[:2000], time.time(), tid))
+        except Exception:
+            pass
+
+    def unfinished(self) -> list:
+        try:
+            with self._c() as c:
+                cur = c.execute("select id,prompt,folder,plan,step from tasks where status='running' "
+                                "order by updated desc")
+                return [{"id": r[0], "prompt": r[1], "folder": r[2],
+                         "plan": json.loads(r[3] or "[]"), "step": r[4]} for r in cur.fetchall()]
+        except Exception:
+            return []
+
+
 class LocalAPI:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -4431,6 +4494,7 @@ class WebApi:
         self._cloud_remote_ts = None
         self.wake_on = False        # wake word "Ei Kemy" (escuta hands-free)
         self._emb_cache = load_emb_cache()   # cache de vetores (RAG semantico)
+        self.taskdb = TaskStore(config_dir() / "kemy_tasks.db")   # fila resumivel (2o plano)
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -5274,6 +5338,7 @@ class WebApi:
             threading.Thread(target=self._proactive_loop, daemon=True).start()
             threading.Thread(target=self._reminder_loop, daemon=True).start()
             threading.Thread(target=self._cloud_loop, daemon=True).start()
+            threading.Timer(3.0, self._check_unfinished_tasks).start()   # avisa se tarefa 2º plano ficou incompleta
             return
         # online (Render)
         url = self.api.base_url
@@ -6563,6 +6628,8 @@ class WebApi:
         if self._maybe_reminder(text):   # relógio/lembrete/timer/agenda (Jarvis)
             return
         if self._maybe_tv(text):   # controle da TV (Android TV via ADB)
+            return
+        if self._maybe_resume_task(text):   # retomar tarefa de 2º plano incompleta
             return
         # No Minecraft: a fala vira ação no jogo (cérebro do bot).
         if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
@@ -7981,19 +8048,25 @@ class WebApi:
             "enquanto eu", "me avisa quando", "me avise quando", "avisa quando terminar",
             "deixa rodando", "deixe rodando", "vai fazendo", "trabalha nisso enquanto"))
 
-    def _run_background(self, text: str) -> None:
-        """Tarefa em 2º PLANO: roda o agente numa pasta dedicada SEM travar o chat (nao mexe no
-        self.busy), e AVISA quando terminar. Pode continuar usando a Kemy normalmente."""
-        token = uuid.uuid4().hex[:6]
-        bg = self.workspace_root / f"bg-{token}"
-        self._msg("kemy", "🛠️ Beleza! Vou fazer isso em segundo plano — pode continuar usando normalmente. "
-                  "Te aviso aqui quando terminar.")
+    def _run_background(self, text: str, tid: str = "", bg: Path = None, resume_from: int = 0) -> None:
+        """Tarefa em 2º PLANO: roda o agente numa pasta dedicada SEM travar o chat, com estado
+        PERSISTIDO em SQLite (retoma de onde parou se o app cair). Avisa quando terminar."""
+        if not tid:
+            tid = uuid.uuid4().hex[:8]
+            bg = self.workspace_root / f"bg-{tid}"
+            self.taskdb.add(tid, text, str(bg))
+            self._msg("kemy", "🛠️ Beleza! Vou fazer isso em segundo plano — pode continuar usando normalmente. "
+                      "Te aviso aqui quando terminar. (Se o app cair, eu retomo de onde parei.)")
+        else:
+            self._msg("kemy", f"↻ Retomando a tarefa em segundo plano de onde parei (passo {resume_from + 1})…")
 
         def work():
             try:
-                res = self._autonomous_agent(text, bg, background=True)
+                res = self._autonomous_agent(text, bg, background=True, task_id=tid, resume_from=resume_from)
+                self.taskdb.finish(tid, "done", res)
             except Exception as e:
                 res = f"deu um erro: {e}"
+                self.taskdb.finish(tid, "error", res)
             try:
                 self._msg("kemy", "✅ Terminei a tarefa que você pediu em segundo plano!\n" + (res or "")
                           + f"\n(arquivos em: {bg})")
@@ -8002,6 +8075,32 @@ class WebApi:
             except Exception:
                 pass
         threading.Thread(target=work, daemon=True).start()
+
+    def _check_unfinished_tasks(self) -> None:
+        """No boot: se uma tarefa de 2º plano ficou incompleta (app caiu), avisa e oferece retomar."""
+        try:
+            unf = self.taskdb.unfinished()
+        except Exception:
+            unf = []
+        if not unf:
+            return
+        t = unf[0]
+        self._pending_resume = t
+        self._msg("kemy", f"⏸️ Vi que uma tarefa em segundo plano não terminou (o app fechou): "
+                  f"\"{(t.get('prompt') or '')[:70]}\" (parei no passo {int(t.get('step', 0)) + 1}). "
+                  "Diz \"retomar tarefa\" que eu continuo de onde parei.")
+
+    def _maybe_resume_task(self, text: str) -> bool:
+        """Detecta 'retomar/continuar tarefa' e retoma a tarefa de 2º plano incompleta."""
+        if not re.search(r"(?i)\b(retom\w+|continu\w+)\b.*\b(tarefa|projeto|de onde parou|segundo plano)\b", text):
+            return False
+        t = getattr(self, "_pending_resume", None) or (self.taskdb.unfinished() or [None])[0]
+        if not t:
+            self._msg("kemy", "Não tem nenhuma tarefa em segundo plano pra retomar. 👍")
+            return True
+        self._pending_resume = None
+        self._run_background(t["prompt"], tid=t["id"], bg=Path(t["folder"]), resume_from=int(t.get("step", 0)))
+        return True
 
     def _run_capture(self, cmds: list, base: Path) -> str:
         outs = []
@@ -8172,7 +8271,8 @@ class WebApi:
         self._gen_graphics(extract_graphic_requests(reply), base)
         return True, out, (chat or task)[:90]
 
-    def _autonomous_agent(self, text: str, base: Path, background: bool = False) -> str:
+    def _autonomous_agent(self, text: str, base: Path, background: bool = False,
+                          task_id: str = "", resume_from: int = 0) -> str:
         """Agente autônomo (objetivo → entrega) com painel ao vivo: planeja em tarefas, executa
         uma a uma (gera, roda, corrige) e entrega o resultado pronto/rodando — estilo Manus.
         background=True: roda silencioso (sem painel/spam), pra tarefa em 2º plano."""
@@ -8202,14 +8302,22 @@ class WebApi:
         # garante uma etapa final de verificacao/entrega
         if not any("rod" in s.lower() or "test" in s.lower() or "entreg" in s.lower() for s in plan):
             plan.append("Rodar e entregar funcionando")
+        if task_id:
+            self.taskdb.set_plan(task_id, plan)
         if not background:
             self._panel(plan)
         last_output, notes = "", []
         for i, task in enumerate(plan):
+            if i < resume_from:      # retomando: pula os passos ja concluidos antes do crash
+                if not background:
+                    self._panel_step(i, "done")
+                continue
             if not background:
                 self._panel_step(i, "doing")
                 self._msg("sys", f"🤖 {i + 1}/{len(plan)}: {task}", store=False)
             ok, last_output, note = self._agent_do_task(text, task, base, plan, last_output)
+            if task_id:
+                self.taskdb.set_step(task_id, i + 1)   # persiste progresso (retoma daqui se cair)
             if not background:
                 self._panel_step(i, "done" if ok else "fail")
             if note:
