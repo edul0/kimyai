@@ -4558,6 +4558,8 @@ class WebApi:
         self._cloud_remote_ts = None
         self.wake_on = False        # wake word "Ei Kemy" (escuta hands-free)
         self.econ = os.environ.get("KEMY_ECON", "0") == "1"   # modo economico (poupa tokens)
+        self._resp_cache = {}       # cache de respostas repetidas (economiza token + instantaneo)
+        self._reverify_ts = 0.0     # ultima auto-verificacao de fato (evita spam)
         self._emb_cache = load_emb_cache()   # cache de vetores (RAG semantico)
         self.taskdb = TaskStore(config_dir() / "kemy_tasks.db")   # fila resumivel (2o plano)
         self.speaker.on_start = self._on_speak_start
@@ -7645,6 +7647,44 @@ class WebApi:
         return (f"- {fato} (fonte: {k.get('fonte','?')}, confianca: {k.get('confianca','?')}, "
                 f"{data or '?'}){stale}")
 
+    def _maybe_reverify(self, top: list) -> None:
+        """Se um fato relevante esta ⚠ (antigo), re-verifica na WEB em 2o plano e atualiza.
+        No maximo 1 a cada 2 min (evita spam de busca)."""
+        if time.time() - getattr(self, "_reverify_ts", 0) < 120:
+            return
+        stale = [k for k in top if "⚠" in self._fact_line(k)]
+        if not stale:
+            return
+        self._reverify_ts = time.time()
+        threading.Thread(target=self._reverify_fact, args=(stale[0],), daemon=True).start()
+
+    def _reverify_fact(self, k: dict) -> None:
+        try:
+            fato = k.get("fato", "")
+            res = web_search(fato, limit=4)
+            if not res:
+                return
+            out = self.llm.chat(
+                "Com base na PESQUISA WEB atual, o FATO ainda esta correto? Corrija se mudou. Responda SO "
+                'um JSON: {"fato":"versao atual e correta","confianca":"alta|media|baixa"}.',
+                [{"role": "user", "content": f"FATO GUARDADO: {fato}\n\nPESQUISA WEB:\n{res[:2500]}"}],
+                max_tokens=200, fast=True)
+            m = re.search(r"\{.*\}", out or "", re.DOTALL)
+            d = json.loads(m.group(0)) if m else {}
+            novo = (d.get("fato") or "").strip()
+            if novo:
+                for kk in self.knowledge:
+                    if kk.get("fato") == fato:
+                        kk["fato"] = novo[:300]
+                        kk["data"] = datetime.datetime.now().strftime("%Y-%m-%d")
+                        kk["confianca"] = d.get("confianca", kk.get("confianca", "media"))
+                        kk["fonte"] = (str(kk.get("fonte", "")) + " +web").strip()
+                        break
+                save_conhecimento(self.knowledge)
+                self._msg("sys", "🔎 Atualizei um fato que estava desatualizado (conferi na web).", store=False)
+        except Exception:
+            pass
+
     def _knowledge_prefix(self, text: str) -> str:
         """Recupera (RAG) os fatos aprendidos mais relevantes para a pergunta.
         Semantico (embeddings) quando ha bastante conhecimento; senao, lexico.
@@ -7660,6 +7700,7 @@ class WebApi:
             idx = self._semantic_top(text, fatos, 6)
             if idx is not None:
                 top = [self.knowledge[i] for i in idx]
+                self._maybe_reverify(top)   # fato ⚠ -> confere na web em 2o plano
                 return header + "\n".join(self._fact_line(k) for k in top) + "\n\n"
         words = set(re.findall(r"[\wáéíóúâêôãõç]{4,}", (text or "").lower()))
         if not words:
@@ -7674,6 +7715,7 @@ class WebApi:
         top = [k for _, k in scored[:6]]
         if not top:
             return ""
+        self._maybe_reverify(top)   # fato ⚠ -> confere na web em 2o plano
         return header + "\n".join(self._fact_line(k) for k in top) + "\n\n"
 
     def _maybe_learn_topic(self, text: str) -> bool:
@@ -7760,6 +7802,22 @@ class WebApi:
                     facts.append({"fato": ln, "confianca": "media"})
             return facts[:8]
 
+    @staticmethod
+    def _cache_key(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip().lower()).strip(" ?.!")
+
+    def _cache_get(self, key: str):
+        v = self._resp_cache.get(key)
+        if v and (time.time() - v[1]) < 900:   # vale por 15 min
+            return v[0]
+        return None
+
+    def _cache_put(self, key: str, reply: str) -> None:
+        if key and reply:
+            self._resp_cache[key] = (reply, time.time())
+            if len(self._resp_cache) > 200:     # nao cresce pra sempre
+                self._resp_cache = dict(list(self._resp_cache.items())[-200:])
+
     def _process(self, text: str) -> None:
         try:
             if self.mode == "direct":
@@ -7822,6 +7880,15 @@ class WebApi:
                            "Mantenha seu jeito caloroso e natural, mas aqui a PRIORIDADE e ser util e certeira — "
                            "nada de resposta rasa de uma linha. Se nao tiver certeza, diga o que sabe e o que checar.")
             hist_n = 18 if tier == "hard" else (12 if tier == "smart" else 8)
+            # CACHE de respostas repetidas: pergunta factual repetida -> devolve na hora (poupa token).
+            # Pula conteudo sensivel ao tempo/pessoal (hora, hoje, noticia, cotacao…).
+            temporal = re.search(r"(?i)\b(hoje|agora|ontem|amanh|que horas|hora|data|noticia|notícia|"
+                                 r"cotac|cotaç|dolar|dólar|clima|tempo hoje|ultima|última)\b", text)
+            ckey = self._cache_key(text) if (tier != "casual" and not temporal and len(text) > 12) else None
+            if ckey:
+                hit = self._cache_get(ckey)
+                if hit:
+                    return hit, None
             try:
                 reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
                 self._streamed_done = True
@@ -7830,6 +7897,8 @@ class WebApi:
                 reply = self.llm.chat(system, msgs[-hist_n:], max_tokens=mt, fast=fa, prefer=pf)
             self._maybe_run(extract_run_commands(reply), base)  # caso ela mande abrir algo
             _, chat = parse_llm_files(reply)
+            if ckey:
+                self._cache_put(ckey, (chat or reply).strip())
             # memoria afetiva: aprende sozinha coisas sobre a pessoa (em segundo plano)
             threading.Thread(target=self._auto_remember, args=(text, chat or reply), daemon=True).start()
             return (chat or reply).strip() or "…", None
