@@ -7106,7 +7106,8 @@ class WebApi:
         if self.memories:
             mems = self.memories
             # RAG semantico: com muita memoria, injeta so as RELEVANTes pra pergunta (nao tudo).
-            if query and len(mems) > 12:
+            # Pula pergunta curtinha ('oi', 'valeu') pra nao gastar embed a toa.
+            if query and len(query.strip()) >= 15 and len(mems) > 12:
                 idx = self._semantic_top(query, mems, 10)
                 if idx is not None:
                     picked = [mems[i] for i in idx]
@@ -7255,6 +7256,70 @@ class WebApi:
             "mascote no desktop e tema claro/escuro.")
         self._msg("kemy", txt)
         self._state("idle")
+
+    def full_diagnostic(self) -> None:
+        """Testa TODOS os subsistemas de uma vez e entrega um checklist — pra validar tudo rápido."""
+        self._msg("kemy", "🩺 Rodando diagnóstico completo… um instante.")
+        self._state("thinking")
+
+        def work():
+            L = []
+
+            def add(ok, nome, detalhe=""):
+                icon = "✅" if ok is True else ("⚠️" if ok is None else "❌")
+                L.append(f"{icon} {nome}" + (f" — {detalhe}" if detalhe else ""))
+
+            # IAs
+            try:
+                res = self.llm.test_all()
+                vivas = [r for r in res if r[2]]
+                add(bool(vivas), "IAs", f"{len(vivas)}/{len(res)} vivas: " +
+                    ", ".join(r[0] for r in vivas)[:80])
+            except Exception as e:
+                add(False, "IAs", str(e)[:60])
+            # Voz (TTS)
+            add(bool(getattr(self.speaker, "available", False)), "Voz (falar)",
+                "" if getattr(self.speaker, "available", False) else "pyttsx3/edge-tts indisponível")
+            # Microfone (STT) — necessário p/ wake word e Conversa
+            add(bool(getattr(self.listener, "available", False)), "Microfone (ouvir / Ei Kemy)",
+                "" if getattr(self.listener, "available", False) else "sem mic / PyAudio")
+            # Embeddings (RAG semântico)
+            try:
+                add(bool(self._embed(["teste"])), "RAG semântico (embeddings Gemini)",
+                    "" if self._embed(["teste"]) else "precisa da chave do Gemini")
+            except Exception:
+                add(False, "RAG semântico", "falhou")
+            # Node.js (valida JS antes de entregar)
+            try:
+                import shutil
+                add(bool(shutil.which("node")), "Node.js (valida o JS gerado)",
+                    "" if shutil.which("node") else "opcional — instale em nodejs.org p/ pegar erro de JS")
+            except Exception:
+                add(None, "Node.js", "não detectado")
+            # ADB (controle da TV)
+            adb = self._find_adb(); tvip = (self.env_vars or {}).get("KEMY_TV_IP", "")
+            add(True if (adb and tvip) else None, "TV (ADB)",
+                "pronto" if (adb and tvip) else ("falta o IP da TV" if adb else "falta ADB e IP da TV (opcional)"))
+            # Supabase (nuvem)
+            if self._cloud_enabled():
+                try:
+                    self._sb_req("GET", "kemy_sync?id=eq.me&select=id")
+                    add(True, "Sincronia em nuvem (Supabase)", "conectado")
+                except Exception as e:
+                    add(False, "Sincronia em nuvem", f"chave ok mas falhou: {str(e)[:50]}")
+            else:
+                add(None, "Sincronia em nuvem", "não configurada (opcional)")
+            # Celular
+            add(True if self._mobile_port else None, "Acesso pelo celular",
+                f"ligado em {self._mobile_port}" if self._mobile_port else "use 'Conectar celular' quando quiser")
+            # Memória
+            add(True, "Memória", f"{len(self.memories)} lembranças, {len(self.skills)} habilidades, "
+                f"{len(self.reminders)} lembretes/agenda")
+            self._msg("kemy", "🩺 DIAGNÓSTICO COMPLETO:\n\n" + "\n".join(L) +
+                      "\n\n(✅ ok · ⚠️ opcional/faltando · ❌ com problema)")
+            self._state("idle")
+
+        threading.Thread(target=work, daemon=True).start()
 
     def show_telemetry(self) -> None:
         """Observabilidade: resume o log local de chamadas de IA — por provedor: nº de chamadas,
