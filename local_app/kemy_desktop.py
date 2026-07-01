@@ -230,6 +230,20 @@ def log_telemetry(ev: dict) -> None:
         pass
 
 
+_DESTRUCTIVE_RE = re.compile(
+    r"(?i)(\bdel\s|\berase\s|\brmdir\b|\brd\s|\bformat\b|\bdeltree\b|"
+    r"\brm\s+-[a-z]*[rf]|\bremove-item\b|\bclear-content\b|"
+    r"\breg\s+delete\b|\bregedit\b|\bdiskpart\b|\bmkfs|\bdd\s+if=|"
+    r"\bshutdown\b|\brestart-computer\b|\btakeown\b|\bicacls\b|"
+    r"\b(cipher|sdelete)\b|:\s*\\\s*\*|/dev/sd)")
+
+
+def is_destructive_cmd(cmd: str) -> bool:
+    """True se o comando pode APAGAR/ALTERAR o sistema (deleta arquivo, formata, mexe no
+    registro, desliga). Rede de seguranca contra prompt injection: nada disso roda sem confirmar."""
+    return bool(_DESTRUCTIVE_RE.search(cmd or ""))
+
+
 def reminders_file() -> Path:
     return config_dir() / "kemy_lembretes.json"
 
@@ -7082,7 +7096,17 @@ class WebApi:
             linhas.append(linha)
         linhas.append("")
         linhas.append(f"↪️ Respostas que precisaram de fallback (1ª IA falhou): {fb}")
-        linhas.append("Quanto mais fallback num provedor, mais ele está engasgando — vale trocar a chave ou a ordem.")
+        # comandos de sistema executados (exit code / bloqueados)
+        cmds = [json.loads(ln) for ln in lines[-3000:] if '"ev": "cmd"' in ln or '"ev":"cmd"' in ln]
+        if cmds:
+            okc = sum(1 for c in cmds if c.get("exit") == 0)
+            blk = sum(1 for c in cmds if c.get("blocked"))
+            fail = len(cmds) - okc - blk
+            linhas.append("")
+            linhas.append(f"🖥️ Comandos no PC: {len(cmds)} (ok {okc}, falha {fail}, bloqueados {blk})")
+            last = cmds[-1]
+            linhas.append(f"   último: {str(last.get('cmd',''))[:70]} → exit {last.get('exit','?')}")
+        linhas.append("Quanto mais fallback/falha, mais algo está engasgando — vale trocar a chave/ordem.")
         self._msg("kemy", "\n".join(linhas))
 
     def test_providers(self) -> None:
@@ -7882,20 +7906,42 @@ class WebApi:
         outs = []
         for cmd in cmds[:6]:
             self._msg("sys", f"$ {cmd}", store=False)
+            # GUARD paranoico: comando destrutivo so roda com confirmacao visual do usuario.
+            if is_destructive_cmd(cmd) and not self._confirm_danger(cmd):
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "blocked": True})
+                outs.append(f"$ {cmd}\n(bloqueado: comando perigoso não confirmado)")
+                self._msg("sys", "🛡️ Bloqueei um comando que pode apagar/alterar coisas (não confirmado).", store=False)
+                continue
             run = cmd
             if run.strip().lower().startswith(("http://", "https://")):
                 run = f'start "" "{run.strip()}"'
+            _t0 = time.time()
             try:
                 p = subprocess.run(run, shell=True, cwd=str(base), capture_output=True, text=True, timeout=120)
                 o = ((p.stdout or "") + (p.stderr or "")).strip()
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": p.returncode,
+                               "ms": int((time.time() - _t0) * 1000), "err": (p.stderr or "")[:160]})
                 if o:
                     self._msg("sys", o[:600], store=False)
                 outs.append(f"$ {cmd}\n{o[:1500]}")
             except subprocess.TimeoutExpired:
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": "timeout",
+                               "ms": int((time.time() - _t0) * 1000)})
                 outs.append(f"$ {cmd}\n(demorou demais / timeout)")
             except Exception as e:
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": "erro", "err": str(e)[:160]})
                 outs.append(f"$ {cmd}\n(erro: {e})")
         return "\n".join(outs)
+
+    def _confirm_danger(self, cmd: str) -> bool:
+        """Confirmacao VISUAL antes de rodar comando perigoso. Sem como perguntar -> NAO roda."""
+        try:
+            return bool(self.window.create_confirmation_dialog(
+                "⚠️ Confirmar ação perigosa",
+                "A Kemy quer executar um comando que pode APAGAR ou ALTERAR coisas no seu PC:\n\n"
+                f"{cmd}\n\nDeixar rodar? (Cancele se não pediu isso — pode ser conteúdo malicioso.)"))
+        except Exception:
+            return False
 
     def _run_py_capture(self, base: Path):
         pys = list(base.glob("*.py"))
@@ -9055,16 +9101,25 @@ class WebApi:
             if not self.autonomous and not _is_safe_open(cmd):
                 self._msg("sys", f"(comando sugerido, ative ⚡ Auto para rodar) $ {cmd}", store=False)
                 continue
+            # GUARD paranoico: destrutivo exige confirmacao visual (mesmo com Auto ligado).
+            if is_destructive_cmd(cmd) and not self._confirm_danger(cmd):
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "blocked": True})
+                self._msg("sys", "🛡️ Bloqueei um comando que pode apagar/alterar coisas (não confirmado).", store=False)
+                continue
             run = cmd
             if run.strip().lower().startswith(("http://", "https://")):
                 run = f'start "" "{run.strip()}"'
             self._msg("sys", f"$ {cmd}", store=False)
+            _t0 = time.time()
             try:
                 p = subprocess.run(run, shell=True, cwd=str(base), capture_output=True, text=True, timeout=180)
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": p.returncode,
+                               "ms": int((time.time() - _t0) * 1000), "err": (p.stderr or "")[:160]})
                 out = ((p.stdout or "") + (p.stderr or "")).strip()[:800]
                 if out:
                     self._msg("sys", out, store=False)
             except Exception as exc:
+                log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": "erro", "err": str(exc)[:160]})
                 self._msg("sys", f"Falha: {exc}", store=False)
 
     def _after_speak(self) -> None:
