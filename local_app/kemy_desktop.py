@@ -7371,10 +7371,9 @@ class WebApi:
         """Índices dos k textos mais RELEVANTES pra query (cosseno). None => cair pro fallback."""
         if not texts:
             return []
-        qv = self._embed([query])
+        qv = self._vecs_for([query]).get(query)   # 1 embed por pergunta (cacheado: nao repete no mesmo turno)
         if not qv:
             return None
-        qv = qv[0]
         import math
         nq = math.sqrt(sum(x * x for x in qv)) or 1.0
         cache = self._vecs_for(texts)
@@ -8067,29 +8066,41 @@ class WebApi:
             self._panel(["Analisar a tarefa", "Planejar a solução", "Gerar com o especialista",
                          "Revisar (olhar de sênior)", "Salvar e montar", "Rodar e mostrar"])
             self._panel_step(0, "doing")
-        # Entende e LISTA os requisitos do pedido — pra atender TODOS (nada esquecido).
-        reqs = self._extract_requirements(text) if (self.boost and (complexo or len(text) > 40)) else ""
-        if reqs:
+        # PRÉ-GERAÇÃO EM PARALELO (antes era sequencial e SOMAVA latência): requisitos,
+        # referências, abordagem e roteamento rodam ao mesmo tempo. Espera = a mais lenta, não a soma.
+        if self.boost and complexo:
+            self._msg("sys", "Pesquisando a melhor abordagem e debatendo entre os modelos…", store=False)
+        R = {}
+
+        def _r_reqs():
+            R["reqs"] = self._extract_requirements(text) if (self.boost and (complexo or len(text) > 40)) else ""
+
+        def _r_refs():
+            R["refs"] = self._research_references(text) if (self.boost and design_req) else ""
+
+        def _r_plano():
+            R["plano"] = (self._deliberate(text) if complexo else self._plan(text)) if self.boost else ""
+
+        def _r_route():
+            R["route"] = self._smart_route(text)
+
+        ths = [threading.Thread(target=f, daemon=True) for f in (_r_reqs, _r_refs, _r_plano, _r_route)]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join(timeout=95)
+        if R.get("reqs"):
             system += ("\n\nREQUISITOS DO PEDIDO (atenda TODOS, sem esquecer nenhum; ao final confira "
-                       "item por item):\n" + reqs)
-        # Capricho (tecnicas nivel-pro): tudo silencioso, refletido no painel.
-        if self.boost:
-            if design_req:                    # pesquisa referencias antes (como um pro)
-                refs = self._research_references(text)
-                if refs:
-                    system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + refs
-            self._panel_step(1, "doing")
-            if complexo:
-                self._msg("sys", "Pesquisando a melhor abordagem e debatendo entre os modelos…", store=False)
-                plano = self._deliberate(text)   # estuda na web + IAs debatem a melhor ideia
-            else:
-                plano = self._plan(text)
-            if plano:
-                system += "\n\nABORDAGEM DECIDIDA (siga):\n" + plano
-        # Roteador inteligente: escolhe a melhor IA pra tarefa (silencioso).
-        route = self._smart_route(text)
+                       "item por item):\n" + R["reqs"])
+        if R.get("refs"):
+            system += "\n\nREFERENCIAS / INSPIRACAO (use as melhores ideias):\n" + R["refs"]
+        if R.get("plano"):
+            system += "\n\nABORDAGEM DECIDIDA (siga):\n" + R["plano"]
+        route = R.get("route") or self._route(text)
         self._last_route = route
         prefer = route[0] if route else ""
+        if panel_on:
+            self._panel_step(1, "done")
         # Dentro da NVIDIA, escolhe o lider por tarefa: Kimi K2.6 (codigo/ERP) ou GLM-5.1 (design/UI).
         nv_lead = self._nvidia_lead(text, app_like)
         if panel_on:
