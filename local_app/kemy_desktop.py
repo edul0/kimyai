@@ -4506,6 +4506,7 @@ class WebApi:
         self._cloud_pushed_hash = ""
         self._cloud_remote_ts = None
         self.wake_on = False        # wake word "Ei Kemy" (escuta hands-free)
+        self.econ = os.environ.get("KEMY_ECON", "0") == "1"   # modo economico (poupa tokens)
         self._emb_cache = load_emb_cache()   # cache de vetores (RAG semantico)
         self.taskdb = TaskStore(config_dir() / "kemy_tasks.db")   # fila resumivel (2o plano)
         self.speaker.on_start = self._on_speak_start
@@ -6605,6 +6606,13 @@ class WebApi:
             on_error=self._on_listen_error,
         )
 
+    def toggle_econ(self) -> None:
+        """Liga/desliga o modo econômico (poupa tokens/cota: memória e histórico menores)."""
+        self.econ = not self.econ
+        self._msg("kemy", ("💸 Modo econômico ligado — vou usar prompts mais enxutos (menos memória/histórico) "
+                           "pra poupar sua cota. Pode perder um pouco de contexto." if self.econ
+                           else "Modo econômico desligado — voltei ao contexto completo."), store=False)
+
     def toggle_wake(self) -> None:
         """Liga/desliga o wake word 'Ei Kemy' (escuta hands-free em segundo plano)."""
         if not self.listener.available:
@@ -7070,6 +7078,30 @@ class WebApi:
         except Exception:
             pass
 
+    def _compact_memories(self) -> None:
+        """Passou do teto? FUNDE as lembrancas mais antigas num resumo (em vez de so cortar).
+        Assim a memoria fica enxuta sem PERDER o que aprendeu. Roda em 2o plano."""
+        if len(self.memories) <= 220:
+            return
+        old = self.memories[:90]
+        rest = self.memories[90:]
+        try:
+            s = self.llm.chat(
+                "Funda estas anotacoes sobre a MESMA pessoa em ate 14 linhas, sem perder fatos, gostos e "
+                "preferencias importantes (junte as repetidas/relacionadas). Uma frase curta por linha, "
+                "3a pessoa. So a lista, sem numeros.",
+                [{"role": "user", "content": "\n".join("- " + m for m in old)[:6000]}],
+                max_tokens=520, fast=True)
+            fused = [l.strip().lstrip("-•*0123456789. ").strip() for l in (s or "").splitlines() if l.strip()]
+            fused = [f for f in fused if 4 < len(f) < 140][:16]
+            if fused:
+                self.memories = fused + rest
+                save_memorias(self.memories)
+                self._msg("sys", f"🧠 Compactei a memória antiga ({len(old)}→{len(fused)} lembranças) "
+                          "sem perder o que importa.", store=False)
+        except Exception:
+            pass
+
     def _add_memory(self, frase: str) -> bool:
         """Adiciona uma lembranca EVITANDO duplicata/quase-duplicata (sobreposicao de palavras).
         Retorna True se guardou. Ex.: 'gosta de RPG' nao entra 2x, nem 'gosta de rpg e games'."""
@@ -7122,6 +7154,8 @@ class WebApi:
                 novos += 1
         if novos:
             save_memorias(self.memories)
+            if len(self.memories) > 220:   # passou do teto -> compacta as antigas (funde, nao corta)
+                threading.Thread(target=self._compact_memories, daemon=True).start()
 
     # ===================== RAG SEMÂNTICO (embeddings grátis do Gemini) =====================
     @staticmethod
@@ -7193,21 +7227,23 @@ class WebApi:
                     "valem mais que regras gerais):\n" + instr[:4000] + "\n\n")
         if self.memories:
             mems = self.memories
+            topk = 5 if self.econ else 10       # modo economico: injeta menos memoria
+            recent = 15 if self.econ else 40
             # RAG semantico: com muita memoria, injeta so as RELEVANTes pra pergunta (nao tudo).
             # Pula pergunta curtinha ('oi', 'valeu') pra nao gastar embed a toa.
             if query and len(query.strip()) >= 15 and len(mems) > 12:
-                idx = self._semantic_top(query, mems, 10)
+                idx = self._semantic_top(query, mems, topk)
                 if idx is not None:
                     picked = [mems[i] for i in idx]
                     # garante as mais recentes tambem (contexto imediato)
-                    for m in mems[-4:]:
+                    for m in mems[-(2 if self.econ else 4):]:
                         if m not in picked:
                             picked.append(m)
                     mems = picked
                 else:
-                    mems = mems[-40:]   # fallback: recentes (offline / sem chave Gemini)
+                    mems = mems[-recent:]   # fallback: recentes (offline / sem chave Gemini)
             else:
-                mems = mems[-40:]
+                mems = mems[-recent:]
             out += ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
                     "(respeite SEMPRE):\n- " + "\n- ".join(mems) + "\n\n")
         if getattr(self, "skills", None):
@@ -7542,21 +7578,38 @@ class WebApi:
         self._msg("kemy", "Anotado! Vou seguir essas instruções em todas as conversas.")
         self._state("idle")
 
+    @staticmethod
+    def _fact_line(k: dict) -> str:
+        """Formata um fato e SINALIZA se pode estar desatualizado (pela data)."""
+        fato = k.get("fato", "")
+        data = str(k.get("data", "") or "")
+        stale = ""
+        try:
+            d = datetime.datetime.strptime(data[:10], "%Y-%m-%d")
+            meses = (datetime.datetime.now() - d).days // 30
+            if meses >= 6:
+                stale = f" ⚠(pode estar desatualizado — {meses} meses)"
+        except Exception:
+            pass
+        return (f"- {fato} (fonte: {k.get('fonte','?')}, confianca: {k.get('confianca','?')}, "
+                f"{data or '?'}){stale}")
+
     def _knowledge_prefix(self, text: str) -> str:
         """Recupera (RAG) os fatos aprendidos mais relevantes para a pergunta.
-        Semantico (embeddings) quando ha bastante conhecimento; senao, lexico."""
+        Semantico (embeddings) quando ha bastante conhecimento; senao, lexico.
+        Marca com ⚠ os fatos antigos (auto-verificacao: modelo trata com cautela)."""
         if not self.knowledge:
             return ""
+        header = ("CONHECIMENTO VERIFICADO (fatos que voce aprendeu e guardou — use se relevante, citando a "
+                  "info. Os marcados com ⚠ podem estar DESATUALIZADOS: trate com cautela / confira antes de "
+                  "afirmar):\n")
         # RAG SEMANTICO: com muito conhecimento e pergunta de verdade, usa embeddings.
         if len((text or "").strip()) >= 15 and len(self.knowledge) > 12:
             fatos = [str(k.get("fato", "")) for k in self.knowledge]
             idx = self._semantic_top(text, fatos, 6)
             if idx is not None:
                 top = [self.knowledge[i] for i in idx]
-                linhas = "\n".join(f"- {k.get('fato','')} (fonte: {k.get('fonte','?')}, confianca: "
-                                   f"{k.get('confianca','?')}, {k.get('data','?')})" for k in top)
-                return ("CONHECIMENTO VERIFICADO (fatos que voce aprendeu e guardou — use se relevante, "
-                        "citando que tem essa info):\n" + linhas + "\n\n")
+                return header + "\n".join(self._fact_line(k) for k in top) + "\n\n"
         words = set(re.findall(r"[\wáéíóúâêôãõç]{4,}", (text or "").lower()))
         if not words:
             return ""
@@ -7570,10 +7623,7 @@ class WebApi:
         top = [k for _, k in scored[:6]]
         if not top:
             return ""
-        linhas = "\n".join(f"- {k.get('fato','')} (fonte: {k.get('fonte','?')}, confianca: {k.get('confianca','?')}, {k.get('data','?')})"
-                           for k in top)
-        return ("CONHECIMENTO VERIFICADO (fatos que voce aprendeu e guardou — use se relevante, "
-                "citando que tem essa info):\n" + linhas + "\n\n")
+        return header + "\n".join(self._fact_line(k) for k in top) + "\n\n"
 
     def _maybe_learn_topic(self, text: str) -> bool:
         """Detecta 'aprenda sobre X / estude X / pesquise e guarde X' e dispara a ingestao."""
@@ -7747,7 +7797,7 @@ class WebApi:
                        "funcionavam CONTINUAM funcionando.\n" + current)
         if web:
             system += web
-        hist = msgs[-10:]
+        hist = msgs[-4:] if self.econ else msgs[-10:]   # modo economico: histórico menor
         complexo = len(text) > 70 or any(k in text.lower() for k in (
             "app", "sistema", "erp", "jogo", "game", "dashboard", "completo", "crud",
             "plataforma", "modulo", "módulo", "apresenta", "varios", "vários"))
@@ -7807,7 +7857,7 @@ class WebApi:
         if usou_moa:
             reply = self._moa(system, hist, text, route, prefer_model=nv_lead)  # Mixture of Agents
         else:
-            reply = self.llm.chat(system, hist, max_tokens=16000, prefer=prefer, prefer_model=nv_lead)
+            reply = self.llm.chat(system, hist, max_tokens=(9000 if self.econ else 16000), prefer=prefer, prefer_model=nv_lead)
         if panel_on:
             self._panel_step(2, "done")
         # Revisao cruzada SO quando NAO houve MoA (a sintese do MoA ja e uma revisao) -> evita
