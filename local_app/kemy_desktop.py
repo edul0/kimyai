@@ -3298,16 +3298,28 @@ class SpeakerID:
     'impressao de voz' por pessoa e identifica pela mais parecida (cosseno)."""
 
     def __init__(self) -> None:
-        self.available = False
         self._enc = None
+        self._tried = False           # carrega o modelo SOB DEMANDA (nao trava o boot)
         self.prints = self._load()
+
+    def _ready(self) -> bool:
+        """Carrega o encoder na 1a vez que precisar (lazy). True se disponivel."""
+        if self._enc is not None:
+            return True
+        if self._tried:
+            return False
+        self._tried = True
         try:
             from resemblyzer import VoiceEncoder  # type: ignore
             import numpy  # noqa: F401
             self._enc = VoiceEncoder(verbose=False)
-            self.available = True
+            return True
         except Exception:
-            self.available = False
+            return False
+
+    @property
+    def available(self) -> bool:
+        return self._ready()
 
     @staticmethod
     def _file() -> Path:
@@ -5513,6 +5525,7 @@ class WebApi:
             threading.Thread(target=self._reminder_loop, daemon=True).start()
             threading.Thread(target=self._cloud_loop, daemon=True).start()
             threading.Timer(3.0, self._check_unfinished_tasks).start()   # avisa se tarefa 2º plano ficou incompleta
+            threading.Timer(6.0, lambda: threading.Thread(target=self._warm_embeddings, daemon=True).start()).start()
             return
         # online (Render)
         url = self.api.base_url
@@ -6814,9 +6827,9 @@ class WebApi:
                 cmd = self.listener.listen_text(timeout=6, phrase_limit=12)
             if cmd and cmd.strip() and not self.busy:
                 # reconhece QUEM falou (se o módulo opcional estiver ativo)
-                try:
+                try:   # so identifica (carrega o modelo) se houver voz cadastrada
                     self._current_speaker = (self.spk.identify(getattr(self.listener, "last_audio", None))
-                                             if self.spk.available else "")
+                                             if getattr(self.spk, "prints", None) else "")
                 except Exception:
                     self._current_speaker = ""
                 self._handle(cmd.strip())
@@ -7355,6 +7368,20 @@ class WebApi:
             except Exception:
                 continue
         return None
+
+    def _warm_embeddings(self) -> None:
+        """Pré-computa (em 2º plano, no boot) os vetores da memória/conhecimento que faltam no
+        cache — assim a 1ª busca semântica já é rápida (só embeda a pergunta)."""
+        try:
+            if not (self.llm.gemini_keys or getattr(self.llm, "gemini", "")):
+                return
+            faltando = [m for m in self.memories if self._emb_key(m) not in self._emb_cache][:120]
+            faltando += [str(k.get("fato", "")) for k in self.knowledge
+                         if self._emb_key(str(k.get("fato", ""))) not in self._emb_cache][:120]
+            for i in range(0, len(faltando), 60):   # em lotes (batch) pra economizar chamadas
+                self._vecs_for(faltando[i:i + 60])
+        except Exception:
+            pass
 
     def _vecs_for(self, texts: list) -> dict:
         """Vetores de uma lista de textos (usa cache; embeda só os que faltam)."""
