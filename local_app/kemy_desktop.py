@@ -5216,6 +5216,29 @@ class WebApi:
     def _cloud_enabled(self) -> bool:
         return all(self._sb_creds())
 
+    def _http_json(self, req, timeout: float = 20, tries: int = 3):
+        """urlopen com RETRY + BACKOFF em erros transientes (rede instável, 429, 5xx).
+        Rede caiu no meio? Tenta de novo (1.2s, 2.4s…) antes de desistir."""
+        import urllib.error
+        last = None
+        for i in range(tries):
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    raw = r.read().decode("utf-8", "ignore")
+                    return json.loads(raw) if raw.strip() else None
+            except urllib.error.HTTPError as e:
+                last = e
+                if getattr(e, "code", 0) in (429, 500, 502, 503, 504) and i < tries - 1:
+                    time.sleep(1.2 * (i + 1)); continue
+                raise
+            except Exception as e:   # URLError/timeout/conexao caiu -> tenta de novo
+                last = e
+                if i < tries - 1:
+                    time.sleep(1.2 * (i + 1)); continue
+                raise
+        if last:
+            raise last
+
     def _sb_req(self, method: str, path: str, body=None, prefer: str = ""):
         url, key = self._sb_creds()
         if not url:
@@ -5225,9 +5248,7 @@ class WebApi:
             headers["Prefer"] = prefer
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(url + "/rest/v1/" + path, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            raw = r.read().decode("utf-8", "ignore")
-            return json.loads(raw) if raw.strip() else None
+        return self._http_json(req, timeout=20, tries=3)
 
     @staticmethod
     def _union(a: list, b: list) -> list:
@@ -7006,13 +7027,32 @@ class WebApi:
             m = re.search(p, t)
             if m:
                 lesson = m.group(1).strip().rstrip(".!?").strip()
-                if 2 < len(lesson) < 120 and lesson not in self.memories:
-                    # reconstrói a licao com o verbo
-                    full = t if t.lower().startswith(("prefiro", "nao", "não", "nunca", "sempre", "evite", "odeio")) else lesson
-                    self.memories.append(full[:140])
+                full = t if t.lower().startswith(("prefiro", "nao", "não", "nunca", "sempre", "evite", "odeio")) else lesson
+                if self._add_memory(full):   # dedup (nao repete preferencia ja conhecida)
                     save_memorias(self.memories)
                     self._msg("sys", "🧠 Anotei essa preferência pra próxima.", store=False)
                 return
+
+    def _add_memory(self, frase: str) -> bool:
+        """Adiciona uma lembranca EVITANDO duplicata/quase-duplicata (sobreposicao de palavras).
+        Retorna True se guardou. Ex.: 'gosta de RPG' nao entra 2x, nem 'gosta de rpg e games'."""
+        frase = (frase or "").strip().rstrip(".!?").strip()
+        if not (4 < len(frase) < 140):
+            return False
+        fl = frase.lower()
+        ftok = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", fl))
+        for m in self.memories:
+            ml = (m or "").lower()
+            if fl == ml or (len(fl) > 8 and (fl in ml or ml in fl)):
+                return False
+            mtok = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", ml))
+            if ftok and mtok:
+                inter = len(ftok & mtok)
+                uni = len(ftok | mtok)
+                if uni and inter / uni >= 0.6:    # muito parecida -> ja sei disso
+                    return False
+        self.memories.append(frase[:140])
+        return True
 
     def _auto_remember(self, user_text: str, reply: str) -> None:
         """Memoria afetiva: extrai (em segundo plano) fatos DURAVEIS sobre a pessoa do papo —
@@ -7038,12 +7078,11 @@ class WebApi:
             facts = self._parse_facts(out)
         except Exception:
             return
-        existentes = {m.lower() for m in self.memories}
         novos = 0
         for f in facts[:4]:
             frase = (f.get("fato") if isinstance(f, dict) else str(f)).strip().rstrip(".")
-            if 4 < len(frase) < 120 and frase.lower() not in existentes:
-                self.memories.append(frase); existentes.add(frase.lower()); novos += 1
+            if self._add_memory(frase):   # dedup (nao guarda repetida/quase-igual)
+                novos += 1
         if novos:
             save_memorias(self.memories)
 
@@ -7066,9 +7105,8 @@ class WebApi:
                        "text-embedding-004:batchEmbedContents?key=" + k)
                 req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                              headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    d = json.loads(r.read().decode("utf-8"))
-                embs = [e.get("values") for e in d.get("embeddings", [])]
+                d = self._http_json(req, timeout=15, tries=2)   # retry em rede instavel
+                embs = [e.get("values") for e in (d or {}).get("embeddings", [])]
                 if embs and len(embs) == len(texts) and all(embs):
                     return embs
             except Exception:
