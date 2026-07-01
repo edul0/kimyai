@@ -1,0 +1,7 @@
+# OPCIONAL — reconhecimento de QUEM fala (voiceprint). Não vai no .exe padrão
+# (pesa por causa do torch). Instale só se quiser esse recurso e tiver um PC
+# com GPU/CPU boa:  pip install -r local_app/requirements-voice.txt
+#
+# Depois, na Kemy: "aprende minha voz como <seu nome>".
+resemblyzer>=0.1.1
+numpy>=1.24

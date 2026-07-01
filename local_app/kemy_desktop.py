@@ -3283,7 +3283,91 @@ class Listener:
             with sr.Microphone() as source:
                 self._recognizer.adjust_for_ambient_noise(source, duration=0.15)
                 audio = self._recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
+            try:
+                self.last_audio = audio.get_wav_data()   # guarda o áudio (pro reconhecimento de voz)
+            except Exception:
+                self.last_audio = None
             return self._recognizer.recognize_google(audio, language="pt-BR") or ""
+        except Exception:
+            return ""
+
+
+class SpeakerID:
+    """Reconhecimento de QUEM fala (voiceprint) — OPCIONAL. Liga so se 'resemblyzer' estiver
+    instalado (roda bem em GPU/CPU). Sem ele, fica desativado e nada quebra. Guarda uma
+    'impressao de voz' por pessoa e identifica pela mais parecida (cosseno)."""
+
+    def __init__(self) -> None:
+        self.available = False
+        self._enc = None
+        self.prints = self._load()
+        try:
+            from resemblyzer import VoiceEncoder  # type: ignore
+            import numpy  # noqa: F401
+            self._enc = VoiceEncoder(verbose=False)
+            self.available = True
+        except Exception:
+            self.available = False
+
+    @staticmethod
+    def _file() -> Path:
+        return config_dir() / "kemy_voiceprints.json"
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self._file().read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save(self) -> None:
+        try:
+            self._file().write_text(json.dumps(self.prints), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _embed(self, wav_bytes: bytes):
+        """Vetor de voz a partir de um WAV (bytes)."""
+        if not (self.available and wav_bytes):
+            return None
+        try:
+            import io
+            import wave
+            import numpy as np
+            from resemblyzer import preprocess_wav
+            with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+                sr = w.getframerate()
+                raw = w.readframes(w.getnframes())
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            wav = preprocess_wav(audio, source_sr=sr)
+            return self._enc.embed_utterance(wav)
+        except Exception:
+            return None
+
+    def enroll(self, name: str, wav_bytes: bytes) -> bool:
+        v = self._embed(wav_bytes)
+        if v is None:
+            return False
+        self.prints[name] = [float(x) for x in v]
+        self._save()
+        return True
+
+    def identify(self, wav_bytes: bytes, threshold: float = 0.75) -> str:
+        """Nome da pessoa mais parecida (ou '' se nao reconheceu)."""
+        if not self.prints:
+            return ""
+        v = self._embed(wav_bytes)
+        if v is None:
+            return ""
+        try:
+            import numpy as np
+            v = np.array(v)
+            best, bn = 0.0, ""
+            for nome, vec in self.prints.items():
+                p = np.array(vec)
+                sim = float(np.dot(v, p) / ((np.linalg.norm(v) * np.linalg.norm(p)) or 1.0))
+                if sim > best:
+                    best, bn = sim, nome
+            return bn if best >= threshold else ""
         except Exception:
             return ""
 
@@ -4560,6 +4644,8 @@ class WebApi:
         self.econ = os.environ.get("KEMY_ECON", "0") == "1"   # modo economico (poupa tokens)
         self._resp_cache = {}       # cache de respostas repetidas (economiza token + instantaneo)
         self._reverify_ts = 0.0     # ultima auto-verificacao de fato (evita spam)
+        self.spk = SpeakerID()      # reconhecimento de quem fala (opcional; so com resemblyzer)
+        self._current_speaker = ""  # quem falou por ultimo (por voz)
         self._emb_cache = load_emb_cache()   # cache de vetores (RAG semantico)
         self.taskdb = TaskStore(config_dir() / "kemy_tasks.db")   # fila resumivel (2o plano)
         self.speaker.on_start = self._on_speak_start
@@ -6666,6 +6752,30 @@ class WebApi:
                            "pra poupar sua cota. Pode perder um pouco de contexto." if self.econ
                            else "Modo econômico desligado — voltei ao contexto completo."), store=False)
 
+    def _maybe_voice_enroll(self, text: str) -> bool:
+        """Cadastra a voz de alguem: 'aprende minha voz [como X]', 'essa e a voz do X'."""
+        m = re.search(r"(?i)\b(aprend\w+|registr\w+|grav\w+|memoriz\w+|guard\w+)\b.{0,20}\bvoz\b"
+                      r"(?:.*\bcomo\s+([\wÀ-ÿ ]{2,30}))?", text)
+        m2 = re.search(r"(?i)\bessa (?:é|e) (?:a )?voz d[eo]\s+([\wÀ-ÿ ]{2,30})", text)
+        if not m and not m2:
+            return False
+        if not self.spk.available:
+            self._msg("kemy", "Pra reconhecer quem fala eu preciso do módulo de voz (resemblyzer) — que roda "
+                      "liso na sua GPU. Instala uma vez com: pip install resemblyzer  (ou me pede no modo Auto). "
+                      "Depois é só cadastrar sua voz.")
+            return True
+        nome = ((m and m.group(2)) or (m2 and m2.group(1)) or "você").strip()[:30] or "você"
+        self._msg("kemy", f"Beleza, {nome}! Fala uma frase qualquer por uns 4 segundos que eu gravo sua voz… 🎙️")
+
+        def work():
+            self.listener.listen_text(timeout=6, phrase_limit=5)
+            if self.spk.enroll(nome, getattr(self.listener, "last_audio", None)):
+                self._msg("kemy", f"Prontinho! Agora reconheço a voz de {nome}.")
+            else:
+                self._msg("kemy", "Não consegui gravar direito — tenta de novo falando um pouco mais.")
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
     def toggle_wake(self) -> None:
         """Liga/desliga o wake word 'Ei Kemy' (escuta hands-free em segundo plano)."""
         if not self.listener.available:
@@ -6703,6 +6813,12 @@ class WebApi:
                 self._say_reply("Oi! Pode falar.")
                 cmd = self.listener.listen_text(timeout=6, phrase_limit=12)
             if cmd and cmd.strip() and not self.busy:
+                # reconhece QUEM falou (se o módulo opcional estiver ativo)
+                try:
+                    self._current_speaker = (self.spk.identify(getattr(self.listener, "last_audio", None))
+                                             if self.spk.available else "")
+                except Exception:
+                    self._current_speaker = ""
                 self._handle(cmd.strip())
 
     def _on_listen_error(self, e: str) -> None:
@@ -6727,6 +6843,7 @@ class WebApi:
 
     def send_text(self, text: str) -> None:
         # Rede de seguranca: nenhum erro do handler pode travar a UI em "Pensando".
+        self._current_speaker = ""   # texto digitado -> nao ha "quem falou" por voz
         try:
             self._handle(text)
         except Exception as exc:
@@ -6759,6 +6876,8 @@ class WebApi:
         if self._maybe_tv(text):   # controle da TV (Android TV via ADB)
             return
         if self._maybe_resume_task(text):   # retomar tarefa de 2º plano incompleta
+            return
+        if self._maybe_voice_enroll(text):   # cadastrar voz (quem fala) — opcional
             return
         # No Minecraft: a fala vira ação no jogo (cérebro do bot).
         if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
@@ -7867,8 +7986,10 @@ class WebApi:
             return self._autonomous_agent(text, base), None
         mem = self._memoria_prefix(text) + self._knowledge_prefix(text)   # RAG: memoria + conhecimento relevantes
         mem += self._summary_prefix()   # resumo da conversa longa (não perde o fio)
+        quem = (f"\n[Quem esta falando agora: {self._current_speaker}. Trate essa pessoa pelo nome.]"
+                if getattr(self, "_current_speaker", "") else "")
         if not build:
-            system = mem + CHAT_PROMPT + "\n" + self._now_context() + (web or "")
+            system = mem + CHAT_PROMPT + "\n" + self._now_context() + quem + (web or "")
             # 3 niveis pra economizar a cota do GPT-5: casual->Gemini Flash, smart->Cerebras gpt-oss-120b,
             # hard->GPT-5. Pergunta dificil ganha resposta aprofundada + mais memoria.
             tier = self._chat_tier(text)
