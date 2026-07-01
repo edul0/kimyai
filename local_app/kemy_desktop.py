@@ -5957,9 +5957,37 @@ class WebApi:
             self._msg("kemy", "⚔️ Saí do Showdown.")
 
     # ---------------- COMPUTER-USE (opera o PC/navegador por visão) ----------------
+    def _cli_first(self, goal: str) -> bool:
+        """Tenta resolver a tarefa no PC via COMANDO (PowerShell/cmd) — mais confiável que mouse
+        (feedback de eng.: GUI é frágil; use CLI/API onde reina). Retorna True se resolveu.
+        Se a tarefa exige clicar numa GUI, o modelo responde NONE e caímos pro modo visão."""
+        try:
+            so = "Windows (use PowerShell: Start-Process pra abrir apps/URLs, cmdlets nativos)" \
+                if os.name == "nt" else "Linux/Mac (use bash)"
+            sysp = ("Voce opera um PC " + so + ". Dada a TAREFA, gere UM comando de terminal que a resolva "
+                    "de forma confiavel. Se a tarefa EXIGE clicar/interagir numa interface grafica (ex.: "
+                    "escrever uma mensagem num app, preencher um formulario visual), responda EXATAMENTE "
+                    "'NONE'. Responda SO com o comando cru numa linha — sem explicacao, sem crase.")
+            cmd = self.llm.chat(sysp, [{"role": "user", "content": goal[:400]}], max_tokens=160, fast=True) or ""
+            cmd = cmd.strip().strip("`").strip()
+            cmd = cmd.splitlines()[0].strip() if cmd else ""
+            if not cmd or cmd.upper().startswith("NONE") or len(cmd) < 3:
+                return False
+            it = self._cur()
+            base = Path(it["project"]) if it else self.workspace_root
+            self._msg("sys", f"⚙️ Tentando por comando (mais confiável que mouse): $ {cmd}", store=False)
+            out = (self._run_capture([cmd], base) or "").lower()
+            if "bloqueado" in out:            # guard de seguranca barrou -> nao cai pro mouse
+                return True
+            erros = ("(erro", "not recognized", "não é reconhecido", "cannot find", "cmdletnotfound",
+                     "is not recognized", "no such file", "erro:")
+            return not any(e in out for e in erros)
+        except Exception:
+            return False
+
     def computer_use(self, goal: str = "", learn: bool = False, learn_name: str = "") -> None:
-        """A Kemy opera o PC: tira print, decide a ação (clicar/digitar/rolar) e executa.
-        learn=True salva a SEQUENCIA que funcionou como habilidade reutilizavel."""
+        """A Kemy opera o PC: PRIMEIRO tenta por comando (CLI); se for GUI irredutível, cai pro
+        modo visão (print -> decide ação -> executa). learn=True salva a sequência que funcionou."""
         if not (self.llm.gemini_keys or self.llm.gemini or self.llm.groq or self.llm.nvidia_keys):
             self._msg("kemy", "Pra controlar o PC eu preciso de uma IA com visão (Gemini/Groq/NVIDIA).")
             return
@@ -5975,6 +6003,12 @@ class WebApi:
         if not goal:
             self._msg("kemy", "Me diz o que fazer no PC. Ex.: 'pesquise no Google por notebooks e abra o primeiro'.")
             return
+        # CLI-FIRST: se não é uma receita de mouse já aprendida, tenta resolver por comando antes
+        # de recorrer ao mouse/visão (mais confiável — feedback de engenharia).
+        if "aprendeu a fazer isso assim" not in goal.lower():
+            if self._cli_first(goal):
+                self._msg("kemy", "Feito por comando — mais confiável que ficar clicando. ✅")
+                return
         self._cu_running = True
         self._cu_stop = False
         self._msg("kemy", f"Tô no controle! Objetivo: {goal}. Pra eu parar, diga 'parar' "
