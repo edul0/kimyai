@@ -2956,6 +2956,50 @@ _EMOJI_RE = re.compile(
     "\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE00-\U0000FE0F\U00002700-\U000027BF]+")
 
 
+def detect_emotion(text: str) -> str:
+    """Detecta a emocao do texto pra Kemy FALAR com o tom certo (voz por emocao).
+    Retorna: feliz | animada | carinhosa | seria | triste | neutro."""
+    t = (text or "").lower()
+    if not t.strip():
+        return "neutro"
+    excls = t.count("!")
+    if re.search(r"(?i)\b(triste|desculp|sinto muito|que pena|poxa|infelizmente|lamento|"
+                 r"nao consegui|não consegui|falhei|deu errado|erro)\b", t):
+        return "triste"
+    if re.search(r"(?i)\b(cuidado|atencao|atenção|importante|serio|sério|aviso|risco|perigo|"
+                 r"seguranca|segurança|nunca|jamais)\b", t):
+        return "seria"
+    if (excls >= 2 or re.search(r"(?i)\b(uhul|eba|aeee+|arrasou|incr[ií]vel|demais|show|top|"
+                                r"consegui|prontinho|feito|funcionou|deu certo|maravilh)\b", t)
+            or "🎉" in (text or "") or "🚀" in (text or "")):
+        return "animada"
+    if re.search(r"(?i)\b(amor|querid|fofo|carinho|calma|relaxa|to aqui|tô aqui|conta comigo|"
+                 r"vai ficar bem|te entendo|fica tranquil)\b", t):
+        return "carinhosa"
+    if excls >= 1 or re.search(r"(?i)\b(legal|bacana|otimo|ótimo|bom|boa|adorei|gostei)\b", t):
+        return "feliz"
+    return "neutro"
+
+
+# Ajuste de voz por emocao. Edge TTS aceita rate/pitch; ElevenLabs, stability/style.
+EMO_EDGE = {
+    "animada":   {"rate": "+14%", "pitch": "+18Hz"},
+    "feliz":     {"rate": "+7%",  "pitch": "+10Hz"},
+    "carinhosa": {"rate": "-6%",  "pitch": "+6Hz"},
+    "seria":     {"rate": "-4%",  "pitch": "-6Hz"},
+    "triste":    {"rate": "-10%", "pitch": "-12Hz"},
+    "neutro":    {"rate": "+0%",  "pitch": "+0Hz"},
+}
+EMO_ELEVEN = {
+    "animada":   {"stability": 0.30, "style": 0.7},
+    "feliz":     {"stability": 0.40, "style": 0.5},
+    "carinhosa": {"stability": 0.60, "style": 0.4},
+    "seria":     {"stability": 0.75, "style": 0.15},
+    "triste":    {"stability": 0.70, "style": 0.25},
+    "neutro":    {"stability": 0.50, "style": 0.35},
+}
+
+
 def clean_for_speech(text: str) -> str:
     """Limpa o texto para a fala soar humana: remove markdown, links, emojis e simbolos
     que a voz leria em voz alta (asterisco, hashtag, crase, etc.)."""
@@ -3048,7 +3092,10 @@ class Speaker:
                 self.available = False
                 return
         while True:
-            text = self._queue.get()
+            item = self._queue.get()
+            if not item:
+                continue
+            text, emo = item if isinstance(item, tuple) else (item, "neutro")
             if not text:
                 continue
             self._speaking = True
@@ -3058,7 +3105,7 @@ class Speaker:
             spoke = False
             if self.el_key:
                 try:
-                    self._speak_eleven(text)
+                    self._speak_eleven(text, emo)
                     spoke = True
                 except Exception as exc:
                     spoke = False  # chave invalida/cota -> tenta edge
@@ -3076,7 +3123,7 @@ class Speaker:
                         self.el_key = None  # desativa de vez nesta sessao
             if not spoke and self._edge_ok:
                 try:
-                    self._speak_edge(text)
+                    self._speak_edge(text, emo)
                     spoke = True
                 except Exception:
                     spoke = False  # sem internet/erro -> cai pro SAPI
@@ -3090,23 +3137,26 @@ class Speaker:
             if self.on_done and self._queue.empty():
                 self.on_done()
 
-    def _speak_edge(self, text: str) -> None:
+    def _speak_edge(self, text: str, emotion: str = "neutro") -> None:
         import asyncio
         import edge_tts
         path = os.path.join(tempfile.gettempdir(), f"kemy_tts_{uuid.uuid4().hex[:8]}.mp3")
+        p = EMO_EDGE.get(emotion, EMO_EDGE["neutro"])
 
         async def _gen() -> None:
-            await edge_tts.Communicate(text, self.voice).save(path)
+            await edge_tts.Communicate(text, self.voice, rate=p["rate"], pitch=p["pitch"]).save(path)
 
         asyncio.run(_gen())
         if not os.path.exists(path) or os.path.getsize(path) < 256:
             raise RuntimeError("edge-tts falhou")
         self._play_mp3(path)
 
-    def _speak_eleven(self, text: str) -> None:
+    def _speak_eleven(self, text: str, emotion: str = "neutro") -> None:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.el_voice}"
+        es = EMO_ELEVEN.get(emotion, EMO_ELEVEN["neutro"])
         body = json.dumps({"text": text, "model_id": self.el_model,
-                           "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}).encode("utf-8")
+                           "voice_settings": {"stability": es["stability"], "similarity_boost": 0.75,
+                                              "style": es["style"]}}).encode("utf-8")
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "xi-api-key": self.el_key, "Content-Type": "application/json", "Accept": "audio/mpeg"})
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -3145,7 +3195,8 @@ class Speaker:
             except Exception:
                 pass
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, emotion: str = "") -> None:
+        emo = emotion or detect_emotion(text)   # voz por emocao (tom muda com o sentimento)
         text = clean_for_speech(text)
         if not (self.available and text.strip()):
             return
@@ -3158,10 +3209,10 @@ class Speaker:
                 continue
             chunk = f"{chunk} {p}".strip() if chunk else p
             if len(chunk) >= 55:
-                self._queue.put(chunk)
+                self._queue.put((chunk, emo))
                 chunk = ""
         if chunk:
-            self._queue.put(chunk)
+            self._queue.put((chunk, emo))
 
     def stop(self) -> None:
         if not self.available:
