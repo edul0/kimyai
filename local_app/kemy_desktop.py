@@ -206,6 +206,28 @@ def save_memorias(mems: list) -> None:
         pass
 
 
+def emb_cache_file() -> Path:
+    return config_dir() / "kemy_embeddings.json"
+
+
+def load_emb_cache() -> dict:
+    try:
+        d = json.loads(emb_cache_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_emb_cache(cache: dict) -> None:
+    try:
+        # cap: mantem os ultimos ~4000 vetores (arquivo nao cresce pra sempre)
+        if len(cache) > 4000:
+            cache = dict(list(cache.items())[-4000:])
+        emb_cache_file().write_text(json.dumps(cache), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def telemetry_file() -> Path:
     return config_dir() / "kemy_telemetry.jsonl"
 
@@ -4408,6 +4430,7 @@ class WebApi:
         self._cloud_pushed_hash = ""
         self._cloud_remote_ts = None
         self.wake_on = False        # wake word "Ei Kemy" (escuta hands-free)
+        self._emb_cache = load_emb_cache()   # cache de vetores (RAG semantico)
         self.speaker.on_start = self._on_speak_start
         self.speaker.on_done = self._on_speak_done
         self.listener = Listener()
@@ -6910,15 +6933,93 @@ class WebApi:
         if novos:
             save_memorias(self.memories)
 
-    def _memoria_prefix(self) -> str:
+    # ===================== RAG SEMÂNTICO (embeddings grátis do Gemini) =====================
+    @staticmethod
+    def _emb_key(t: str) -> str:
+        import hashlib
+        return hashlib.md5((t or "").encode("utf-8", "ignore")).hexdigest()
+
+    def _embed(self, texts: list):
+        """Gera embeddings via API grátis do Gemini (text-embedding-004). None se indisponível."""
+        keys = getattr(self.llm, "gemini_keys", None) or ([self.llm.gemini] if getattr(self.llm, "gemini", "") else [])
+        if not keys or not texts:
+            return None
+        body = {"requests": [{"model": "models/text-embedding-004",
+                              "content": {"parts": [{"text": (t or "")[:2000]}]}} for t in texts]}
+        for k in keys:
+            try:
+                url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                       "text-embedding-004:batchEmbedContents?key=" + k)
+                req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    d = json.loads(r.read().decode("utf-8"))
+                embs = [e.get("values") for e in d.get("embeddings", [])]
+                if embs and len(embs) == len(texts) and all(embs):
+                    return embs
+            except Exception:
+                continue
+        return None
+
+    def _vecs_for(self, texts: list) -> dict:
+        """Vetores de uma lista de textos (usa cache; embeda só os que faltam)."""
+        miss = [t for t in texts if self._emb_key(t) not in self._emb_cache]
+        if miss:
+            vs = self._embed(miss)
+            if vs:
+                for t, v in zip(miss, vs):
+                    self._emb_cache[self._emb_key(t)] = v
+                save_emb_cache(self._emb_cache)
+        return {t: self._emb_cache.get(self._emb_key(t)) for t in texts}
+
+    def _semantic_top(self, query: str, texts: list, k: int):
+        """Índices dos k textos mais RELEVANTES pra query (cosseno). None => cair pro fallback."""
+        if not texts:
+            return []
+        qv = self._embed([query])
+        if not qv:
+            return None
+        qv = qv[0]
+        import math
+        nq = math.sqrt(sum(x * x for x in qv)) or 1.0
+        cache = self._vecs_for(texts)
+        scored = []
+        for i, t in enumerate(texts):
+            v = cache.get(t)
+            if not v:
+                continue
+            dot = sum(a * b for a, b in zip(qv, v))
+            nv = math.sqrt(sum(b * b for b in v)) or 1.0
+            scored.append((dot / (nq * nv), i))
+        if not scored:
+            return None
+        scored.sort(reverse=True)
+        return [i for _, i in scored[:k]]
+
+    def _memoria_prefix(self, query: str = "") -> str:
         out = ""
         instr = (getattr(self, "instructions", "") or "").strip()
         if instr:
             out += ("INSTRUCOES DO USUARIO (perfil/preferencias fixas — respeite SEMPRE, "
                     "valem mais que regras gerais):\n" + instr[:4000] + "\n\n")
         if self.memories:
+            mems = self.memories
+            # RAG semantico: com muita memoria, injeta so as RELEVANTes pra pergunta (nao tudo).
+            if query and len(mems) > 12:
+                idx = self._semantic_top(query, mems, 10)
+                if idx is not None:
+                    picked = [mems[i] for i in idx]
+                    # garante as mais recentes tambem (contexto imediato)
+                    for m in mems[-4:]:
+                        if m not in picked:
+                            picked.append(m)
+                    mems = picked
+                else:
+                    mems = mems[-40:]   # fallback: recentes (offline / sem chave Gemini)
+            else:
+                mems = mems[-40:]
             out += ("MEMORIA — licoes e preferencias que voce APRENDEU com este usuario "
-                    "(respeite SEMPRE):\n- " + "\n- ".join(self.memories[-40:]) + "\n\n")
+                    "(respeite SEMPRE):\n- " + "\n- ".join(mems) + "\n\n")
         if getattr(self, "skills", None):
             nomes = ", ".join(s.get("name", "") for s in self.skills[-30:] if s.get("name"))
             if nomes:
@@ -7339,7 +7440,7 @@ class WebApi:
         # 🤖 Modo agente autonomo (multi-passo) para tarefas que pedem "ate funcionar/completo".
         if build and self._wants_agent(text):
             return self._autonomous_agent(text, base), None
-        mem = self._memoria_prefix() + self._knowledge_prefix(text)   # memoria + RAG de conhecimento
+        mem = self._memoria_prefix(text) + self._knowledge_prefix(text)   # RAG: memoria + conhecimento relevantes
         if not build:
             system = mem + CHAT_PROMPT + "\n" + self._now_context() + (web or "")
             # 3 niveis pra economizar a cota do GPT-5: casual->Gemini Flash, smart->Cerebras gpt-oss-120b,
@@ -7969,7 +8070,7 @@ class WebApi:
         for step in range(1, max_steps + 1):
             self._state("thinking")
             files_ctx = read_project_files(base)
-            sys_p = (self._memoria_prefix() + SYSTEM_PROMPT + "\n\n=== MODO AGENTE ===\nVoce trabalha em PASSOS "
+            sys_p = (self._memoria_prefix(text) + SYSTEM_PROMPT + "\n\n=== MODO AGENTE ===\nVoce trabalha em PASSOS "
                      "ate CONCLUIR a tarefa, como um engenheiro autonomo. A cada passo: crie/edite arquivos "
                      "(<<<FILE>>>/<<<EDIT>>>) e, se precisar instalar/rodar/testar, use ```kemy-run (voce VE a "
                      "saida e os erros e continua corrigindo). Avance de verdade a cada passo, nao repita o que ja "
@@ -8041,7 +8142,7 @@ class WebApi:
         if any(k in obj_l for k in ("login", "entrar", "autentic", "cadastro", "cadastrar",
                                     "sign in", "sign up", "signin", "signup", "criar conta")):
             design_block = APP_DESIGN_PROMPT + AUTH_PROMPT
-        sysp = (self._memoria_prefix() + SYSTEM_PROMPT + design_block + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
+        sysp = (self._memoria_prefix(objective + " " + task) + SYSTEM_PROMPT + design_block + "\n\n=== AGENTE: TAREFA ATUAL ===\n"
                 "Faca SO a tarefa atual do plano, COMPLETA e funcional. Crie/edite arquivos "
                 "(<<<FILE>>>/<<<EDIT>>>); se precisar instalar/rodar/testar, use ```kemy-run. NAO refaca o "
                 "que ja existe. Lembre: todo botao/rota tem que funcionar e os dados persistem no banco.")
