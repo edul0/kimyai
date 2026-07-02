@@ -1,7 +1,13 @@
-# OPCIONAL — reconhecimento de QUEM fala (voiceprint). Não vai no .exe padrão
-# (pesa por causa do torch). Instale só se quiser esse recurso e tiver um PC
-# com GPU/CPU boa:  pip install -r local_app/requirements-voice.txt
+# OPCIONAL — recursos de voz que usam GPU/CPU boa. NÃO vão no .exe padrão
+# (pesam por causa do torch). Instale só se quiser e tiver a máquina:
+#   pip install -r local_app/requirements-voice.txt
 #
-# Depois, na Kemy: "aprende minha voz como <seu nome>".
+# 1) Reconhecer QUEM fala (voiceprint):  "aprende minha voz como <seu nome>"
+# 2) Whisper LOCAL (reconhecimento de fala melhor/offline que o Google grátis).
+#    Ajustes por variável de ambiente (opcionais):
+#      KEMY_WHISPER_MODEL=small        (tiny/base/small/medium/large-v3)
+#      KEMY_WHISPER_DEVICE=auto        (cuda p/ GPU, cpu, auto)
+#      KEMY_WHISPER_COMPUTE=int8       (int8/float16)
 resemblyzer>=0.1.1
+faster-whisper>=1.0.0
 numpy>=1.24

@@ -3248,6 +3248,62 @@ class Listener:
                 self._mic_ok = True
             except Exception:
                 self.available = False
+        self.last_audio = None
+        self._whisper = None            # Whisper LOCAL (opcional) — carrega sob demanda
+        self._whisper_tried = False
+
+    def _whisper_model(self):
+        """Carrega o faster-whisper na 1a vez (lazy). None se nao instalado."""
+        if self._whisper is not None:
+            return self._whisper
+        if self._whisper_tried:
+            return None
+        self._whisper_tried = True
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+            size = os.environ.get("KEMY_WHISPER_MODEL", "small")
+            dev = os.environ.get("KEMY_WHISPER_DEVICE", "auto")
+            ct = os.environ.get("KEMY_WHISPER_COMPUTE", "int8")
+            self._whisper = WhisperModel(size, device=dev, compute_type=ct)
+        except Exception:
+            self._whisper = None
+        return self._whisper
+
+    def _transcribe(self, audio) -> str:
+        """Transcreve o áudio: Whisper LOCAL (melhor/offline, usa GPU) se instalado; senão Google."""
+        wav = None
+        try:
+            wav = audio.get_wav_data()
+            self.last_audio = wav
+        except Exception:
+            self.last_audio = None
+        m = self._whisper_model()
+        if m is not None and wav:
+            try:
+                import io
+                import wave
+                import numpy as np
+                with wave.open(io.BytesIO(wav), "rb") as w:
+                    sr_ = w.getframerate()
+                    raw = w.readframes(w.getnframes())
+                arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                if sr_ != 16000:   # faster-whisper espera 16kHz
+                    import math
+                    ratio = 16000 / sr_
+                    idx = (np.arange(int(len(arr) * ratio)) / ratio).astype(np.int64)
+                    idx = idx[idx < len(arr)]
+                    arr = arr[idx]
+                segs, _info = m.transcribe(arr, language="pt", vad_filter=True)
+                txt = " ".join(s.text for s in segs).strip()
+                if txt:
+                    return txt
+            except Exception:
+                pass
+        # fallback: Google (grátis, precisa internet)
+        try:
+            return self._recognizer.recognize_google(audio, language="pt-BR") or ""
+        except Exception:
+            return ""
 
     def listen_once(self, on_state, on_text, on_error) -> None:
         if not (self.available and self._mic_ok):
@@ -3263,7 +3319,9 @@ class Listener:
                     self._recognizer.adjust_for_ambient_noise(source, duration=0.2)
                     audio = self._recognizer.listen(source, timeout=8, phrase_time_limit=10)
                 on_state("thinking")
-                text = self._recognizer.recognize_google(audio, language="pt-BR")
+                text = self._transcribe(audio)   # Whisper local se tiver; senão Google
+                if not text:
+                    raise sr.UnknownValueError()
                 on_text(text)
             except sr.WaitTimeoutError:
                 on_error("Nao ouvi nada. Tente de novo.")
@@ -3283,11 +3341,7 @@ class Listener:
             with sr.Microphone() as source:
                 self._recognizer.adjust_for_ambient_noise(source, duration=0.15)
                 audio = self._recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
-            try:
-                self.last_audio = audio.get_wav_data()   # guarda o áudio (pro reconhecimento de voz)
-            except Exception:
-                self.last_audio = None
-            return self._recognizer.recognize_google(audio, language="pt-BR") or ""
+            return self._transcribe(audio)   # Whisper local se tiver; senão Google (guarda last_audio)
         except Exception:
             return ""
 
@@ -7605,6 +7659,14 @@ class WebApi:
             # Microfone (STT) — necessário p/ wake word e Conversa
             add(bool(getattr(self.listener, "available", False)), "Microfone (ouvir / Ei Kemy)",
                 "" if getattr(self.listener, "available", False) else "sem mic / PyAudio")
+            # Whisper local (opcional) — reconhecimento de voz melhor/offline
+            try:
+                import importlib.util as _il
+                tem_wh = _il.find_spec("faster_whisper") is not None
+            except Exception:
+                tem_wh = False
+            add(True if tem_wh else None, "Whisper local (voz melhor)",
+                "instalado" if tem_wh else "opcional — pip install faster-whisper (usa sua GPU)")
             # Embeddings (RAG semântico)
             try:
                 add(bool(self._embed(["teste"])), "RAG semântico (embeddings Gemini)",
