@@ -9938,9 +9938,18 @@ class WebApi:
             p = (base / rel).resolve()
             if base.resolve() not in p.parents and p != base.resolve():
                 return {"ok": False, "error": "caminho inválido"}
+            old = ""
+            try:
+                old = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                old = ""
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
+            novo = content if isinstance(content, str) else str(content)
+            p.write_text(novo, encoding="utf-8")
             self._msg("sys", f"💾 Você editou {rel} — salvei e já estou lendo a sua versão.", store=False)
+            # 🧬 APRENDE com a sua edição: entende o que você mudou e guarda como preferência.
+            if old and old.strip() != novo.strip():
+                threading.Thread(target=self._learn_from_edit, args=(rel, old, novo), daemon=True).start()
             # foto no git pra dar pra desfazer a edição manual também
             try:
                 self._git_snapshot(base, f"voce editou {rel}")
@@ -9949,6 +9958,32 @@ class WebApi:
             return {"ok": True, "path": rel}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _learn_from_edit(self, rel: str, old: str, new: str) -> None:
+        """Compara o antes/depois da SUA edição e extrai uma PREFERÊNCIA durável de estilo/código,
+        pra Kemy gerar do seu jeito na próxima. Guarda na memória (com dedup)."""
+        try:
+            import difflib
+            diff = "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                                  lineterm="", n=2))[:4000]
+            if len(diff.strip()) < 20:
+                return
+            out = self.llm.chat(
+                "O usuário EDITOU um código que EU gerei. Pelo diff, descubra a PREFERÊNCIA/padrão de "
+                "estilo dele que eu devo aplicar SEMPRE daqui pra frente (ex.: 'prefere arrow function', "
+                "'usa 2 espaços', 'quer dark mode', 'renomeia pra camelCase', 'comenta em PT-BR'). "
+                "Responda UMA frase curta começando com 'prefere '/'usa '/'quer ' — ou exatamente NONE se "
+                "for só conteúdo/dado sem padrão de estilo. Só a frase.",
+                [{"role": "user", "content": f"Arquivo: {rel}\nDIFF (– antigo, + seu):\n{diff}"}],
+                max_tokens=60, fast=True)
+            licao = (out or "").strip().strip('"').rstrip(".")
+            if not licao or licao.upper().startswith("NONE") or len(licao) < 6:
+                return
+            if self._add_memory(licao):
+                save_memorias(self.memories)
+                self._msg("kemy", f"🧬 Aprendi com a sua edição: {licao}. Vou fazer assim daqui pra frente.")
+        except Exception:
+            pass
 
     def _maybe_run(self, commands: list[str], base: Path) -> None:
         if not commands:
