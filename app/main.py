@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .agents import DEFAULT_AGENTS
 from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
+from .quota import check_and_consume, usage_today
 from .config import get_settings
 from .jobs import JobManager, utcnow
 from .schemas import (
@@ -1362,6 +1363,10 @@ async def excluir_sessao(sid: str, request: Request):
 @app.post("/api/comando", response_model=JobCreateResponse)
 async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, request: Request):
     owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    # Cota diaria POR USUARIO (estilo Manus): cada login usa sua fatia justa do pool gratis.
+    _q = check_and_consume(storage, owner, settings)
+    if not _q.get("allowed"):
+        raise HTTPException(status_code=429, detail=_q.get("message", "Cota diaria esgotada."))
     sid = cmd.session_id or str(uuid.uuid4())
     data = await _load_session_for_owner(sid, owner)
     if not data:
@@ -1417,6 +1422,17 @@ async def comando(cmd: ComandoRequest, background_tasks: BackgroundTasks, reques
         "session_id": sid,
         "status_url": f"/api/jobs/{job.job_id}",
     }
+
+
+@app.get("/api/cota")
+async def cota(request: Request):
+    """Cota diaria do usuario logado (pra UI mostrar 'X/N mensagens hoje')."""
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    limit = int(getattr(settings, "daily_quota", 40) or 0)
+    if (owner and owner.lower() == (settings.auth_user or "").lower()) or limit <= 0:
+        return {"unlimited": True, "used": 0, "limit": 0, "remaining": None}
+    used = usage_today(storage, owner)
+    return {"unlimited": False, "used": used, "limit": limit, "remaining": max(0, limit - used)}
 
 
 @app.post("/api/vision/analyze", response_model=VisionAnalyzeResponse)

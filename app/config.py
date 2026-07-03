@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     response_cache_ttl_seconds: int = Field(default=3600, alias="KEMY_RESPONSE_CACHE_TTL_SECONDS")
     llm_request_timeout_seconds: int = Field(default=45, alias="KEMY_LLM_TIMEOUT_SECONDS")
     llm_retry_attempts: int = Field(default=2, alias="KEMY_LLM_RETRY_ATTEMPTS")
+    daily_quota: int = Field(default=40, alias="KEMY_DAILY_QUOTA")
     auth_user: str = Field(default="admin", alias="KEMY_AUTH_USER")
     auth_password: str = Field(default="kemy-ai", alias="KEMY_AUTH_PASSWORD")
     auth_secret: str = Field(default="change-this-secret", alias="KEMY_AUTH_SECRET")
