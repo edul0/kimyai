@@ -275,6 +275,27 @@ def is_destructive_cmd(cmd: str) -> bool:
     return bool(_DESTRUCTIVE_RE.search(c) or _SUSPICIOUS_RE.search(c))
 
 
+def reset_hint(errors: list) -> str:
+    """Quando TODAS as IAs grátis falham, diz QUANDO devem voltar (pela cota/limite).
+    Cota diária -> meia-noite UTC; limite por minuto -> ~1 min."""
+    blob = " ".join(str(e) for e in (errors or [])).lower()
+    daily = any(w in blob for w in ("quota", "exhausted", "resource_exhausted", "esgotad", "daily",
+                                    "insufficient", "402", "billing", "limit reached", "limite diario"))
+    per_min = ("429" in blob or "too many" in blob or "rate" in blob or "per minute" in blob or "por minuto" in blob)
+    if daily:
+        now = datetime.datetime.utcnow()
+        nxt = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        falta = nxt - now
+        h = falta.seconds // 3600
+        m = (falta.seconds % 3600) // 60
+        alvo_local = datetime.datetime.now() + falta
+        return (f"⏳ A cota diária das IAs grátis esgotou. Elas costumam voltar à meia-noite (UTC) — "
+                f"daqui ~{h}h{m:02d}min (por volta das {alvo_local.strftime('%H:%M')} no seu horário).")
+    if per_min:
+        return "⏳ Bati no limite por minuto das IAs grátis. Espera ~1 minuto e tenta de novo. 😉"
+    return ""
+
+
 def reminders_file() -> Path:
     return config_dir() / "kemy_lembretes.json"
 
@@ -2310,9 +2331,11 @@ class LLMClient:
         diag = (f"\n\nProvedores COM chave: {', '.join(have) or 'nenhum'}."
                 + ("" if self.nvidia else " ⚠️ NVIDIA SEM chave: nenhuma chave 'nvapi-' foi "
                    "encontrada no .env/secrets — confira o NVIDIA_API_KEY."))
-        raise RuntimeError(
-            ("Todos os provedores falharam (" + "; ".join(errors) + ")." + diag)
-            if errors else "Sem provedor de IA configurado." + diag)
+        if errors:
+            hint = reset_hint(errors)
+            base = "As IAs grátis não responderam agora."
+            raise RuntimeError((hint + "\n\n" if hint else "") + base + diag)
+        raise RuntimeError("Sem provedor de IA configurado." + diag)
 
     def _post(self, url: str, headers: dict, payload: dict, timeout: float = 60) -> dict:
         data = json.dumps(payload).encode("utf-8")
