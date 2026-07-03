@@ -4804,6 +4804,14 @@ class WebApi:
         self.instructions = load_instructions()
         self.skills = load_skills()
         self.knowledge = load_conhecimento()
+        # "Desde quando" — marca o 1o dia juntos (o painel mostra a relacao crescendo).
+        _since = config_dir() / "kemy_since.txt"
+        try:
+            if not _since.exists():
+                _since.write_text(datetime.datetime.now().strftime("%Y-%m-%d"), encoding="utf-8")
+            self.since = _since.read_text(encoding="utf-8").strip()
+        except Exception:
+            self.since = ""
         self.reminders = load_reminders()   # lembretes/timers/agenda (Jarvis)
         self._batt_warned = False
         self._mobile_port = None
@@ -7609,6 +7617,41 @@ class WebApi:
                 out += ("HABILIDADES que voce ja APRENDEU a fazer no PC (pode repetir quando pedirem): "
                         + nomes + "\n\n")
         return out
+
+    def me_panel(self) -> None:
+        """🪞 PAINEL DE MIM: mostra o quanto a Kemy já te conhece — e cresce com o tempo.
+        É o 'moat' visível: sua relação com ela vira algo que você não quer perder."""
+        dias = 0
+        try:
+            d0 = datetime.datetime.strptime((getattr(self, "since", "") or "")[:10], "%Y-%m-%d")
+            dias = max(0, (datetime.datetime.now() - d0).days)
+        except Exception:
+            dias = 0
+        voices = list(getattr(getattr(self, "spk", None), "prints", {}) or {})
+        # nível da relação (lúdico) por quanto ela aprendeu de você
+        pontos = len(self.memories) * 3 + len(self.skills) * 5 + len(self.knowledge) + len(voices) * 8
+        niveis = [(0, "Nos conhecendo"), (30, "Já pego seu jeito"), (80, "Te conheço bem"),
+                  (160, "Dupla afiada"), (320, "Quase leio sua mente")]
+        nivel = niveis[0][1]
+        for lim, nome in niveis:
+            if pontos >= lim:
+                nivel = nome
+        data = {
+            "since_days": dias,
+            "since": getattr(self, "since", ""),
+            "nivel": nivel,
+            "counts": {"memorias": len(self.memories), "habilidades": len(self.skills),
+                       "conhecimento": len(self.knowledge), "vozes": len(voices)},
+            "instrucoes": (getattr(self, "instructions", "") or "")[:600],
+            "memorias": self.memories[-60:][::-1],
+            "habilidades": [s.get("name", "") for s in (self.skills or []) if s.get("name")][-40:][::-1],
+            "vozes": voices,
+        }
+        try:
+            self._js(f"showMePanel({json.dumps(data, ensure_ascii=False)})")
+        except Exception:
+            # fallback texto se a UI nao tiver o painel
+            self.show_memory()
 
     def show_memory(self) -> None:
         """Mostra o que a Kemy sabe sobre voce (memoria + habilidades)."""

@@ -284,6 +284,7 @@
             <div class="menulbl">Sistema</div>
             <button onclick="api('full_diagnostic');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/><circle cx="12" cy="12" r="10" opacity=".25"/></svg>Diagnóstico completo (testar tudo)</button>
             <button onclick="api('help_kemy');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 2.5"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>O que a Kemy faz</button>
+            <button onclick="api('me_panel');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Painel de mim (o que ela sabe)</button>
             <button onclick="api('show_memory');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 3 2 4 2 7h10c0-3 2-4 2-7a7 7 0 0 0-7-7z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>Minha memória (ver/limpar)</button>
             <button onclick="api('export_chat');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>Exportar conversa</button>
             <button onclick="api('test_providers');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Testar IAs (diagnóstico)</button>
@@ -354,6 +355,18 @@
         <button onclick="closePreview()">✕</button>
       </div>
       <iframe id="pvFrame" class="pvframe"></iframe>
+    </div>
+  </div>
+  <div id="meModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:76;align-items:center;justify-content:center">
+    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:18px;width:640px;max-width:94%;max-height:90vh;overflow:auto">
+      <div style="padding:22px 24px;background:linear-gradient(135deg,rgba(60,231,200,.16),rgba(29,111,224,.16));border-bottom:1px solid var(--line);position:relative">
+        <button onclick="closeMe()" style="position:absolute;top:14px;right:16px;background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+        <div style="font-size:13px;color:var(--muted);font-weight:700;letter-spacing:1px">🪞 PAINEL DE MIM</div>
+        <div id="meNivel" style="font-size:24px;font-weight:800;margin-top:4px">—</div>
+        <div id="meSince" style="color:var(--muted);font-size:13px;margin-top:2px"></div>
+      </div>
+      <div id="meCounts" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px 24px"></div>
+      <div id="meBody" style="padding:0 24px 22px"></div>
     </div>
   </div>
   <div id="ideModal">
@@ -628,6 +641,34 @@
     });
   }
   function closeIde(){ document.getElementById('ideModal').style.display='none'; }
+  function _esc(s){ var d=document.createElement('div'); d.textContent=(s==null?'':String(s)); return d.innerHTML; }
+  function showMePanel(d){
+    d=d||{};
+    document.getElementById('meNivel').textContent='💚 '+(d.nivel||'Nos conhecendo');
+    var dias=d.since_days||0;
+    document.getElementById('meSince').textContent = dias>0
+      ? ('A gente se conhece há '+dias+' dia'+(dias>1?'s':'')+(d.since?(' (desde '+d.since+')'):''))
+      : 'Estamos começando a nos conhecer 😊';
+    var c=d.counts||{}, tiles=[['Lembranças',c.memorias||0],['Habilidades',c.habilidades||0],['Conhecimento',c.conhecimento||0],['Vozes',c.vozes||0]];
+    document.getElementById('meCounts').innerHTML = tiles.map(function(t){
+      return '<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">'
+        +'<div style="font-size:26px;font-weight:800">'+t[1]+'</div>'
+        +'<div style="font-size:11.5px;color:var(--muted);font-weight:600">'+t[0]+'</div></div>';
+    }).join('');
+    function sec(titulo, itens, vazio){
+      if(!itens||!itens.length) return '<div style="margin:14px 0 4px;font-weight:700">'+titulo+'</div><div style="color:var(--muted);font-size:13px">'+vazio+'</div>';
+      return '<div style="margin:16px 0 8px;font-weight:700">'+titulo+'</div>'
+        + itens.map(function(x){return '<div style="background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:8px 11px;margin-bottom:6px;font-size:13.5px">'+_esc(x)+'</div>';}).join('');
+    }
+    var html='';
+    if(d.instrucoes) html+='<div style="margin:14px 0 6px;font-weight:700">Suas instruções</div><div style="background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:13px;white-space:pre-wrap">'+_esc(d.instrucoes)+'</div>';
+    html+=sec('O que eu sei de você', d.memorias, 'Ainda estou aprendendo — fala comigo que eu vou guardando.');
+    html+=sec('Habilidades que aprendi a fazer', d.habilidades, 'Nenhuma ainda — me ensina uma tarefa do PC!');
+    html+=sec('Vozes que reconheço', d.vozes, 'Nenhuma cadastrada. Diga: "aprende minha voz como <seu nome>".');
+    document.getElementById('meBody').innerHTML=html;
+    document.getElementById('meModal').style.display='flex';
+  }
+  function closeMe(){ document.getElementById('meModal').style.display='none'; }
   (function(){ var ed=document.getElementById('ideEditor'); if(!ed)return;
     ed.addEventListener('input',function(){ _ideDirty(ed.value!==_ideSaved); });
     ed.addEventListener('keydown',function(e){
