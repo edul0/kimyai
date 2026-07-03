@@ -268,6 +268,44 @@ _SUSPICIOUS_RE = re.compile(
     r"\bnc\b.*\s-e\b|start-process.*-verb\s+runas|new-object\s+net\.webclient)")
 
 
+_JSDOM_TEST_JS = r"""
+// Testa o app de verdade: carrega o HTML, roda o JS, clica em tudo e pega erros de runtime.
+const { JSDOM } = require('jsdom');
+const file = process.argv[2];
+const errors = [];
+function push(m){ if(m) errors.push(String(m).slice(0,180)); }
+const vc = new (require('jsdom').VirtualConsole)();
+vc.on('jsdomError', e => push('erro JS: ' + (e && (e.message||e))));
+JSDOM.fromFile(file, { runScripts: 'dangerously', resources: 'usable', pretendToBeVisual: true, virtualConsole: vc })
+ .then(dom => {
+   const w = dom.window;
+   w.addEventListener('error', e => push('erro JS: ' + (e.message || (e.error && e.error.message))));
+   w.addEventListener('unhandledrejection', e => push('promise rejeitada: ' + (e.reason && e.reason.message)));
+   setTimeout(() => {
+     try {
+       w.document.dispatchEvent(new w.Event('DOMContentLoaded', {bubbles:true}));
+     } catch(e){}
+     try {
+       const sel = 'button, [onclick], .btn, [data-section], .nav-link, input[type=submit], a[role=button]';
+       w.document.querySelectorAll(sel).forEach(el => {
+         try { el.click(); } catch(e){ push('clicar em <'+el.tagName.toLowerCase()+'> falhou: '+e.message); }
+       });
+       w.document.querySelectorAll('form').forEach(f => {
+         try { (f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}))); }
+         catch(e){ push('submeter form falhou: '+e.message); }
+       });
+     } catch(e){ push('teste falhou: '+e.message); }
+     setTimeout(() => {
+       const uniq = [...new Set(errors)].slice(0, 15);
+       console.log(JSON.stringify({ ok: uniq.length === 0, errors: uniq }));
+       process.exit(0);
+     }, 400);
+   }, 600);
+ })
+ .catch(e => { console.log(JSON.stringify({ ok:false, errors:['nem carregou: '+(e&&e.message)] })); process.exit(0); });
+"""
+
+
 def is_destructive_cmd(cmd: str) -> bool:
     """True se o comando pode APAGAR/ALTERAR o sistema OU baixar-e-executar codigo / usar
     ofuscacao (vetor de prompt injection). Rede de seguranca: nada disso roda sem confirmar."""
@@ -8301,6 +8339,13 @@ class WebApi:
                     crus = audit_unfinished(base)
                     if crus:
                         self._autofix_quality(base, crus)
+                # 🧪 RODA e TESTA de verdade (clica em tudo) — pega erro de runtime; conserta.
+                if self.boost:
+                    runtime = self._functional_test(base)
+                    if runtime:
+                        self._msg("sys", "🧪 Testei clicando em tudo e achei erro — corrigindo antes de entregar…", store=False)
+                        if self._autofix_buttons(base, "web", ["ERRO ao RODAR/clicar: " + e for e in runtime]):
+                            self._ensure_scripts_linked(base)
         except Exception:
             pass
         # Reforco de seguranca: avisa (e nao deixa passar) chave de API vazando no codigo.
@@ -9736,6 +9781,49 @@ class WebApi:
             except Exception:
                 continue
         return errs
+
+    def _functional_test(self, base: Path) -> list:
+        """RODA o app de verdade (headless, Node+jsdom): carrega o index.html, executa o JS,
+        CLICA em todos os botões e submete os forms, e captura erros de RUNTIME que os auditores
+        estáticos não pegam. Retorna a lista de erros pra consertar. Opcional (precisa de Node)."""
+        idx = self._find_index(base)
+        if idx is None or not idx.exists():
+            return []
+        node = npm = None
+        for exe in ("node", "node.exe"):
+            try:
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet()); node = exe; break
+            except Exception:
+                continue
+        for exe in ("npm", "npm.cmd"):
+            try:
+                subprocess.run([exe, "--version"], capture_output=True, timeout=8, **proc_quiet()); npm = exe; break
+            except Exception:
+                continue
+        if not node:
+            return []
+        env = config_dir() / "_kemy_jsdom"
+        try:
+            env.mkdir(parents=True, exist_ok=True)
+            if not (env / "node_modules" / "jsdom").exists():
+                if not npm:
+                    return []
+                self._msg("sys", "🧪 Preparando o testador (instalo o jsdom uma vez só)…", store=False)
+                subprocess.run([npm, "init", "-y"], cwd=str(env), capture_output=True, timeout=60, **proc_quiet())
+                r = subprocess.run([npm, "install", "jsdom"], cwd=str(env), capture_output=True,
+                                   text=True, timeout=240, **proc_quiet())
+                if not (env / "node_modules" / "jsdom").exists():
+                    return []
+            (env / "kemy_test.js").write_text(_JSDOM_TEST_JS, encoding="utf-8")
+            p = subprocess.run([node, str(env / "kemy_test.js"), str(idx)], cwd=str(env),
+                               capture_output=True, text=True, timeout=40, **proc_quiet())
+            line = next((ln for ln in reversed((p.stdout or "").splitlines()) if ln.strip().startswith("{")), "")
+            data = json.loads(line) if line else {}
+            if data.get("ok"):
+                return []
+            return [e for e in (data.get("errors") or []) if e][:15]
+        except Exception:
+            return []
 
     def _sanitize_python(self, base: Path) -> None:
         """Corrige erros de sintaxe deterministicos nos .py gerados (ex.: zero a esquerda)."""
