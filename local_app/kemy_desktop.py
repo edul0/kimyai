@@ -5175,6 +5175,62 @@ class WebApi:
             self._msg("kemy", g)
         if self.speaker.available:
             self.speaker.say(g[:160]); self._state("speaking")
+        threading.Timer(8.0, self._daily_briefing).start()   # briefing do dia (1x por dia)
+
+    def _daily_briefing(self, force: bool = False) -> None:
+        """PROATIVIDADE: 1x por dia (ou sob pedido), a Kemy te dá um briefing — agenda de hoje,
+        tarefas pendentes e o que ela pode adiantar. Ela INICIA, você não pergunta."""
+        try:
+            hoje = datetime.datetime.now().strftime("%Y-%m-%d")
+            bf = config_dir() / "kemy_briefing.txt"
+            if not force:
+                try:
+                    if bf.read_text(encoding="utf-8").strip() == hoje:
+                        return
+                except Exception:
+                    pass
+            fim = datetime.datetime.now().replace(hour=23, minute=59, second=59).timestamp()
+            agenda = sorted([r for r in self.reminders if not r.get("done") and r.get("ts", 0) <= fim],
+                            key=lambda r: r.get("ts", 0))
+            try:
+                tarefas = self.taskdb.unfinished()
+            except Exception:
+                tarefas = []
+            # so faz briefing se ha ALGO util a dizer (ou se pedido)
+            if not force and not agenda and not tarefas:
+                bf.write_text(hoje, encoding="utf-8")
+                return
+            linhas = []
+            for r in agenda[:6]:
+                dt = datetime.datetime.fromtimestamp(r.get("ts", 0))
+                linhas.append(f"- {dt.strftime('%H:%M')} {r.get('text') or r.get('kind', 'lembrete')}")
+            for t in tarefas[:3]:
+                linhas.append(f"- tarefa em 2º plano não terminada: {(t.get('prompt') or '')[:60]}")
+            skills = [s.get("name", "") for s in (self.skills or []) if s.get("name")][:4]
+            dados = (f"Hoje é {self.DOW_PT[datetime.datetime.now().weekday()]}, {datetime.datetime.now().strftime('%d/%m')}.\n"
+                     + ("AGENDA/PENDÊNCIAS:\n" + "\n".join(linhas) if linhas else "Sem compromissos marcados hoje.")
+                     + (("\nHABILIDADES que já sei fazer no PC: " + ", ".join(skills)) if skills else ""))
+            msg = self.llm.chat(
+                CHAT_PROMPT + "\n\nMonte um BRIEFING do dia CURTO e natural (2-4 linhas), como uma amiga "
+                "proativa que já organizou seu dia: cumprimente pelo horário, resuma a agenda/pendências e "
+                "ofereça ajuda concreta (ex.: 'quer que eu adiante o projeto X?'). Sem emoji, sem enrolar.",
+                [{"role": "user", "content": self._memoria_prefix() + "\n" + dados}], max_tokens=200, fast=True)
+            msg = strip_emojis(msg or "").strip().strip('"')
+            if msg:
+                self._msg("kemy", "☀️ " + msg)
+                if self.speaker.available:
+                    self.speaker.say(msg[:280]); self._state("speaking")
+            bf.write_text(hoje, encoding="utf-8")
+        except Exception:
+            pass
+
+    def _maybe_briefing(self, text: str) -> bool:
+        """'bom dia' / 'meu dia' / 'resumo do dia' / 'me atualiza' -> briefing na hora."""
+        if re.search(r"(?i)^(bom dia|meu dia|resumo do dia|me atualiza|novidades|o que tem (pra|para) hoje|"
+                     r"me d[aá] um resumo|briefing)\b", (text or "").strip()):
+            threading.Thread(target=lambda: self._daily_briefing(force=True), daemon=True).start()
+            return True
+        return False
 
     def _proactive_loop(self) -> None:
         """Companhia proativa: se voce some por um tempo, ela puxa papo (gentil, 1x por ociosidade)."""
@@ -7052,6 +7108,8 @@ class WebApi:
         if self._app_command(text):   # comandos de controle do app (voz ou texto)
             return
         if self._maybe_reminder(text):   # relógio/lembrete/timer/agenda (Jarvis)
+            return
+        if self._maybe_briefing(text):   # "bom dia / meu dia / resumo" → briefing proativo
             return
         if self._maybe_tv(text):   # controle da TV (Android TV via ADB)
             return
