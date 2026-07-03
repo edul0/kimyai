@@ -2049,13 +2049,32 @@ class LLMClient:
                                  + [env.get(f"GEMINI_API_KEY{i}") or "" for i in range(2, 10)]))
         self.gemini_keys = [k for k in re.split(r"[\s,;]+", gm_raw) if k and not k.startswith("nvapi-")]
         self.gemini = self.gemini_keys[0] if self.gemini_keys else None
-        self.groq = _nonnv(env.get("GROQ_API_KEY"))
-        self.cerebras = _nonnv(env.get("CEREBRAS_API_KEY"))
+        # TODOS os provedores aceitam VARIAS chaves (de contas diferentes) -> a Kemy rotaciona
+        # entre elas quando uma esgota a cota (429/402/quota), SOMANDO a cota grátis diária.
+        # Formas: virgula/espaco/; no proprio campo, OU GROQ_API_KEY2..9 (numeradas).
+        def _keys(*names: str) -> list[str]:
+            raw = " ".join(filter(None, [env.get(n) or "" for n in names]
+                                  + [env.get(f"{names[0]}{i}") or "" for i in range(2, 10)]))
+            out, seen2 = [], set()
+            for k in re.split(r"[\s,;]+", raw):
+                k = k.strip()
+                if k and not k.startswith("nvapi-") and k not in seen2:
+                    seen2.add(k); out.append(k)
+            return out
+
+        self.groq_keys = _keys("GROQ_API_KEY")
+        self.cerebras_keys = _keys("CEREBRAS_API_KEY")
+        self.openrouter_keys = _keys("OPENROUTER_API_KEY")
+        self.mistral_keys = _keys("MISTRAL_API_KEY")
+        self.github_keys = _keys("GITHUB_MODELS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+        self.sambanova_keys = _keys("SAMBANOVA_API_KEY", "SAMBA_API_KEY")
+        self.groq = self.groq_keys[0] if self.groq_keys else None
+        self.cerebras = self.cerebras_keys[0] if self.cerebras_keys else None
         self.openai = _nonnv(env.get("OPENAI_API_KEY"), env.get("CHATGPT_API_KEY"))
-        self.openrouter = _nonnv(env.get("OPENROUTER_API_KEY"))
-        self.mistral = _nonnv(env.get("MISTRAL_API_KEY"))
-        self.github = _nonnv(env.get("GITHUB_MODELS_TOKEN"), env.get("GITHUB_TOKEN"), env.get("GH_TOKEN"))
-        self.sambanova = _nonnv(env.get("SAMBANOVA_API_KEY"), env.get("SAMBA_API_KEY"))
+        self.openrouter = self.openrouter_keys[0] if self.openrouter_keys else None
+        self.mistral = self.mistral_keys[0] if self.mistral_keys else None
+        self.github = self.github_keys[0] if self.github_keys else None
+        self.sambanova = self.sambanova_keys[0] if self.sambanova_keys else None
         self.anthropic = _nonnv(env.get("ANTHROPIC_API_KEY"), env.get("CLAUDE_API_KEY"))
         # NVIDIA: recolhe TODA chave 'nvapi-' de QUALQUER variavel do ambiente (mesmo se posta
         # no campo errado) + NVIDIA_API_KEY/NIM_API_KEY/NVIDIA_API_KEY2..9. Roda entre elas.
@@ -2279,30 +2298,30 @@ class LLMClient:
         else:
             add_nvidia()
         if self.cerebras:
-            add("cerebras", cb_models, lambda m: (lambda: self._openai_compat(
-                "https://api.cerebras.ai/v1/chat/completions", self.cerebras, m, system, messages, max_tokens)))
+            add("cerebras", cb_models, lambda m: (lambda: self._oai_keyed(
+                "https://api.cerebras.ai/v1/chat/completions", self.cerebras_keys, "cerebras", m, system, messages, max_tokens)))
         if self.groq:
-            add("groq", gq_models, lambda m: (lambda: self._openai_compat(
-                "https://api.groq.com/openai/v1/chat/completions", self.groq, m, system, messages, max_tokens)))
+            add("groq", gq_models, lambda m: (lambda: self._oai_keyed(
+                "https://api.groq.com/openai/v1/chat/completions", self.groq_keys, "groq", m, system, messages, max_tokens)))
         if fast:
             add_nvidia()
         if self.sambanova:
-            add("sambanova", sn_models, lambda m: (lambda: self._openai_compat(
-                "https://api.sambanova.ai/v1/chat/completions", self.sambanova, m, system, messages, max_tokens)))
+            add("sambanova", sn_models, lambda m: (lambda: self._oai_keyed(
+                "https://api.sambanova.ai/v1/chat/completions", self.sambanova_keys, "sambanova", m, system, messages, max_tokens)))
         if self.github:
-            add("github", gh_models, lambda m: (lambda: self._openai_compat(
-                "https://models.github.ai/inference/chat/completions", self.github, m, system, messages, max_tokens)))
+            add("github", gh_models, lambda m: (lambda: self._oai_keyed(
+                "https://models.github.ai/inference/chat/completions", self.github_keys, "github", m, system, messages, max_tokens)))
         if self.mistral:
-            add("mistral", ms_models, lambda m: (lambda: self._openai_compat(
-                "https://api.mistral.ai/v1/chat/completions", self.mistral, m, system, messages, max_tokens)))
+            add("mistral", ms_models, lambda m: (lambda: self._oai_keyed(
+                "https://api.mistral.ai/v1/chat/completions", self.mistral_keys, "mistral", m, system, messages, max_tokens)))
         if not fast:
             add_gemini()
         if self.openai:
             add("openai", self.openai_models, lambda m: (lambda: self._openai_compat(
                 "https://api.openai.com/v1/chat/completions", self.openai, m, system, messages, max_tokens)))
         if self.openrouter:
-            add("openrouter", self.openrouter_models, lambda m: (lambda: self._openai_compat(
-                "https://openrouter.ai/api/v1/chat/completions", self.openrouter, m, system, messages, max_tokens)))
+            add("openrouter", self.openrouter_models, lambda m: (lambda: self._oai_keyed(
+                "https://openrouter.ai/api/v1/chat/completions", self.openrouter_keys, "openrouter", m, system, messages, max_tokens)))
         if prefer:  # revisao cruzada: tenta um provedor diferente primeiro
             attempts.sort(key=lambda a: 0 if a[0] == prefer else 1)
         for _idx, (prov, model, fn) in enumerate(attempts):
@@ -2365,6 +2384,31 @@ class LLMClient:
                     continue
                 raise
         raise last_err or RuntimeError("falha desconhecida")
+
+    def _oai_keyed(self, url: str, keys: list, provider: str, model: str, system: str,
+                   messages: list[dict], max_tokens: int = 16000) -> str:
+        """Chama um provedor OpenAI-compativel ROTACIONANDO entre VARIAS chaves: se uma esgota a
+        cota (429/402/quota), tenta a proxima automaticamente. Soma a cota gratis de varias contas."""
+        keys = keys or []
+        wk = self._working.get(provider + ":key")
+        order = ([wk] if wk in keys else []) + [k for k in keys if k != wk]
+        last: Exception | None = None
+        for key in order:
+            try:
+                res = self._openai_compat(url, key, model, system, messages, max_tokens)
+                self._working[provider + ":key"] = key
+                return res
+            except Exception as exc:
+                last = exc
+                code = getattr(exc, "code", None)
+                s = str(exc).lower()
+                # so passa pra proxima chave se for cota/limite; erro de modelo/rede -> propaga
+                cota = code in (429, 402) or any(w in s for w in ("429", "402", "quota", "rate", "exhaust", "limit"))
+                if not cota:
+                    raise
+        if last:
+            raise last
+        raise RuntimeError(f"sem chave {provider}")
 
     def _nvidia_compat(self, model: str, system: str, messages: list[dict], max_tokens: int = 16000) -> str:
         """Chama a NVIDIA NIM rodando entre TODAS as chaves: se uma estiver sem credito
