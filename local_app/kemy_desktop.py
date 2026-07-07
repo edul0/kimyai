@@ -434,6 +434,39 @@ def log_habit(text: str) -> None:
         pass
 
 
+# ===================== CÉREBRO: a IA que se torna ÚNICA aprendendo com você =====================
+# Um banco que a Kemy CULTIVA sozinha: lições de como servir MELHOR esta pessoa (correções que ela
+# fez, estilo que prefere, abordagens que deram certo). Não são fatos afetivos (isso é a memória) —
+# é o "jeito de pensar" dela pra você. Cresce a cada uso e, com o tempo, a torna diferente de
+# qualquer outra IA: o cérebro dela é MOLDADO por você. Tudo LOCAL, sem nuvem.
+def cerebro_file() -> Path:
+    return config_dir() / "kemy_cerebro.jsonl"
+
+
+def load_cerebro() -> list:
+    out = []
+    try:
+        for ln in cerebro_file().read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(ln)
+                if isinstance(d, dict) and d.get("t"):
+                    out.append(d)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
+def save_cerebro(items: list) -> None:
+    try:
+        items = items[-1500:]
+        body = "\n".join(json.dumps(x, ensure_ascii=False) for x in items)
+        cerebro_file().write_text(body + ("\n" if body else ""), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def conhecimento_file() -> Path:
     return config_dir() / "kemy_conhecimento.json"
 
@@ -4845,6 +4878,8 @@ class WebApi:
         self.instructions = load_instructions()
         self.skills = load_skills()
         self.knowledge = load_conhecimento()
+        self.cerebro = load_cerebro()   # o cérebro que ela cultiva sozinha (lições que a tornam única)
+        self._pending_habit = None
         # "Desde quando" — marca o 1o dia juntos (o painel mostra a relacao crescendo).
         _since = config_dir() / "kemy_since.txt"
         try:
@@ -7616,6 +7651,7 @@ class WebApi:
                 if self._add_memory(full):   # dedup (nao repete preferencia ja conhecida)
                     save_memorias(self.memories)
                     self._msg("sys", "🧠 Anotei essa preferência pra próxima.", store=False)
+                self._cerebro_add(full, "preferência", w=2)   # também molda o cérebro dela
                 return
 
     def _summary_prefix(self) -> str:
@@ -7699,6 +7735,106 @@ class WebApi:
                     return False
         self.memories.append(frase[:140])
         return True
+
+    # ===================== CÉREBRO PRÓPRIO: aprende e se torna única =====================
+    def _cerebro_add(self, text: str, kind: str = "insight", w: int = 1) -> bool:
+        """Grava uma LIÇÃO no cérebro dela (como servir melhor VOCÊ). Dedup por sobreposição de
+        palavras: se já sabe algo parecido, só REFORÇA o peso (aprende mais fundo) em vez de repetir.
+        Retorna True se aprendeu algo novo."""
+        t = re.sub(r"\s+", " ", (text or "")).strip().rstrip(".!").strip()
+        if not (6 < len(t) < 200):
+            return False
+        tl = t.lower()
+        ttok = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", tl))
+        for it in self.cerebro:
+            ml = (it.get("t") or "").lower()
+            mtok = set(re.findall(r"[\wáéíóúâêôãõç]{3,}", ml))
+            if tl == ml or (ttok and mtok and len(ttok & mtok) / (len(ttok | mtok) or 1) >= 0.6):
+                it["w"] = int(it.get("w", 1)) + w      # já sabe -> reforça (fica mais convicta)
+                it["ts"] = round(time.time(), 1)
+                if kind == "correção":
+                    it["k"] = "correção"               # correção manda: sobe a prioridade
+                save_cerebro(self.cerebro)
+                return False
+        self.cerebro.append({"t": t[:200], "k": kind, "w": w, "ts": round(time.time(), 1)})
+        save_cerebro(self.cerebro)
+        return True
+
+    def _cerebro_prefix(self, query: str = "") -> str:
+        """Injeta no prompt as lições MAIS RELEVANTES que ela já aprendeu — é o que a faz responder
+        cada vez mais 'do jeito dela pra você'. Semântico quando dá; senão, as de maior peso."""
+        if not getattr(self, "cerebro", None):
+            return ""
+        textos = [c.get("t", "") for c in self.cerebro]
+        picks = None
+        if query and len(query.strip()) >= 15 and len(textos) > 8:
+            idx = self._semantic_top(query, textos, 6)
+            if idx is not None:
+                picks = [self.cerebro[i] for i in idx]
+        if picks is None:
+            # fallback (offline/sem chave): as mais fortes e recentes
+            picks = sorted(self.cerebro, key=lambda c: (int(c.get("w", 1)), c.get("ts", 0)), reverse=True)[:6]
+        if not picks:
+            return ""
+        linhas = []
+        for c in picks:
+            tag = c.get("k", "insight")
+            linhas.append(f"- ({tag}) {c.get('t', '')}")
+        return ("SEU CÉREBRO — lições que VOCÊ MESMA aprendeu servindo esta pessoa (aplique-as; "
+                "elas te tornam melhor e única PRA ELA; correções valem mais que qualquer regra geral):\n"
+                + "\n".join(linhas) + "\n\n")
+
+    def cerebro_stats(self) -> dict:
+        """Resumo do cérebro pra mostrar ele CRESCENDO (o moat visível: a IA que vira só sua)."""
+        c = getattr(self, "cerebro", None) or []
+        por = {}
+        for it in c:
+            k = it.get("k", "insight")
+            por[k] = por.get(k, 0) + 1
+        forca = sum(int(it.get("w", 1)) for it in c)
+        top = [it.get("t", "") for it in sorted(c, key=lambda x: int(x.get("w", 1)), reverse=True)[:8]]
+        return {"total": len(c), "forca": forca, "por_tipo": por, "top": top}
+
+    def _learn_signal(self, text: str, last_reply: str = "") -> None:
+        """Loop de autoaprendizado: lê o SINAL da sua resposta. Correção -> vira lição forte;
+        elogio -> reforça o que acabou de fazer. É assim que o cérebro dela melhora com o uso."""
+        t = (text or "").strip()
+        if not t or len(t) > 200:
+            return
+        low = t.lower()
+        corr = re.search(r"(?i)\b(na verdade|errad[oa]|n[ãa]o (é|e) (assim|isso)|n[ãa]o gostei|"
+                         r"refaz|refa[çc]a|de novo|ficou ruim|n[ãa]o era (isso|assim)|ta ruim|tá ruim|"
+                         r"muda|mudar|corrig|troca isso)\b", low)
+        praise = re.search(r"(?i)^(perfeito|isso mesmo|é isso|e isso|exato|exatamente|boa|mandou bem|"
+                           r"gostei|ficou (bom|ótimo|otimo|top|foda)|amei|adorei|show|excelente|"
+                           r"muito bom|obrigad[oa]|valeu|top)\b", low)
+        if corr:
+            self._cerebro_add(t, "correção", w=3)   # correção pesa mais: ela erra menos da próxima
+        elif praise:
+            # elogio sem conteúdo novo -> reforça as lições recentes (o que fez deu certo)
+            for it in self.cerebro[-3:]:
+                it["w"] = int(it.get("w", 1)) + 1
+            if self.cerebro:
+                save_cerebro(self.cerebro)
+
+    def _think(self, text: str) -> str:
+        """Metacognição VISÍVEL: antes de responder o difícil, a Kemy monta um plano curto (+ o que
+        evitar) e MOSTRA que está raciocinando. É o que dá 'cara de IA inteligente' (estilo o1/Claude).
+        Retorna o plano — ele entra no contexto pra guiar a resposta final."""
+        try:
+            self._msg("sys", "🧠 Pensando…", store=False)
+            plano = self.llm.chat(
+                "Você vai responder o pedido abaixo, mas AINDA NÃO responda. Primeiro pense como um "
+                "especialista: em 2-4 bullets telegráficos, qual o plano pra dar a MELHOR resposta — o "
+                "que considerar, qual estrutura, e UM ponto de atenção/erro a evitar. Só os bullets.",
+                [{"role": "user", "content": text[:900]}], max_tokens=140, fast=True)
+            plano = (plano or "").strip()
+            if plano:
+                resumo = re.sub(r"\s*\n\s*", " · ", plano).strip(" ·")[:180]
+                self._msg("sys", "🧠 " + resumo, store=False)   # o raciocínio, resumido, à mostra
+            return plano
+        except Exception:
+            return ""
 
     def _auto_remember(self, user_text: str, reply: str) -> None:
         """Memoria afetiva: extrai (em segundo plano) fatos DURAVEIS sobre a pessoa do papo —
@@ -7853,10 +7989,12 @@ class WebApi:
         except Exception:
             dias = 0
         voices = list(getattr(getattr(self, "spk", None), "prints", {}) or {})
-        # nível da relação (lúdico) por quanto ela aprendeu de você
-        pontos = len(self.memories) * 3 + len(self.skills) * 5 + len(self.knowledge) + len(voices) * 8
+        cb = self.cerebro_stats()
+        # nível da relação (lúdico) por quanto ela aprendeu de você — o cérebro pesa (é o que a torna única)
+        pontos = (len(self.memories) * 3 + len(self.skills) * 5 + len(self.knowledge)
+                  + len(voices) * 8 + cb["forca"] * 2)
         niveis = [(0, "Nos conhecendo"), (30, "Já pego seu jeito"), (80, "Te conheço bem"),
-                  (160, "Dupla afiada"), (320, "Quase leio sua mente")]
+                  (160, "Dupla afiada"), (320, "Quase leio sua mente"), (600, "Uma IA que é só sua")]
         nivel = niveis[0][1]
         for lim, nome in niveis:
             if pontos >= lim:
@@ -7866,10 +8004,12 @@ class WebApi:
             "since": getattr(self, "since", ""),
             "nivel": nivel,
             "counts": {"memorias": len(self.memories), "habilidades": len(self.skills),
-                       "conhecimento": len(self.knowledge), "vozes": len(voices)},
+                       "conhecimento": len(self.knowledge), "vozes": len(voices),
+                       "cerebro": cb["total"], "cerebro_forca": cb["forca"]},
             "instrucoes": (getattr(self, "instructions", "") or "")[:600],
             "memorias": self.memories[-60:][::-1],
             "habilidades": [s.get("name", "") for s in (self.skills or []) if s.get("name")][-40:][::-1],
+            "cerebro": cb["top"],
             "vozes": voices,
         }
         try:
@@ -8442,10 +8582,12 @@ class WebApi:
             msgs.append({"role": "assistant" if e.get("r") == "kemy" else "user", "content": e.get("t", "")})
         web = self._web_context(text)
         self._auto_learn(text)            # aprende sozinha com preferencias/correcoes
+        self._learn_signal(text)          # loop de autoaprendizado: correção/elogio moldam o cérebro
         # 🤖 Modo agente autonomo (multi-passo) para tarefas que pedem "ate funcionar/completo".
         if build and self._wants_agent(text):
             return self._autonomous_agent(text, base), None
         mem = self._memoria_prefix(text) + self._knowledge_prefix(text)   # RAG: memoria + conhecimento relevantes
+        mem += self._cerebro_prefix(text)   # CÉREBRO: lições que ela mesma aprendeu (a torna única)
         mem += self._summary_prefix()   # resumo da conversa longa (não perde o fio)
         quem = (f"\n[Quem esta falando agora: {self._current_speaker}. Trate essa pessoa pelo nome.]"
                 if getattr(self, "_current_speaker", "") else "")
@@ -8471,6 +8613,13 @@ class WebApi:
                 hit = self._cache_get(ckey)
                 if hit:
                     return hit, None
+            # 🧠 METACOGNIÇÃO VISÍVEL: no pedido difícil ela PENSA antes (plano + autocrítica) e mostra
+            # o raciocínio — cara de IA que pondera, não que cospe. Cacheados/casuais seguem instantâneos.
+            if tier == "hard" and not self.econ:
+                plano = self._think(text)
+                if plano:
+                    system += ("\n\n[SEU RACIOCÍNIO INTERNO (já pensou nisto — siga o plano e a autocrítica "
+                               "ao responder, sem repetir os bullets):\n" + plano + "]")
             try:
                 reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
                 self._streamed_done = True
@@ -10335,6 +10484,7 @@ class WebApi:
             licao = (out or "").strip().strip('"').rstrip(".")
             if not licao or licao.upper().startswith("NONE") or len(licao) < 6:
                 return
+            self._cerebro_add(licao, "estilo", w=2)   # edição sua é sinal forte: molda o cérebro
             if self._add_memory(licao):
                 save_memorias(self.memories)
                 self._msg("kemy", f"🧬 Aprendi com a sua edição: {licao}. Vou fazer assim daqui pra frente.")
