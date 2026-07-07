@@ -149,6 +149,22 @@
   .msg .copybtn{display:inline-block;margin-top:9px;font-size:11px;font-weight:600;color:var(--muted);
     background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:8px;padding:3px 9px;cursor:pointer;user-select:none}
   .msg .copybtn:hover{color:var(--accent2);border-color:var(--accent2)}
+  /* markdown nas respostas da Kemy */
+  .msg .mdcode{background:#0b0f14;border:1px solid var(--line);border-radius:10px;margin:8px 0;overflow:hidden}
+  html.light .msg .mdcode{background:#0f1522}
+  .msg .mdcode-h{display:flex;align-items:center;justify-content:space-between;padding:5px 10px;
+    font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#8f9ab0;
+    background:rgba(255,255,255,.04);border-bottom:1px solid var(--line)}
+  .msg .mdcode pre{margin:0;padding:10px 12px;overflow-x:auto;font-family:Consolas,'Courier New',monospace;
+    font-size:12.5px;line-height:1.5;color:#d6deeb;white-space:pre}
+  .msg .mdcopy{background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;
+    padding:1px 8px;font-size:10.5px;cursor:pointer;text-transform:none;letter-spacing:0}
+  .msg .mdcopy:hover{color:var(--accent2);border-color:var(--accent2)}
+  .msg code.mdi{background:rgba(139,123,255,.14);border:1px solid rgba(139,123,255,.22);border-radius:5px;
+    padding:1px 6px;font-family:Consolas,'Courier New',monospace;font-size:12.5px}
+  .msg b.mdh{display:block;margin:6px 0 2px;font-size:15px}
+  .msg a{color:var(--accent2);text-decoration:none;border-bottom:1px dotted var(--accent2)}
+  .msg a:hover{filter:brightness(1.15)}
   /* painel "ver ela trabalhar" (checklist ao vivo) */
   .taskpanel{align-self:stretch!important;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;font-style:normal!important;color:var(--text)}
   .tp-h{font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:8px}
@@ -562,11 +578,33 @@
     b.onclick=function(ev){ ev.stopPropagation(); copyText(b,text); };
     el.appendChild(b);
   }
+  function openLink(u){ try{ api('open_link', u); }catch(e){} }
+  // markdown leve nas respostas da Kemy: escapa TUDO primeiro (anti-XSS), depois formata
+  function mdRender(t){
+    var esc=_esc(t);
+    var blocos=[];
+    esc=esc.replace(/\n?```([\w-]*)\n?([\s\S]*?)```\n?/g,function(m,lang,code){
+      blocos.push({l:lang,c:code.replace(/\n$/,'')}); return '\u0000B'+(blocos.length-1)+'\u0000'; });
+    var inline=[];
+    esc=esc.replace(/`([^`\n]+)`/g,function(m,c){ inline.push(c); return '\u0000I'+(inline.length-1)+'\u0000'; });
+    esc=esc.replace(/\*\*([^*\n](?:[^*]*?[^*\n])?)\*\*/g,'<b>$1</b>');
+    esc=esc.replace(/(^|\s)\*([^*\n]+)\*(?=$|[\s.,;:!?)])/gm,'$1<i>$2</i>');
+    esc=esc.replace(/^#{1,4}\s+(.+)$/gm,'<b class="mdh">$1</b>');
+    esc=esc.replace(/^(\s*)[-*]\s+/gm,'$1• ');
+    esc=esc.replace(/(https?:\/\/[^\s"'<\u0000]+?)([.,;:)\]]*)(?=[\s<\u0000]|$)/g,function(m,u,fim){
+      return '<a href="#" data-u="'+u+'" onclick="openLink(this.getAttribute(\'data-u\'));return false">'+u+'</a>'+fim; });
+    esc=esc.replace(/\u0000I(\d+)\u0000/g,function(m,i){ return '<code class="mdi">'+inline[+i]+'</code>'; });
+    esc=esc.replace(/\u0000B(\d+)\u0000/g,function(m,i){ var b=blocos[+i];
+      return '<div class="mdcode"><div class="mdcode-h"><span>'+(b.l||'código')+'</span>'
+        +'<button class="mdcopy" onclick="copyText(this,this.parentNode.parentNode.querySelector(\'pre\').textContent)">copiar</button></div>'
+        +'<pre>'+b.c+'</pre></div>'; });
+    return esc;
+  }
   function addMsg(role,text,save){
     killWelcome();
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg "+role;
-    d.textContent=text;
+    if(role==="kemy"){ d.innerHTML=mdRender(text); } else { d.textContent=text; }
     if(save){const s=document.createElement("div");s.className="save";s.textContent="💾 "+save;d.appendChild(s);}
     if(role==="kemy"||role==="user"){ addCopyBtn(d,text); }
     c.appendChild(d); c.scrollTop=c.scrollHeight;

@@ -10886,6 +10886,15 @@ class WebApi:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def open_link(self, url: str) -> None:
+        """Link clicado numa resposta da Kemy: abre no navegador do sistema (só http/https)."""
+        u = str(url or "").strip()
+        if re.match(r"^https?://", u) and len(u) < 2000:
+            try:
+                webbrowser.open(u)
+            except Exception:
+                pass
+
     def ide_review(self, rel: str) -> None:
         """Botão 'Melhorar' do editor: a Kemy revisa o arquivo aberto (bugs, qualidade, visual)."""
         rel = (rel or "").strip()
