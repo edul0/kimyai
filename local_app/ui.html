@@ -224,8 +224,22 @@
   .idewrap{flex:1;display:flex;min-height:0;position:relative}
   #ideGutter{width:48px;flex:none;overflow:hidden;background:#0b0f14;color:#4d5566;font-family:Consolas,'Courier New',monospace;
     font-size:13px;line-height:1.55;padding:12px 8px 12px 0;text-align:right;user-select:none;border-right:1px solid #1b2129;white-space:pre}
-  #ideEditor{flex:1;width:100%;box-sizing:border-box;border:0;outline:none;resize:none;background:#0d1117;color:#d6deeb;
-    font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.55;padding:12px 14px;tab-size:2;white-space:pre;overflow:auto}
+  /* editor com SYNTAX HIGHLIGHT: <pre> colorido embaixo + textarea transparente por cima */
+  .edstack{position:relative;flex:1;min-width:0;background:#0d1117}
+  #ideHL,#ideEditor{position:absolute;inset:0;box-sizing:border-box;margin:0;border:0;
+    font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.55;padding:12px 14px;
+    tab-size:2;white-space:pre;overflow:auto;word-break:normal}
+  #ideHL{color:#d6deeb;background:none;pointer-events:none;overflow:hidden;z-index:1}
+  #ideEditor{background:transparent;color:transparent;caret-color:#e6edf3;outline:none;resize:none;z-index:2}
+  #ideEditor::placeholder{color:#5b6472}
+  #ideEditor::selection{background:rgba(122,162,247,.30);color:transparent}
+  .tok-c{color:#5c6773;font-style:italic}   /* comentário */
+  .tok-s{color:#8fdc97}                      /* string */
+  .tok-k{color:#c792ea}                      /* keyword */
+  .tok-n{color:#f78c6c}                      /* número */
+  .tok-f{color:#82aaff}                      /* função */
+  .tok-t{color:#7aa2f7}                      /* tag html */
+  .tok-a{color:#e0af68}                      /* atributo/propriedade */
   .idefind{display:none;position:absolute;top:8px;right:16px;z-index:5;background:#161b22;border:1px solid #30363d;
     border-radius:8px;padding:6px 8px;gap:6px;align-items:center;box-shadow:0 8px 24px rgba(0,0,0,.5)}
   .idefind input{background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:4px 8px;font-size:12.5px;width:180px;outline:none}
@@ -403,7 +417,10 @@
     <div class="idebox">
       <div class="idehead"><span>🗂️ Código do projeto</span><button onclick="closeIde()">✕</button></div>
       <div class="idebody">
-        <div class="idefiles" id="ideFiles"></div>
+        <div style="display:flex;flex-direction:column;min-height:0;width:230px;border-right:1px solid var(--line);background:#0b0f14">
+          <div class="idefiles" id="ideFiles" style="flex:1;width:auto;border-right:0"></div>
+          <button class="idebtn" style="margin:6px;justify-content:center" onclick="ideNewFile()" title="Criar arquivo novo no projeto"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><span>Novo arquivo</span></button>
+        </div>
         <div class="idemain">
           <div class="idetitlebar">
             <span class="idetitle" id="ideTitle">selecione um arquivo</span>
@@ -413,9 +430,15 @@
           </div>
           <div class="idewrap">
             <div id="ideGutter">1</div>
-            <textarea id="ideEditor" spellcheck="false" placeholder="selecione um arquivo à esquerda"></textarea>
+            <div class="edstack">
+              <pre id="ideHL" aria-hidden="true"></pre>
+              <textarea id="ideEditor" spellcheck="false" placeholder="selecione um arquivo à esquerda"></textarea>
+            </div>
             <div class="idefind" id="ideFind">
               <input id="ideFindQ" placeholder="buscar… (Enter próximo)">
+              <input id="ideRepQ" placeholder="substituir por…" style="width:130px">
+              <button onclick="ideReplace(false)" title="Substituir a ocorrência atual">1</button>
+              <button onclick="ideReplace(true)" title="Substituir todas">Todos</button>
               <span class="cnt" id="ideFindCnt">–</span>
               <button onclick="ideFindNext(-1)" title="Anterior"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
               <button onclick="ideFindNext(1)" title="Próximo"><svg class="ic" style="width:13px;height:13px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
@@ -659,7 +682,7 @@
       _ideRel=v.path; _ideSaved=v.content||"";
       document.getElementById('ideTitle').textContent=v.path;
       var ed=document.getElementById('ideEditor'); ed.value=_ideSaved; ed.scrollTop=0;
-      _ideDirty(false); _ideGut(); _ideStat();
+      _ideDirty(false); _ideGut(); _ideStat(); _ideHLupd();
     });
   }
   function _ideDirty(on){ var b=document.getElementById('ideSave');
@@ -714,10 +737,93 @@
     document.getElementById('meModal').style.display='flex';
   }
   function closeMe(){ document.getElementById('meModal').style.display='none'; }
-  // ===== Editor: numeração de linha, status, auto-indent, auto-fecha par, busca =====
+  // ===== Editor: highlight, numeração, status, auto-indent, auto-fecha par, busca/substituir =====
   function _ideGut(){ var ed=document.getElementById('ideEditor'),g=document.getElementById('ideGutter');
     var n=(ed.value.match(/\n/g)||[]).length+1, out=''; for(var i=1;i<=n;i++)out+=i+'\n';
     g.textContent=out; g.scrollTop=ed.scrollTop; }
+  // --- syntax highlight leve (sem lib): regex por linguagem sobre o texto já escapado ---
+  function _hesc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function _hlJS(s){
+    return s.replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(`(?:\\.|[^`\\])*`?|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|\b(function|return|if|else|for|while|const|let|var|new|class|extends|import|from|export|default|try|catch|finally|throw|typeof|instanceof|async|await|switch|case|break|continue|do|in|of|this|null|undefined|true|false)\b|\b(\d[\d_]*\.?\d*)\b|([A-Za-z_$][\w$]*)(?=\s*\()/g,
+      function(m,c,st,kw,nm,fn){ if(c)return '<span class="tok-c">'+m+'</span>';
+        if(st)return '<span class="tok-s">'+m+'</span>'; if(kw)return '<span class="tok-k">'+m+'</span>';
+        if(nm)return '<span class="tok-n">'+m+'</span>'; if(fn)return '<span class="tok-f">'+m+'</span>'; return m; });
+  }
+  function _hlCSS(s){
+    return s.replace(/(\/\*[\s\S]*?\*\/)|("[^"\n]*"|'[^'\n]*')|(#[0-9a-fA-F]{3,8}\b|\b\d+\.?\d*(?:px|em|rem|%|vh|vw|s|ms|fr)?\b)|([\w-]+)(?=\s*:)|([.#][\w-]+)/g,
+      function(m,c,st,nm,pr,sel){ if(c)return '<span class="tok-c">'+m+'</span>';
+        if(st)return '<span class="tok-s">'+m+'</span>'; if(nm)return '<span class="tok-n">'+m+'</span>';
+        if(pr)return '<span class="tok-a">'+m+'</span>'; if(sel)return '<span class="tok-t">'+m+'</span>'; return m; });
+  }
+  function _hlHTML(s){
+    return s.replace(/(&lt;!--[\s\S]*?--&gt;)|(&lt;\/?[\w-]+|\/?&gt;)|("[^"\n]*"|'[^'\n]*')|([\w-]+)(?==)/g,
+      function(m,c,tg,st,at){ if(c)return '<span class="tok-c">'+m+'</span>';
+        if(tg)return '<span class="tok-t">'+m+'</span>'; if(st)return '<span class="tok-s">'+m+'</span>';
+        if(at)return '<span class="tok-a">'+m+'</span>'; return m; });
+  }
+  function _hlPY(s){
+    return s.replace(/(#[^\n]*)|("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|\b(def|class|return|if|elif|else|for|while|import|from|as|with|try|except|finally|raise|pass|break|continue|lambda|None|True|False|and|or|not|in|is|global|nonlocal|yield|async|await|self)\b|(@[\w.]+)|\b(\d[\d_]*\.?\d*)\b/g,
+      function(m,c,st,kw,dec,nm){ if(c)return '<span class="tok-c">'+m+'</span>';
+        if(st)return '<span class="tok-s">'+m+'</span>'; if(kw)return '<span class="tok-k">'+m+'</span>';
+        if(dec)return '<span class="tok-f">'+m+'</span>'; if(nm)return '<span class="tok-n">'+m+'</span>'; return m; });
+  }
+  var _hlPend=false;
+  function _ideHLupd(){
+    if(_hlPend)return; _hlPend=true;
+    requestAnimationFrame(function(){ _hlPend=false;
+      var ed=document.getElementById('ideEditor'), hl=document.getElementById('ideHL');
+      var v=ed.value, esc=_hesc(v);
+      if(v.length<=150000){                             // arquivo gigante: sem cor (não trava)
+        var ext=(_ideRel.split('.').pop()||'').toLowerCase();
+        if(['js','jsx','ts','tsx','json','mjs'].indexOf(ext)>=0) esc=_hlJS(esc);
+        else if(ext==='css'||ext==='scss') esc=_hlCSS(esc);
+        else if(ext==='html'||ext==='htm'||ext==='xml'||ext==='svg'||ext==='vue') esc=_hlHTML(esc);
+        else if(ext==='py') esc=_hlPY(esc);
+      }
+      hl.innerHTML=esc+'\n';                            // \n final: última linha rola certinho
+      hl.scrollTop=ed.scrollTop; hl.scrollLeft=ed.scrollLeft;
+    });
+  }
+  function ideNewFile(){
+    var box=document.getElementById('ideFiles');
+    if(document.getElementById('ideNewRow'))return;
+    var row=document.createElement('div'); row.id='ideNewRow'; row.style.cssText='padding:4px 6px';
+    var inp=document.createElement('input');
+    inp.placeholder='nome (ex.: sobre.html)';
+    inp.style.cssText='width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:5px 8px;font-size:12.5px;outline:none';
+    row.appendChild(inp); box.insertBefore(row, box.firstChild); inp.focus();
+    inp.addEventListener('keydown',function(e){
+      if(e.key==='Escape'){ row.remove(); return; }
+      if(e.key!=='Enter')return;
+      var nome=(inp.value||'').trim().replace(/[^\w\-./]/g,'');
+      if(!nome){ row.remove(); return; }
+      pywebview.api.write_project_file(nome,'').then(function(r){
+        row.remove();
+        if(r&&r.ok){ api('browse_project'); }           // recarrega a lista com o arquivo novo
+        else { document.getElementById('ideHint').textContent='⚠ '+((r&&r.error)||'não deu'); }
+      });
+    });
+  }
+  function ideReplace(all){
+    var ed=document.getElementById('ideEditor');
+    var q=(document.getElementById('ideFindQ').value||''), rep=(document.getElementById('ideRepQ').value||'');
+    if(!q)return;
+    if(all){
+      var rx=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');
+      var n=(ed.value.match(rx)||[]).length;
+      if(!n){ document.getElementById('ideFindCnt').textContent='0'; return; }
+      ed.value=ed.value.replace(rx,rep);
+      document.getElementById('ideFindCnt').textContent=n+' ok';
+    } else {
+      var sel=ed.value.slice(ed.selectionStart,ed.selectionEnd);
+      if(sel.toLowerCase()!==q.toLowerCase()){ ideFindNext(1); return; }   // acha a próxima primeiro
+      var s=ed.selectionStart;
+      ed.value=ed.value.slice(0,s)+rep+ed.value.slice(ed.selectionEnd);
+      ed.selectionStart=ed.selectionEnd=s+rep.length;
+      ideFindNext(1);
+    }
+    _ideDirty(ed.value!==_ideSaved); _ideGut(); _ideStat(); _ideHLupd();
+  }
   function _ideStat(){ var ed=document.getElementById('ideEditor');
     var p=ed.selectionStart||0, antes=ed.value.slice(0,p), ln=(antes.match(/\n/g)||[]).length+1, col=p-antes.lastIndexOf('\n');
     document.getElementById('ideLn').textContent='Ln '+ln+', Col '+col;
@@ -738,8 +844,9 @@
   }
   (function(){ var ed=document.getElementById('ideEditor'); if(!ed)return;
     var PARES={'(':')','[':']','{':'}','"':'"',"'":"'"};
-    ed.addEventListener('input',function(){ _ideDirty(ed.value!==_ideSaved); _ideGut(); _ideStat(); });
-    ed.addEventListener('scroll',function(){ document.getElementById('ideGutter').scrollTop=ed.scrollTop; });
+    ed.addEventListener('input',function(){ _ideDirty(ed.value!==_ideSaved); _ideGut(); _ideStat(); _ideHLupd(); });
+    ed.addEventListener('scroll',function(){ document.getElementById('ideGutter').scrollTop=ed.scrollTop;
+      var hl=document.getElementById('ideHL'); hl.scrollTop=ed.scrollTop; hl.scrollLeft=ed.scrollLeft; });
     ed.addEventListener('click',_ideStat); ed.addEventListener('keyup',_ideStat);
     ed.addEventListener('keydown',function(e){
       if((e.ctrlKey||e.metaKey)&&String(e.key).toLowerCase()==='s'){ e.preventDefault(); saveCode(); return; }
@@ -765,7 +872,7 @@
           ed.selectionStart=ed.selectionEnd=s+1; }
         else return;                                                       // aspas soltas: comportamento normal
       } else return;
-      _ideDirty(ed.value!==_ideSaved); _ideGut(); _ideStat();
+      _ideDirty(ed.value!==_ideSaved); _ideGut(); _ideStat(); _ideHLupd();
     });
     var q=document.getElementById('ideFindQ');
     q.addEventListener('keydown',function(e){
