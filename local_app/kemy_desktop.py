@@ -1693,6 +1693,12 @@ APP_DESIGN_PROMPT = (
     "Atalhos de teclado quando ajudar (ex.: '/' foca a busca).\n"
     "8) DADOS REAIS de exemplo (linhas plausiveis ja populadas), nunca 'Item 1/2/3'. Todo botao FUNCIONA "
     "(CRUD completo persistido). O resultado deve parecer um SaaS real em producao, nao um rascunho.\n"
+    "8b) PROFUNDIDADE MINIMA (sistema raso = reprovado). CADA modulo entrega: criar+editar+excluir+BUSCA+"
+    "filtro/ordenacao; 8+ registros realistas de exemplo; totais/contadores que ATUALIZAM sozinhos. O sistema "
+    "inteiro entrega: dashboard com KPIs reais calculados dos dados + 1 grafico (SVG/canvas, sem lib se nao "
+    "puder); exportar CSV da tabela; mascaras de moeda/telefone/data em pt-BR; atalho '/' pra busca. "
+    "Relacione os modulos entre si (ex.: venda baixa estoque; OS consome peca do estoque) — e isso que "
+    "separa um sistema DE VERDADE de um brinquedo.\n"
     "9) NAO tranque o sistema atras de login por padrao — entregue o ERP/painel JA ABERTO e usavel. So "
     "coloque login se for pedido; e se colocar, ele PRECISA entrar de verdade (esconde o login, mostra o app "
     "na mesma pagina) — nunca deixe preso na tela de login.\n"
@@ -1703,22 +1709,33 @@ APP_DESIGN_PROMPT = (
 AUTH_PROMPT = (
     "\n\n=== TELA DE AUTENTICACAO (login/cadastro) — SIGA A RISCA ===\n"
     "NAO e landing page: e uma tela FOCADA. Entregue um app web (HTML+CSS+JS) impecavel:\n"
-    "1) LAYOUT: um unico CARD centralizado na tela (vertical E horizontal) — use "
-    "`body{min-height:100vh;display:grid;place-items:center}` e `.card{width:100%;max-width:400px}`. "
-    "Fundo com gradiente/mesh suave. Card com padding generoso (32-40px), borda-radius 16px, sombra suave. "
-    "NADA de hero gigante, menu, secoes de marketing ou depoimentos.\n"
-    "2) CONTEUDO: logo/titulo no topo, subtitulo curto; campos com <label> (E-mail, Senha) e bons "
-    "placeholders; botao primario full-width 'Entrar'; link 'Esqueci minha senha' e 'Criar conta'; "
-    "opcao 'lembrar de mim'. Tudo alinhado e com espacamento consistente.\n"
-    "3) FUNCIONA DE VERDADE (client-side, sem backend): validacao real (e-mail valido, senha min. 6), "
-    "mensagens de erro inline POR CAMPO, estado de loading no botao. Como nao ha servidor, faca um login "
-    "DEMO honesto: credenciais de teste fixas (mostre na tela: ex. admin@demo.com / 123456) que, ao acertar, "
-    "salva sessao no localStorage e mostra sucesso/redireciona pra uma pagina simples; ao errar, mostra erro. "
-    "Cadastro salva o usuario no localStorage. NUNCA deixe o botao sem acao.\n"
-    "4) DETALHES PRO: focus-visible nos campos, mostrar/ocultar senha (olhinho), responsivo no mobile, "
-    "transicoes suaves. Acessivel (labels ligadas aos inputs, contraste AA).\n"
-    "5) SEGURANCA honesta: deixe claro em comentario que login real exige backend/hash; aqui e demo "
-    "client-side. Nao invente que e seguro pra producao.\n"
+    "1) LAYOUT MODERNO (2025, nivel Linear/Vercel — NUNCA formulario cinza dos anos 2000). Escolha UM: "
+    "(a) SPLIT-SCREEN: metade esquerda com painel de marca (gradiente rico ou imagem abstrata em CSS, logo, "
+    "frase curta), metade direita com o formulario limpo — em mobile o painel some; ou (b) CARD "
+    "glassmorphism centralizado (`body{min-height:100vh;display:grid;place-items:center}`, "
+    "`.card{width:100%;max-width:420px;backdrop-filter:blur()}`) sobre fundo com gradiente/mesh animado "
+    "sutil. Padding 32-40px, radius 16-20px, sombra em camadas. NADA de hero, menu ou marketing.\n"
+    "2) CONTEUDO: LOGO de verdade no topo (monograma SVG inline com gradiente da marca — nao emoji), "
+    "titulo/subtitulo curtos; campos com <label> flutuante ou fixa; botao primario full-width com "
+    "gradiente/hover; 'Esqueci minha senha' e 'Criar conta'; 'lembrar de mim'. Espacamento consistente.\n"
+    "3) FUNCIONA + PROTEGE OS DADOS (regras DURAS de seguranca, mesmo sendo client-side):\n"
+    "   - NUNCA salve senha em texto puro (nem no localStorage, nem em variavel global, nem em comentario). "
+    "Guarde APENAS hash: use crypto.subtle.digest('SHA-256', ...) com salt por usuario "
+    "(crypto.getRandomValues) e compare hashes no login.\n"
+    "   - Sessao = token aleatorio (crypto.getRandomValues(new Uint8Array(24)) em hex) no localStorage — "
+    "JAMAIS o e-mail/senha como 'sessao'. Logout apaga o token.\n"
+    "   - Bloqueio anti forca-bruta: 5 erros seguidos -> trava 30s com contagem regressiva visivel.\n"
+    "   - Mensagem de erro GENERICA ('E-mail ou senha incorretos') — nunca dizer qual campo errou nem se o "
+    "e-mail existe (enumeracao de usuarios).\n"
+    "   - TODO dado do usuario renderizado no DOM passa por funcao de escape (textContent ou esc()) — nunca "
+    "innerHTML com input cru (XSS).\n"
+    "   - Validacao real (e-mail valido, senha min. 8 com letras e numeros), erro inline por campo, loading "
+    "no botao. Credenciais demo mostradas na tela (ex.: admin@demo.com / Admin123) ja cadastradas COM hash.\n"
+    "4) DETALHES PRO: focus-visible, mostrar/ocultar senha (icone SVG de olho, nao emoji), medidor de forca "
+    "da senha no cadastro, responsivo, transicoes suaves, dark mode se o app tiver. Acessivel (labels "
+    "ligadas, contraste AA).\n"
+    "5) HONESTIDADE: comentario no codigo avisando que producao exige backend (hash servidor + HTTPS + "
+    "rate-limit real); o client-side acima e o MAXIMO de protecao possivel sem servidor — e e obrigatorio.\n"
     "6) SE for o gate de um app/ERP: o login e a app ficam na MESMA pagina (<section id='login'> + "
     "<section id='app'> escondida). Ao logar certo, ESCONDA o login e MOSTRE o app de verdade; tenha botao "
     "Sair. NUNCA deixe o usuario preso na tela de login (esse e o erro #1 a evitar).\n"
@@ -1970,6 +1987,51 @@ def audit_web_buttons(base: Path) -> list[str]:
         if i not in seen:
             seen.add(i); out.append(i)
     return out[:40]
+
+
+def audit_login_security(base: Path) -> list[str]:
+    """DEFESA DE DADOS no código gerado (determinístico): senha em texto puro, sessão guardando
+    dado pessoal e XSS por innerHTML viram ORDEM DE CONSERTO antes de entregar. É o que protege
+    o usuário final dos sistemas com login que a Kemy gera."""
+    issues: list[str] = []
+    try:
+        alvos = ([p for p in base.rglob("*.js") if "node_modules" not in str(p)][:25]
+                 + [p for p in base.rglob("*.html") if "node_modules" not in str(p)][:12])
+    except Exception:
+        return issues
+    for p in alvos:
+        try:
+            t = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        low = t.lower()
+        if not re.search(r"senha|password", low):
+            continue
+        rel = p.name
+        # 1) senha salva/serializada CRUA (sem hash na mesma linha)
+        for m in re.finditer(r"[^\n]*(?:localstorage\.setitem|sessionstorage\.setitem|json\.stringify)[^\n]*", low):
+            ln = m.group(0)
+            if re.search(r"senha|password", ln) and not re.search(r"hash|sha-?\d|digest", ln):
+                issues.append(f"{rel}: SENHA EM TEXTO PURO no armazenamento — troque por hash "
+                              "SHA-256 (crypto.subtle.digest) com salt por usuário; jamais salve a senha crua.")
+                break
+        # 2) 'sessão' que guarda e-mail/senha/usuário em vez de token aleatório
+        if re.search(r"localstorage\.setitem\(\s*['\"][^'\"]*(?:sess|logad|logged|auth)[^'\"]*['\"]\s*,"
+                     r"[^)\n]*(?:senha|password|email|usuario|user\b)", low):
+            issues.append(f"{rel}: a sessão guarda dado pessoal — use token aleatório "
+                          "(crypto.getRandomValues em hex) como sessão e apague no logout.")
+        # 3) XSS: innerHTML montado com input do usuário sem escape
+        if re.search(r"innerhtml\s*\+?=\s*[^;\n]{0,120}\.value", low) or \
+           re.search(r"innerhtml\s*\+?=\s*[`][^;\n]{0,160}\$\{[^}]{0,80}\.value", low):
+            issues.append(f"{rel}: risco de XSS — innerHTML com input do usuário; "
+                          "renderize com textContent ou passe tudo por uma função esc().")
+    # dedup mantendo a ordem
+    seen: set = set()
+    out: list[str] = []
+    for i in issues:
+        if i not in seen:
+            seen.add(i); out.append(i)
+    return out[:6]
 
 
 def audit_unfinished(base: Path) -> list[str]:
@@ -8928,6 +8990,30 @@ class WebApi:
             self._panel_step(4, "doing")
         files, chat = parse_llm_files(reply)
         edits0 = parse_edits(reply)
+        # 🛡️ PORTÃO DE REGRESSÃO: edição NÃO PODE degradar o que já funcionava.
+        # Foto do estado bom + baseline de erros ANTES de mexer; depois compara e, se piorou
+        # e não deu pra consertar, VOLTA sozinha (o usuário nunca fica com o app quebrado).
+        is_edit = bool(current) and (base / "index.html").exists() and (files or edits0)
+        pre_err: set = set()
+        shrink_issues: list[str] = []
+        if is_edit:
+            self._git_snapshot(base, "antes da edicao: " + text[:50])
+            try:
+                pre_err = set(self._functional_test(base))
+            except Exception:
+                pre_err = set()
+            for f in (files or []):   # reescrita que ENCOLHE demais = conteúdo perdido
+                rel = str(f.get("path") or "").strip().lstrip("/\\")
+                try:
+                    old_txt = (base / rel).read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                on = old_txt.count("\n") + 1
+                nn = str(f.get("content") or "").count("\n") + 1
+                if on >= 60 and nn < on * 0.55:
+                    shrink_issues.append(
+                        f"{rel} ENCOLHEU de {on} para {nn} linhas — você APAGOU conteúdo que funcionava. "
+                        f"Recoloque TUDO que sumiu (funções, botões, seções, CRUD); a mudança pedida era só: {text[:90]}")
         self._apply_edits(edits0, base)  # edicoes cirurgicas (search/replace)
         save = self._save(files, base)
         if self.boost:
@@ -8940,7 +9026,8 @@ class WebApi:
         try:
             kind0, _ = self._detect_backend(base)
             if (not kind0) and (base / "index.html").exists():
-                issues = self._check_js_syntax(base) + audit_web_buttons(base) + self._audit_missing_assets(base)
+                issues = (self._check_js_syntax(base) + audit_web_buttons(base)
+                          + self._audit_missing_assets(base) + audit_login_security(base))
                 if issues and self.boost:
                     if self._autofix_buttons(base, "web", issues):
                         self._ensure_scripts_linked(base)
@@ -8967,6 +9054,28 @@ class WebApi:
                           "e usa variável de ambiente. Quer que eu corrija? (diz 'corrige a segurança')")
         except Exception:
             pass
+        # 🛡️ veredito do portão de regressão: piorou? tenta consertar; não deu? VOLTA sozinha.
+        if is_edit:
+            try:
+                if shrink_issues:
+                    self._msg("sys", "🛡️ Detectei conteúdo sumindo na edição — mandando recolocar…", store=False)
+                    if self._autofix_buttons(base, "web", shrink_issues):
+                        self._ensure_scripts_linked(base)
+                post = set(self._functional_test(base))
+                novos = post - pre_err                     # só o que a EDIÇÃO quebrou
+                if novos:
+                    self._msg("sys", "🛡️ A edição quebrou algo que funcionava — consertando…", store=False)
+                    if self._autofix_buttons(base, "web", ["ERRO NOVO após a edição: " + e for e in list(novos)[:6]]):
+                        self._ensure_scripts_linked(base)
+                    novos = set(self._functional_test(base)) - pre_err
+                if novos:
+                    self._git(base, ["checkout", "--", "."])   # rollback pro estado bom
+                    log_telemetry({"ev": "edit_rollback", "erros": len(novos)})
+                    chat = ("Fui aplicar a mudança, TESTEI clicando em tudo e ela quebrou o que já funcionava "
+                            "(" + list(novos)[0][:90] + "). Voltei pra versão que funcionava — você não perdeu nada. "
+                            "Me pede de novo, de preferência UMA mudança por vez, que eu aplico com mais cuidado.")
+            except Exception:
+                pass
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
@@ -9881,7 +9990,8 @@ class WebApi:
         try:
             kind0, _ = self._detect_backend(base)
             if (not kind0) and (base / "index.html").exists():
-                issues = self._check_js_syntax(base) + audit_web_buttons(base) + self._audit_missing_assets(base)
+                issues = (self._check_js_syntax(base) + audit_web_buttons(base)
+                          + self._audit_missing_assets(base) + audit_login_security(base))
                 if issues and self._autofix_buttons(base, "web", issues):
                     self._ensure_scripts_linked(base)
                 crus = audit_unfinished(base)   # acabamento: tira o 'cru' (placeholder/TODO/stub/sem CSS)
