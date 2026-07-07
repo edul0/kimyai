@@ -8615,14 +8615,21 @@ class WebApi:
                     return hit, None
             # 🧠 METACOGNIÇÃO VISÍVEL: no pedido difícil ela PENSA antes (plano + autocrítica) e mostra
             # o raciocínio — cara de IA que pondera, não que cospe. Cacheados/casuais seguem instantâneos.
-            if tier == "hard" and not self.econ:
+            pro = (tier == "hard" and not self.econ)
+            if pro:
                 plano = self._think(text)
                 if plano:
                     system += ("\n\n[SEU RACIOCÍNIO INTERNO (já pensou nisto — siga o plano e a autocrítica "
                                "ao responder, sem repetir os bullets):\n" + plano + "]")
             try:
-                reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
-                self._streamed_done = True
+                if pro:
+                    # NÍVEL FABLE: pergunta difícil ganha best-of-2 + juiz (test-time compute).
+                    reply = self._answer_pro(system, msgs[-hist_n:], text, tier)
+                    if not reply:
+                        raise RuntimeError("pro vazio")
+                else:
+                    reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
+                    self._streamed_done = True
             except Exception:
                 mt, fa, pf = _chat_tier_params(tier)
                 reply = self.llm.chat(system, msgs[-hist_n:], max_tokens=mt, fast=fa, prefer=pf)
@@ -8821,6 +8828,52 @@ class WebApi:
         except Exception:
             pass
         return draft
+
+    def _answer_pro(self, system: str, msgs: list, text: str, tier: str) -> str:
+        """NÍVEL FABLE (test-time compute): na pergunta difícil, gera 2 respostas em paralelo (modelos
+        DIFERENTES = olhares distintos) e um JUIZ escolhe/funde a melhor. É o que puxa modelo grátis
+        pra perto de um frontier — mais 'pensar', não um modelo maior. Cai pra 1 resposta se faltar
+        provedor. Usado só no tier hard (raro), pra não pesar no uso normal."""
+        provs = self.llm.providers() or []
+        mt, fa, pf = _chat_tier_params(tier)
+        cands, lock = [], threading.Lock()
+
+        def _gen(prov):
+            try:
+                r = self.llm.chat(system, msgs, max_tokens=mt, fast=fa, prefer=prov or pf)
+                if r and len(r.strip()) > 20:
+                    with lock:
+                        cands.append(r.strip())
+            except Exception:
+                pass
+
+        alvos = (provs[:2] if len(provs) >= 2 else [pf, ""])   # 2 modelos distintos quando dá
+        ths = [threading.Thread(target=_gen, args=(p,), daemon=True) for p in alvos]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join(timeout=45)
+        cands = [c for c in cands if c]
+        if not cands:
+            return ""
+        if len(cands) == 1:
+            return cands[0]
+        # JUIZ: compara as duas e entrega a melhor versão (pode fundir o melhor de cada)
+        judge_sys = ("Você é um avaliador exigente. Recebeu a PERGUNTA e DUAS respostas de IAs diferentes. "
+                     "Escolha a que responde MELHOR (mais correta, completa, clara e útil) e entregue-a como "
+                     "resposta FINAL — pode corrigir um erro pontual ou fundir o melhor das duas. Responda "
+                     "SÓ a resposta final ao usuário, no mesmo idioma, sem comentar a avaliação.")
+        jmsgs = [{"role": "user", "content": "PERGUNTA:\n" + text[:1200]},
+                 {"role": "assistant", "content": "RESPOSTA A:\n" + cands[0][:6000]},
+                 {"role": "assistant", "content": "RESPOSTA B:\n" + cands[1][:6000]},
+                 {"role": "user", "content": "Entregue a melhor resposta final."}]
+        try:
+            best = self.llm.chat(judge_sys, jmsgs, max_tokens=mt, fast=fa)
+            if best and len(best.strip()) > 20:
+                return best.strip()
+        except Exception:
+            pass
+        return max(cands, key=len)   # fallback: a mais completa
 
     def _extract_requirements(self, text: str) -> str:
         """Transforma o pedido numa CHECKLIST de requisitos concretos — pra IA atender TODOS."""

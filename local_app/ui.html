@@ -649,7 +649,7 @@
     document.getElementById('meSince').textContent = dias>0
       ? ('A gente se conhece há '+dias+' dia'+(dias>1?'s':'')+(d.since?(' (desde '+d.since+')'):''))
       : 'Estamos começando a nos conhecer 😊';
-    var c=d.counts||{}, tiles=[['Lembranças',c.memorias||0],['Habilidades',c.habilidades||0],['Conhecimento',c.conhecimento||0],['Vozes',c.vozes||0]];
+    var c=d.counts||{}, tiles=[['Lembranças',c.memorias||0],['Habilidades',c.habilidades||0],['🧠 Cérebro',c.cerebro||0],['Conhecimento',c.conhecimento||0],['Vozes',c.vozes||0]];
     document.getElementById('meCounts').innerHTML = tiles.map(function(t){
       return '<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">'
         +'<div style="font-size:26px;font-weight:800">'+t[1]+'</div>'
@@ -664,6 +664,7 @@
     if(d.instrucoes) html+='<div style="margin:14px 0 6px;font-weight:700">Suas instruções</div><div style="background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:13px;white-space:pre-wrap">'+_esc(d.instrucoes)+'</div>';
     html+=sec('O que eu sei de você', d.memorias, 'Ainda estou aprendendo — fala comigo que eu vou guardando.');
     html+=sec('Habilidades que aprendi a fazer', d.habilidades, 'Nenhuma ainda — me ensina uma tarefa do PC!');
+    html+=sec('🧠 Meu cérebro — lições que me tornam SUA', d.cerebro, 'Ainda vazio. Vou aprendendo do seu jeito conforme você me corrige e usa.');
     html+=sec('Vozes que reconheço', d.vozes, 'Nenhuma cadastrada. Diga: "aprende minha voz como <seu nome>".');
     document.getElementById('meBody').innerHTML=html;
     document.getElementById('meModal').style.display='flex';
