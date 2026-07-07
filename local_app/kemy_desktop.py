@@ -2034,6 +2034,88 @@ def audit_login_security(base: Path) -> list[str]:
     return out[:6]
 
 
+# ===================== CONSCIÊNCIA DE CÓDIGO: ela ENTENDE o projeto, não gera às cegas =====================
+_JS_DEF_RE = re.compile(
+    r"(?:\bfunction\s+([A-Za-z_$][\w$]*)"
+    r"|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+    r"|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function"
+    r"|\bdef\s+([A-Za-z_]\w*)\s*\()")
+_HTML_ID_RE = re.compile(r"""\bid\s*=\s*["']([A-Za-z_][\w-]*)["']""")
+
+
+def code_defs(text: str) -> set:
+    """Nomes de funções definidas no arquivo (JS/Python) — o esqueleto do que existe."""
+    return {g for m in _JS_DEF_RE.finditer(text or "") for g in m.groups() if g}
+
+
+def code_ids(text: str) -> set:
+    return set(_HTML_ID_RE.findall(text or ""))
+
+
+def code_map(base: Path, max_files: int = 12) -> str:
+    """RAIO-X do projeto: por arquivo, as funções, ids e chaves de localStorage. Vai pro contexto
+    ANTES de editar — a IA enxerga a ESTRUTURA (o que existe e se conecta), não só texto."""
+    linhas: list[str] = []
+    try:
+        alvos = [p for p in sorted(base.rglob("*"))
+                 if p.suffix.lower() in (".html", ".js", ".css", ".py")
+                 and "node_modules" not in str(p) and ".git" not in str(p)][:max_files]
+    except Exception:
+        return ""
+    for p in alvos:
+        try:
+            t = p.read_text(encoding="utf-8", errors="ignore")[:120000]
+        except Exception:
+            continue
+        rel = p.name
+        if p.suffix.lower() == ".css":
+            linhas.append(f"- {rel}: {t.count('{')} regras CSS")
+            continue
+        fns = sorted(code_defs(t))
+        ids = sorted(code_ids(t))
+        ls = sorted(set(re.findall(r"localStorage\.(?:get|set)Item\(\s*['\"]([\w-]+)", t)))
+        seg = f"- {rel}: funções[{', '.join(fns[:18])}{'…' if len(fns) > 18 else ''}]"
+        if ids:
+            seg += f" · ids[{', '.join(ids[:14])}{'…' if len(ids) > 14 else ''}]"
+        if ls:
+            seg += f" · localStorage[{', '.join(ls[:6])}]"
+        linhas.append(seg)
+    return "\n".join(linhas)
+
+
+def refs_lost(base: Path, pre_txt: dict) -> list[str]:
+    """Depois da edição: função/id que EXISTIA, SUMIU e ainda é REFERENCIADO em algum lugar =
+    quebra certa. Determinístico — vira ordem de conserto antes de entregar."""
+    issues: list[str] = []
+    try:
+        corpo = ""
+        for p in list(base.rglob("*.js"))[:15] + list(base.rglob("*.html"))[:10]:
+            if "node_modules" in str(p) or ".git" in str(p):
+                continue
+            try:
+                corpo += "\n" + p.read_text(encoding="utf-8", errors="ignore")[:150000]
+            except Exception:
+                pass
+        for rel, old in pre_txt.items():
+            try:
+                new = (base / rel).read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                new = ""
+            for fn in sorted(code_defs(old) - code_defs(new))[:8]:
+                # ainda tem chamada fn( em algum lugar (fora de definição)?
+                usos = len(re.findall(r"\b" + re.escape(fn) + r"\s*\(", corpo))
+                if usos > 0:
+                    issues.append(f"a função {fn}() foi REMOVIDA de {rel} mas ainda é chamada "
+                                  f"{usos}x no projeto — recoloque a função (ou remova TODAS as chamadas).")
+            for i in sorted(code_ids(old) - code_ids(new))[:8]:
+                if re.search(r"getElementById\(\s*['\"]" + re.escape(i) + r"['\"]|#" + re.escape(i) + r"\b", corpo):
+                    issues.append(f"o elemento id='{i}' foi REMOVIDO de {rel} mas o código ainda o usa "
+                                  f"— recoloque o elemento (ou remova os usos).")
+    except Exception:
+        pass
+    return issues[:6]
+
+
 def audit_unfinished(base: Path) -> list[str]:
     """Acha sinais de entrega CRUA/INACABADA num app web client-side (deterministico, alta precisao):
     placeholder ('lorem ipsum', 'Item 1/2/3', 'texto aqui'), TODO/FIXME, funcao-stub (corpo vazio)
@@ -8893,6 +8975,13 @@ class WebApi:
         if notes:
             system += notes
         if current:
+            mapa = code_map(base)
+            if mapa:
+                system += ("\n\n=== MAPA DO PROJETO (a ESTRUTURA do que existe — entenda ANTES de mexer) ===\n"
+                           + mapa +
+                           "\nRegra de consciência: você SABE o que existe (acima). Só mexa no que o pedido "
+                           "exige; NÃO remova nem renomeie função/id listado aí sem remover TODOS os usos. "
+                           "Na parte de conversa da resposta, diga em 1 frase O QUE mudou e ONDE (arquivo/função).")
             system += ("\n\n=== EDITAR PROJETO EXISTENTE — REGRA DE OURO ===\n"
                        "Abaixo os ARQUIVOS ATUAIS. Faca SO a mudanca pedida e NAO QUEBRE NADA do que ja "
                        "funciona. Para mudancas pequenas, PREFIRA blocos cirurgicos <<<EDIT>>> "
@@ -8995,6 +9084,7 @@ class WebApi:
         # e não deu pra consertar, VOLTA sozinha (o usuário nunca fica com o app quebrado).
         is_edit = bool(current) and (base / "index.html").exists() and (files or edits0)
         pre_err: set = set()
+        pre_txt: dict = {}
         shrink_issues: list[str] = []
         if is_edit:
             self._git_snapshot(base, "antes da edicao: " + text[:50])
@@ -9002,11 +9092,18 @@ class WebApi:
                 pre_err = set(self._functional_test(base))
             except Exception:
                 pre_err = set()
+            # estado ANTES dos arquivos que serão tocados (consciência: saber o que tinha lá)
+            alvo_rels = [str(f.get("path") or "").strip().lstrip("/\\") for f in (files or [])]
+            alvo_rels += [str(e.get("path") or "").strip().lstrip("/\\") for e in (edits0 or [])]
+            for rel in dict.fromkeys(r for r in alvo_rels if r):
+                try:
+                    pre_txt[rel] = (base / rel).read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
             for f in (files or []):   # reescrita que ENCOLHE demais = conteúdo perdido
                 rel = str(f.get("path") or "").strip().lstrip("/\\")
-                try:
-                    old_txt = (base / rel).read_text(encoding="utf-8", errors="ignore")
-                except Exception:
+                old_txt = pre_txt.get(rel)
+                if old_txt is None:
                     continue
                 on = old_txt.count("\n") + 1
                 nn = str(f.get("content") or "").count("\n") + 1
@@ -9057,9 +9154,11 @@ class WebApi:
         # 🛡️ veredito do portão de regressão: piorou? tenta consertar; não deu? VOLTA sozinha.
         if is_edit:
             try:
-                if shrink_issues:
-                    self._msg("sys", "🛡️ Detectei conteúdo sumindo na edição — mandando recolocar…", store=False)
-                    if self._autofix_buttons(base, "web", shrink_issues):
+                # CONSCIÊNCIA: função/id que sumiu mas ainda é usado = quebra certa -> conserto
+                perdidos = refs_lost(base, pre_txt)
+                if shrink_issues or perdidos:
+                    self._msg("sys", "🛡️ Detectei conteúdo/função sumindo na edição — mandando recolocar…", store=False)
+                    if self._autofix_buttons(base, "web", shrink_issues + perdidos):
                         self._ensure_scripts_linked(base)
                 post = set(self._functional_test(base))
                 novos = post - pre_err                     # só o que a EDIÇÃO quebrou
@@ -9074,6 +9173,11 @@ class WebApi:
                     chat = ("Fui aplicar a mudança, TESTEI clicando em tudo e ela quebrou o que já funcionava "
                             "(" + list(novos)[0][:90] + "). Voltei pra versão que funcionava — você não perdeu nada. "
                             "Me pede de novo, de preferência UMA mudança por vez, que eu aplico com mais cuidado.")
+                else:
+                    # 🧭 ELA SABE O QUE FEZ: changelog REAL calculado do diff (não inventado)
+                    resumo = self._change_summary(base, pre_txt, files)
+                    if resumo:
+                        chat = ((chat or "Feito.").strip() + "\n\n🧭 O que eu mudei (verificado no código):\n" + resumo)
             except Exception:
                 pass
         self._maybe_run(extract_run_commands(reply), base)
@@ -10283,6 +10387,36 @@ class WebApi:
         files = (resultado or {}).get("files") or extract_code_files(str((resultado or {}).get("raw") or ""))
         base = Path(it["project"]) if it else (self.workspace_root / "projeto")
         return display, self._save(files, base)
+
+    def _change_summary(self, base: Path, pre_txt: dict, files: list) -> str:
+        """Changelog REAL da edição, calculado do diff (nunca inventado): linhas +/-, funções que
+        entraram/saíram por arquivo, e arquivos novos. É a prova de que ela SABE o que fez."""
+        linhas: list[str] = []
+        try:
+            for rel, old in list(pre_txt.items())[:6]:
+                try:
+                    new = (base / rel).read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                if new == old:
+                    continue
+                delta = len(new.splitlines()) - len(old.splitlines())
+                do, dn = code_defs(old), code_defs(new)
+                seg = f"- {rel}: {'+' if delta >= 0 else ''}{delta} linhas"
+                novas = sorted(dn - do)[:4]
+                idas = sorted(do - dn)[:4]
+                if novas:
+                    seg += " · funções novas: " + ", ".join(novas)
+                if idas:
+                    seg += " · removi: " + ", ".join(idas)
+                linhas.append(seg)
+            criados = [str(f.get("path") or "").strip() for f in (files or [])
+                       if str(f.get("path") or "").strip() and str(f.get("path") or "").strip().lstrip("/\\") not in pre_txt]
+            if criados:
+                linhas.append("- criei: " + ", ".join(criados[:5]))
+        except Exception:
+            pass
+        return "\n".join(linhas[:6])
 
     def _save(self, files: list[dict], base: Path) -> str | None:
         import difflib
