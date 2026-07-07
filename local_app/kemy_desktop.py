@@ -7505,6 +7505,10 @@ class WebApi:
             self.stop_speak(); self._msg("sys", "🔇 Silenciei.", store=False); self._state("idle"); return True
         if re.fullmatch(r"(?:o que (?:voc[eê]|vc) sabe (?:de|sobre) mim|minha mem[oó]ria|o que voce lembra|ver mem[oó]ria)", t):
             self.show_memory(); return True
+        # Auto-avaliação: "faz sua prova", "se testa", "se avalia"
+        if re.fullmatch(r"(?:fa[çc]a? (?:sua|a sua|uma) prova|se test[ae]|se avali[ae]|auto[- ]?avalia\w*|"
+                        r"benchmark|roda (?:seu|o) benchmark|mostra (?:sua|a) evolu[çc][ãa]o)", t):
+            self.self_benchmark(); return True
         # Ciberseguranca: auditar / blindar o projeto
         if re.search(r"(?i)\b(corrig\w+|blind\w+|conserta\w*|arrum\w*|deixa\w* seguro|torna\w* seguro)\b.*\bseguran[çc]a\b|\bblinda\b.*\b(projeto|sistema|app)\b|corrig\w+ as falhas", t):
             self.audit_security(fix=True); return True
@@ -8300,6 +8304,105 @@ class WebApi:
             self._state("idle")
         threading.Thread(target=work, daemon=True).start()
 
+    # ===================== AUTO-BENCHMARK: ela se mede e PROVA que evoluiu =====================
+    _BENCH = [
+        # (categoria, pergunta, resposta_esperada — conferida por 'contém', sem acento/caixa)
+        ("matemática", "Quanto é 17 vezes 23? Responda só o número.", "391"),
+        ("matemática", "Quantos segundos tem 2 horas e meia? Responda só o número.", "9000"),
+        ("lógica", "Maria é mais alta que João. João é mais alto que Pedro. Quem é o mais baixo? Só o nome.", "pedro"),
+        ("lógica", "Se 3 gatos pegam 3 ratos em 3 minutos, quantos gatos pegam 100 ratos em 100 minutos? Só o número.", "3"),
+        ("lógica", "Complete a sequência: 2, 6, 18, 54, ... Responda só o próximo número.", "162"),
+        ("fatos", "Qual é a capital da Austrália? Responda só o nome da cidade.", "canberra"),
+        ("fatos", "Em que ano o ser humano pisou na Lua pela primeira vez? Só o ano.", "1969"),
+        ("instrução", "Responda com exatamente uma palavra: qual a cor do céu num dia limpo?", "azul"),
+        ("extração", "Do texto 'O pedido #4821 de Ana custou R$ 350,90', extraia só o número do pedido.", "4821"),
+        ("formato", "Responda SÓ um array JSON com os números pares de 1 a 10, sem nenhum texto.", "__json_pares__"),
+        ("português", "Qual é o plural de 'cidadão'? Responda só a palavra.", "cidadaos"),
+        ("código", "Escreva SÓ o código de uma função JavaScript chamada dobro(n) que retorna o dobro de n. Sem explicação.", "__js_dobro__"),
+    ]
+
+    @staticmethod
+    def _bench_norm(s: str) -> str:
+        import unicodedata
+        s = unicodedata.normalize("NFD", (s or "").lower())
+        return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+    def _bench_grade(self, expect: str, reply: str) -> bool:
+        """Corretor DETERMINÍSTICO (sem LLM julgando a si mesmo): contém/parse/execução real."""
+        r = (reply or "").strip()
+        if expect == "__json_pares__":
+            try:
+                m = re.search(r"\[[^\]]*\]", r, re.S)
+                return sorted(json.loads(m.group(0))) == [2, 4, 6, 8, 10] if m else False
+            except Exception:
+                return False
+        if expect == "__js_dobro__":
+            code = re.sub(r"^```[a-z]*|```$", "", r.strip(), flags=re.M).strip()
+            node = shutil.which("node")
+            if node:   # prova REAL: executa o código e confere o resultado
+                try:
+                    p = subprocess.run([node, "-e", code + "\nconsole.log(dobro(21))"],
+                                       capture_output=True, text=True, timeout=10)
+                    return "42" in (p.stdout or "")
+                except Exception:
+                    return False
+            return bool(re.search(r"dobro", code) and re.search(r"\*\s*2|n\s*\+\s*n|2\s*\*", code))
+        if expect.isdigit():   # número: "9.000"/"9,000" contam como "9000" (separador de milhar)
+            r = re.sub(r"(?<=\d)[.,](?=\d)", "", r)
+        return self._bench_norm(expect) in self._bench_norm(r)
+
+    def self_benchmark(self) -> None:
+        """📊 A Kemy roda uma prova em si mesma (12 tarefas com gabarito) e compara com a última:
+        é a PROVA de que está evoluindo — autoavaliação de verdade, não achismo."""
+        self._msg("kemy", "Vou fazer uma prova em mim mesma (12 tarefas com gabarito). Um minuto…")
+        self._state("thinking")
+
+        def work():
+            res, falhas = [], []
+            for cat, q, exp in self._BENCH:
+                try:
+                    out = self.llm.chat(
+                        "Responda EXATAMENTE o que foi pedido, sem explicação extra.",
+                        [{"role": "user", "content": q}], max_tokens=200, fast=True)
+                    ok = self._bench_grade(exp, out or "")
+                except Exception:
+                    ok, out = False, "(erro)"
+                res.append((cat, ok))
+                if not ok:
+                    falhas.append(f"   ✗ [{cat}] {q[:60]}… → \"{(out or '')[:50]}\"")
+            score = sum(1 for _, ok in res if ok)
+            total = len(res)
+            # por categoria
+            cats = {}
+            for cat, ok in res:
+                a, b = cats.get(cat, (0, 0))
+                cats[cat] = (a + (1 if ok else 0), b + 1)
+            # histórico -> delta (a prova de EVOLUÇÃO)
+            hf = config_dir() / "kemy_benchmark.json"
+            hist = self._load_json(hf, [])
+            prev = hist[-1]["score"] if hist else None
+            hist.append({"ts": round(time.time(), 1), "date": datetime.datetime.now().strftime("%d/%m %H:%M"),
+                         "score": score, "total": total,
+                         "cats": {k: f"{a}/{b}" for k, (a, b) in cats.items()}})
+            self._save_json(hf, hist[-60:])
+            delta = ""
+            if prev is not None:
+                d = score - prev
+                delta = (f" ({'+' if d > 0 else ''}{d} vs última)" if d else " (igual à última)")
+            linhas = [f"📊 Minha prova: {score}/{total}{delta}",
+                      "   " + " · ".join(f"{k} {a}/{b}" for k, (a, b) in cats.items())]
+            if falhas:
+                linhas.append("Onde errei:")
+                linhas += falhas[:4]
+            if len(hist) > 1:
+                serie = " → ".join(f"{h['score']}/{h['total']}" for h in hist[-6:])
+                linhas.append(f"Evolução: {serie}")
+            log_telemetry({"ev": "benchmark", "score": score, "total": total})
+            self._msg("kemy", "\n".join(linhas))
+            self._state("idle")
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _project_notes_prefix(self, base: Path) -> str:
         """Memoria do PROJETO (stack, modulos prontos, decisoes, pendencias) — entre conversas."""
         try:
@@ -8627,6 +8730,7 @@ class WebApi:
                     reply = self._answer_pro(system, msgs[-hist_n:], text, tier)
                     if not reply:
                         raise RuntimeError("pro vazio")
+                    reply = self._reflect_facts(text, reply)   # duvida de si: confere fatos na web
                 else:
                     reply = self._chat_streaming(system, msgs[-hist_n:], tier=tier)   # resposta em tempo real
                     self._streamed_done = True
@@ -8874,6 +8978,50 @@ class WebApi:
         except Exception:
             pass
         return max(cands, key=len)   # fallback: a mais completa
+
+    def _reflect_facts(self, question: str, reply: str) -> str:
+        """REFLEXION ANTI-ALUCINAÇÃO: antes de entregar a resposta difícil, a Kemy DUVIDA de si —
+        extrai as afirmações factuais arriscadas (data, número, nome, versão, evento), confere na
+        WEB e, se errou, CORRIGE. É o que os frontier fazem por dentro; aqui é grátis e explícito.
+        Retorna a resposta (corrigida ou original)."""
+        try:
+            if len(reply or "") < 60:
+                return reply
+            claims = self.llm.chat(
+                "Da RESPOSTA abaixo, liste até 3 afirmações FACTUAIS verificáveis e ARRISCADAS de errar "
+                "(datas, números, nomes, versões, preços, eventos, 'o maior/primeiro...'). Uma por linha, "
+                "curtas, sem numeração. Se a resposta é opinião/código/matemática pura ou não tem fato "
+                "arriscado, responda exatamente NONE.",
+                [{"role": "user", "content": (reply or "")[:3500]}], max_tokens=140, fast=True)
+            claims = (claims or "").strip()
+            if not claims or claims.upper().startswith("NONE"):
+                return reply
+            linhas = [l.strip("-•* ").strip() for l in claims.splitlines() if len(l.strip()) > 8][:3]
+            if not linhas:
+                return reply
+            self._msg("sys", "🔎 Conferindo os fatos antes de te entregar…", store=False)
+            fontes = ""
+            for c in linhas:
+                try:
+                    fontes += f"\nAFIRMAÇÃO: {c}\nFONTES:\n" + (web_search(c, limit=3) or "(nada)")[:1200] + "\n"
+                except Exception:
+                    pass
+            if len(fontes.strip()) < 40:
+                return reply
+            veredito = self.llm.chat(
+                "Você é um checador de fatos rigoroso. Compare a RESPOSTA com as FONTES da web. "
+                "Se alguma afirmação está ERRADA ou desatualizada, reescreva a RESPOSTA INTEIRA corrigida "
+                "(mesmo tom/idioma, sem citar a checagem). Se está tudo certo (ou as fontes não bastam "
+                "pra afirmar erro), responda exatamente OK.",
+                [{"role": "user", "content": "RESPOSTA:\n" + (reply or "")[:3500] + "\n\n" + fontes[:3800]}],
+                max_tokens=1200, fast=True)
+            v = (veredito or "").strip()
+            if not v or v.upper().rstrip(".") == "OK" or len(v) < 60:
+                return reply
+            self._msg("sys", "✔ Corrigi um fato que eu ia te falar errado (chequei na web).", store=False)
+            return v
+        except Exception:
+            return reply
 
     def _extract_requirements(self, text: str) -> str:
         """Transforma o pedido numa CHECKLIST de requisitos concretos — pra IA atender TODOS."""
