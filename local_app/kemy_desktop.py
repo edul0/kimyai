@@ -8716,6 +8716,21 @@ class WebApi:
                 hit = self._cache_get(ckey)
                 if hit:
                     return hit, None
+            # 🧮 FERRAMENTA ANTES DA RESPOSTA (nível Fable): cálculo -> roda um script de verdade e
+            # injeta o resultado EXATO no contexto (zero chute de aritmética).
+            if self._wants_compute(text):
+                calc = self._compute_answer(text)
+                if calc:
+                    system += ("\n\nRESULTADO CALCULADO (você acabou de RODAR um script Python; estes "
+                               "números são EXATOS — use-os na resposta, NÃO recalcule de cabeça):\n" + calc)
+            # 🔬 PESQUISA PROFUNDA: pergunta cabeluda/comparativa -> multi-busca + síntese com fontes.
+            if not self.econ and self._wants_research(text, tier):
+                deep = self._deep_research(text, system)
+                if deep:
+                    if ckey:
+                        self._cache_put(ckey, deep)
+                    threading.Thread(target=self._auto_remember, args=(text, deep), daemon=True).start()
+                    return deep, None
             # 🧠 METACOGNIÇÃO VISÍVEL: no pedido difícil ela PENSA antes (plano + autocrítica) e mostra
             # o raciocínio — cara de IA que pondera, não que cospe. Cacheados/casuais seguem instantâneos.
             pro = (tier == "hard" and not self.econ)
@@ -9022,6 +9037,104 @@ class WebApi:
             return v
         except Exception:
             return reply
+
+    # ===================== NÍVEL FABLE: ferramentas antes da resposta =====================
+    _CALC_KEYS = re.compile(r"(?i)\b(quanto (é|e|d[áa]|fica|rende|custa ao)|calcul\w+|convert\w+|some|soma|"
+                            r"subtra\w+|multiplic\w+|divid\w+|porcent\w+|percentual|juros|desconto de|"
+                            r"parcel\w+|presta[çc][ãa]o|m[ée]dia (de|entre)|raiz|pot[êe]ncia|fatorial|"
+                            r"quantos dias (entre|falta|至|at[ée])|dias entre|que dia (cai|ser[áa])|"
+                            r"km em|metros em|horas em|minutos em|libras em|kg em|reais em|d[óo]lar\w* em)\b")
+    # Sandbox do interpretador: bloqueia builtin perigoso, módulo de sistema (em import OU uso com
+    # ponto) e loop infinito. Falha segura: script barrado só cai pro fluxo normal (sem rodar).
+    _UNSAFE_PY = re.compile(
+        r"(?im)(__\w+__|\bopen\s*\(|\bexec\s*\(|\beval\s*\(|\bcompile\s*\(|\binput\s*\(|\bbreakpoint\b|"
+        r"\bglobals\s*\(|\blocals\s*\(|\bgetattr\s*\(|\bsetattr\s*\(|\bvars\s*\(|while\s+True|"
+        r"\b(?:os|sys|subprocess|socket|shutil|pathlib|ctypes|pickle|importlib|builtins|urllib|requests|"
+        r"multiprocessing|threading|signal|platform|webbrowser)\s*\.|"
+        r"^[^\n#]*\b(?:import|from)\b[^\n]*\b(?:os|sys|subprocess|socket|shutil|pathlib|ctypes|pickle|"
+        r"importlib|builtins|urllib|requests|multiprocessing|threading|signal|platform|webbrowser)\b)")
+
+    def _wants_compute(self, text: str) -> bool:
+        t = (text or "").strip()
+        return bool(re.search(r"\d", t) and self._CALC_KEYS.search(t) and not is_build_request(t))
+
+    def _compute_answer(self, text: str) -> str:
+        """🧮 CALCULADORA DE VERDADE (code interpreter): em pergunta com cálculo/data/conversão, a
+        Kemy ESCREVE um script Python, RODA local (sandbox: sem rede/arquivo/import perigoso) e usa
+        o resultado EXATO — zero chute de aritmética, que é onde todo LLM escorrega. Nível Fable:
+        ferramenta antes da resposta. Retorna o resultado ou ''. """
+        try:
+            code = self.llm.chat(
+                "Escreva SÓ um script Python PURO que calcula o que o usuário pediu e dá print() no "
+                "resultado final (com unidade/moeda quando fizer sentido, e as etapas principais em prints "
+                "curtos se ajudar). Regras DURAS: sem input(), sem rede, sem arquivos, sem while True; só "
+                "matemática/datas/strings; imports permitidos: math, datetime, json, re, decimal, fractions, "
+                "statistics, calendar, itertools. Só o código, sem markdown.",
+                [{"role": "user", "content": (text or "")[:700]}], max_tokens=400, fast=True)
+            code = re.sub(r"^```[a-z]*\s*|\s*```$", "", (code or "").strip(), flags=re.M).strip()
+            if not code or "print" not in code or len(code) > 2500:
+                return ""
+            if self._UNSAFE_PY.search(code):   # guard: script fora do sandbox -> nem roda
+                return ""
+            p = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True,
+                               text=True, timeout=10)
+            out = (p.stdout or "").strip()
+            if p.returncode != 0 or not out:
+                return ""
+            self._msg("sys", "🧮 Calculei rodando um script de verdade (resultado exato).", store=False)
+            log_telemetry({"ev": "compute", "ok": True})
+            return out[:900]
+        except Exception:
+            return ""
+
+    def _wants_research(self, text: str, tier: str) -> bool:
+        t = (text or "").strip().lower()
+        if re.match(r"(?i)^(pesquisa profunda|pesquise? a fundo|investiga|deep research|estude e me diga)\b", t):
+            return True
+        return tier == "hard" and bool(re.search(
+            r"(?i)\b(compar\w+|melhor(es)? (op[çc][õo]es|ferramentas|formas|maneiras|pr[áa]ticas)|"
+            r"\bvs\b|versus|pr[óo]s e contras|vantagens e desvantagens|estado da arte|tend[êe]ncias|"
+            r"vale a pena|qual escolher)\b", t))
+
+    def _deep_research(self, text: str, system: str) -> str:
+        """🔬 PESQUISA PROFUNDA (estilo research do Claude, grátis): decompõe a pergunta em até 3
+        sub-perguntas, pesquisa cada ângulo na web e sintetiza UMA resposta completa com FONTES.
+        Retorna a resposta ou '' (cai no fluxo normal)."""
+        try:
+            q = re.sub(r"(?i)^(pesquisa profunda|pesquise? a fundo|investiga|deep research|estude e me diga)"
+                       r"[:\s,-]*", "", (text or "").strip()) or text
+            subs = self.llm.chat(
+                "Divida a PERGUNTA em 2-3 sub-perguntas de busca (ângulos diferentes que juntos respondem "
+                "tudo: ex. visão geral, comparação/números, limitações/armadilhas). Uma por linha, curtas, "
+                "boas pra buscador. Só as linhas.",
+                [{"role": "user", "content": q[:500]}], max_tokens=120, fast=True)
+            queries = [l.strip("-•* ").strip() for l in (subs or "").splitlines() if len(l.strip()) > 6][:3]
+            if not queries:
+                queries = [q[:120]]
+            self._msg("sys", "🔬 Pesquisa profunda: " + " · ".join(x[:46] for x in queries), store=False)
+            dossie = ""
+            for sq in queries:
+                try:
+                    r = web_search(sq, limit=4)
+                    if r:
+                        dossie += f"\n### Busca: {sq}\n{r[:2200]}\n"
+                except Exception:
+                    pass
+            if len(dossie.strip()) < 80:
+                return ""
+            reply = self.llm.chat(
+                system + "\n\n=== MODO PESQUISA PROFUNDA ===\nVocê pesquisou a fundo (dossiê abaixo, vários "
+                "ângulos). Responda COMPLETO e organizado: o essencial primeiro, depois os detalhes/comparações "
+                "que importam, e feche com uma recomendação prática. NO FINAL liste 'Fontes:' com os links "
+                "mais relevantes do dossiê (só os que usou). Se o dossiê divergir, diga qual versão parece "
+                "mais confiável e por quê.\n\nDOSSIÊ:\n" + dossie[:9000],
+                [{"role": "user", "content": q[:800]}], max_tokens=2500)
+            reply = (reply or "").strip()
+            if reply:
+                log_telemetry({"ev": "research", "queries": len(queries)})
+            return reply
+        except Exception:
+            return ""
 
     def _extract_requirements(self, text: str) -> str:
         """Transforma o pedido numa CHECKLIST de requisitos concretos — pra IA atender TODOS."""
