@@ -393,6 +393,47 @@ def save_skills(skills: list) -> None:
         pass
 
 
+def habits_file() -> Path:
+    return config_dir() / "kemy_habitos.jsonl"
+
+
+# palavras sem valor pra descobrir PADRÃO do que a pessoa pede (verbos vazios, artigos, etc.)
+_HABIT_STOP = {
+    "para", "pra", "por", "com", "sem", "que", "uma", "meu", "minha", "seu", "sua", "dos", "das",
+    "aqui", "agora", "hoje", "voce", "você", "vc", "kemy", "favor", "pode", "quero", "preciso",
+    "faz", "faça", "fazer", "cria", "criar", "manda", "mandar", "quer", "sobre", "isso", "esse",
+    "essa", "este", "esta", "the", "and", "for", "you", "kimy", "kemi",
+}
+
+
+def habit_tokens(text: str) -> list:
+    """Assinatura leve do PEDIDO: tokens significativos (>=4 letras, sem stopword), únicos e ordenados.
+    Serve pra agrupar pedidos parecidos e descobrir hábitos — tudo local, sem embedding."""
+    low = re.sub(r"[^\wçáàâãéêíóôõúü ]+", " ", (text or "").lower(), flags=re.UNICODE)
+    toks = [w for w in low.split() if len(w) >= 4 and w not in _HABIT_STOP]
+    return sorted(set(toks))
+
+
+def log_habit(text: str) -> None:
+    """Registra pedidos reais (LOCAL) pra depois descobrir rotinas repetidas e oferecer atalho."""
+    try:
+        toks = habit_tokens(text)
+        if len(toks) < 2:
+            return
+        f = habits_file()
+        try:
+            if f.exists() and f.stat().st_size > 400_000:
+                linhas = f.read_text(encoding="utf-8", errors="ignore").splitlines()[-600:]
+                f.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        with f.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": round(time.time(), 1), "sig": toks, "text": text[:120]},
+                                ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def conhecimento_file() -> Path:
     return config_dir() / "kemy_conhecimento.json"
 
@@ -5221,6 +5262,8 @@ class WebApi:
                 if self.speaker.available:
                     self.speaker.say(msg[:280]); self._state("speaking")
             bf.write_text(hoje, encoding="utf-8")
+            # depois do briefing, se descobriu uma rotina sua, oferece um atalho (1x, sem insistir)
+            threading.Timer(12.0, self._maybe_suggest_habit).start()
         except Exception:
             pass
 
@@ -5231,6 +5274,127 @@ class WebApi:
             threading.Thread(target=lambda: self._daily_briefing(force=True), daemon=True).start()
             return True
         return False
+
+    # ===================== PROATIVIDADE: descobre um hábito e oferece automatizar =====================
+    def _detect_habit(self):
+        """Olha os pedidos recentes (LOCAL) e acha uma ROTINA repetida: algo que você pede em
+        dias diferentes, ≥3 vezes, que ainda não virou habilidade nem foi oferecido. Retorna
+        {'sig','texts','count'} ou None. Tudo por sobreposição de tokens — sem nuvem."""
+        try:
+            f = habits_file()
+            if not f.exists():
+                return None
+            linhas = f.read_text(encoding="utf-8", errors="ignore").splitlines()[-500:]
+            corte = time.time() - 21 * 86400
+            regs = []
+            for ln in linhas:
+                try:
+                    r = json.loads(ln)
+                except Exception:
+                    continue
+                if r.get("ts", 0) >= corte and r.get("sig"):
+                    regs.append(r)
+            if len(regs) < 3:
+                return None
+            ja_ofertados = set(self._load_json(config_dir() / "kemy_habito_visto.json", []))
+            skill_sigs = [set(habit_tokens((s.get("name", "") + " " + s.get("desc", "")))) for s in (self.skills or [])]
+            usados = [False] * len(regs)
+            melhor = None
+            for i, base in enumerate(regs):
+                if usados[i]:
+                    continue
+                sb = set(base["sig"])
+                grupo = [base]
+                dias = {int(base["ts"] // 86400)}
+                for j in range(i + 1, len(regs)):
+                    if usados[j]:
+                        continue
+                    sj = set(regs[j]["sig"])
+                    inter = len(sb & sj)
+                    menor = min(len(sb), len(sj)) or 1
+                    if inter >= 2 and inter / menor >= 0.6:      # mesmo núcleo, frases diferentes
+                        usados[j] = True
+                        grupo.append(regs[j])
+                        dias.add(int(regs[j]["ts"] // 86400))
+                if len(grupo) >= 3 and len(dias) >= 2:         # repetido E em dias diferentes = hábito
+                    chave = " ".join(sorted(sb))
+                    if chave in ja_ofertados:
+                        continue
+                    if any(len(sb & ss) >= 2 for ss in skill_sigs):   # já virou habilidade
+                        continue
+                    if not melhor or len(grupo) > melhor["count"]:
+                        melhor = {"sig": chave, "texts": [g["text"] for g in grupo[-3:]], "count": len(grupo)}
+            return melhor
+        except Exception:
+            return None
+
+    def _maybe_suggest_habit(self) -> None:
+        """Se achar uma rotina repetida, a Kemy INICIA: 'reparei que você costuma pedir X, quer que
+        eu vire um atalho?'. Guarda a sugestão pendente pra um 'sim' confirmar."""
+        try:
+            if getattr(self, "_pending_habit", None):
+                return
+            h = self._detect_habit()
+            if not h:
+                return
+            ex = h["texts"][-1]
+            msg = self.llm.chat(
+                CHAT_PROMPT + "\n\nVocê REPAROU que a pessoa costuma te pedir a mesma coisa. Em UMA frase "
+                "curta e natural, diga que notou esse hábito (cite o exemplo entre aspas) e pergunte se ela "
+                "quer que você crie um atalho pra fazer isso na hora. Sem emoji, sem enrolar.",
+                [{"role": "user", "content": f"Exemplo do que ela repete: \"{ex}\". Ofereça o atalho."}],
+                max_tokens=90, fast=True)
+            msg = strip_emojis(msg or "").strip().strip('"')
+            if not msg:
+                nome = " ".join(h["sig"].split()[:3])
+                msg = f"Reparei que você costuma me pedir coisas como \"{ex}\". Quer que eu crie um atalho pra isso? É só dizer 'sim'."
+            self._pending_habit = h
+            self._msg("kemy", "💡 " + msg)
+            if self.speaker.available:
+                self.speaker.say(msg[:240]); self._state("speaking")
+        except Exception:
+            pass
+
+    def _maybe_confirm_habit(self, text: str) -> bool:
+        """Trata a resposta à oferta de atalho: 'sim/quero/pode/bora' cria a habilidade; 'não' descarta.
+        Nos dois casos marca o padrão como já oferecido (não insiste)."""
+        h = getattr(self, "_pending_habit", None)
+        if not h:
+            return False
+        t = (text or "").strip().lower()
+        sim = re.match(r"(?i)^(sim|s|claro|pode|pode ser|quero|bora|isso|fa[çc]a|manda|com certeza|aceito|ok|blz|beleza)\b", t)
+        nao = re.match(r"(?i)^(n[ãa]o|nao|nops|deixa|agora n[ãa]o|depois|melhor n[ãa]o|esquece)\b", t)
+        if not (sim or nao):
+            return False   # resposta não relacionada -> segue o fluxo normal
+        self._pending_habit = None
+        vistos = self._load_json(config_dir() / "kemy_habito_visto.json", [])
+        if h.get("sig") and h["sig"] not in vistos:
+            vistos.append(h["sig"])
+            self._save_json(config_dir() / "kemy_habito_visto.json", vistos[-200:])
+        if nao:
+            self._msg("kemy", "Tranquilo, não mexo nisso. Se mudar de ideia é só falar.")
+            self._state("idle")
+            return True
+        ex = h["texts"][-1]
+        nome = " ".join(h["sig"].split()[:3]).strip() or ex[:30]
+        if not any(s.get("name", "").lower() == nome.lower() for s in self.skills):
+            self.skills.append({"name": nome, "desc": f"atalho aprendido: {ex}", "recipe": ex})
+            save_skills(self.skills)
+        self._msg("kemy", f"Feito! Criei o atalho \"{nome}\". Agora é só me chamar por ele que eu faço na hora.")
+        self._state("idle")
+        return True
+
+    def _load_json(self, path, default):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return default
+
+    def _save_json(self, path, data) -> None:
+        try:
+            Path(path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     def _proactive_loop(self) -> None:
         """Companhia proativa: se voce some por um tempo, ela puxa papo (gentil, 1x por ociosidade)."""
@@ -7102,6 +7266,8 @@ class WebApi:
             self._render()
         self._last_user_ts = time.time()   # atividade -> reseta o relogio da proatividade
         self._msg("user", text)
+        if self._maybe_confirm_habit(text):   # respondeu à oferta de atalho ("sim/não")
+            return
         if self._maybe_learn(text):   # "lembre que ...", "de agora em diante ..."
             self._state("idle")
             return
@@ -7117,6 +7283,7 @@ class WebApi:
             return
         if self._maybe_voice_enroll(text):   # cadastrar voz (quem fala) — opcional
             return
+        log_habit(text)   # registra o pedido (LOCAL) pra descobrir rotinas repetidas
         # No Minecraft: a fala vira ação no jogo (cérebro do bot).
         if getattr(self, "_mc_mode", False) and getattr(self, "_mc_sock", None):
             threading.Thread(target=self.mc_brain, args=(text, "você"), daemon=True).start()
