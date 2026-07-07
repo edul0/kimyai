@@ -458,11 +458,15 @@ def load_cerebro() -> list:
     return out
 
 
+_CEREBRO_LOCK = threading.Lock()
+
+
 def save_cerebro(items: list) -> None:
     try:
-        items = items[-1500:]
-        body = "\n".join(json.dumps(x, ensure_ascii=False) for x in items)
-        cerebro_file().write_text(body + ("\n" if body else ""), encoding="utf-8")
+        with _CEREBRO_LOCK:   # threads concorrentes (correção + elogio) não se atropelam
+            items = items[-1500:]
+            body = "\n".join(json.dumps(x, ensure_ascii=False) for x in items)
+            cerebro_file().write_text(body + ("\n" if body else ""), encoding="utf-8")
     except Exception:
         pass
 
@@ -1194,6 +1198,27 @@ def web_search(query: str, limit: int = 6) -> str:
             if len(out) >= limit:
                 break
         return "\n".join(out)
+    except Exception:
+        return ""
+
+
+def web_page_text(url: str, max_chars: int = 3500) -> str:
+    """Baixa uma página e devolve o TEXTO limpo (sem HTML) — pra Kemy ler a FONTE de verdade,
+    não só o título do resultado. Best-effort: falhou, devolve ''."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KemyDesktop"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            if ct and ("html" not in ct and "text" not in ct):
+                return ""
+            raw = resp.read(1_500_000).decode("utf-8", "ignore")
+        raw = re.sub(r"(?is)<(script|style|nav|header|footer|aside|noscript|svg|form)[^>]*>.*?</\1>", " ", raw)
+        m = re.search(r"(?is)<(article|main)[^>]*>(.*)</\1>", raw)   # prioriza o miolo do artigo
+        if m:
+            raw = m.group(2)
+        import html as _h
+        text = re.sub(r"\s+", " ", _h.unescape(re.sub(r"<[^>]+>", " ", raw))).strip()
+        return text[:max_chars] if len(text) > 200 else ""
     except Exception:
         return ""
 
@@ -7813,13 +7838,49 @@ class WebApi:
                            r"gostei|ficou (bom|ótimo|otimo|top|foda)|amei|adorei|show|excelente|"
                            r"muito bom|obrigad[oa]|valeu|top)\b", low)
         if corr:
-            self._cerebro_add(t, "correção", w=3)   # correção pesa mais: ela erra menos da próxima
+            # Correção COM conteúdo ("na verdade era X") vira lição direto. Correção vazia
+            # ("refaz", "ficou ruim") não ensina nada crua -> destila a lição real do contexto.
+            resto = re.sub(r"(?i)\b(na verdade|errad[oa]|n[ãa]o (é|e) (assim|isso)|n[ãa]o gostei|refaz|"
+                           r"refa[çc]a|de novo|ficou ruim|n[ãa]o era (isso|assim)|ta ruim|tá ruim|muda|"
+                           r"mudar|corrig\w*|troca isso|disso)\b", " ", low)
+            if len(re.findall(r"[\wáéíóúâêôãõç]{4,}", resto)) >= 3:
+                self._cerebro_add(t, "correção", w=3)   # correção pesa mais: ela erra menos da próxima
+            else:
+                threading.Thread(target=self._distill_correction, args=(t,), daemon=True).start()
         elif praise:
             # elogio sem conteúdo novo -> reforça as lições recentes (o que fez deu certo)
             for it in self.cerebro[-3:]:
                 it["w"] = int(it.get("w", 1)) + 1
             if self.cerebro:
                 save_cerebro(self.cerebro)
+
+    def _distill_correction(self, correction: str) -> None:
+        """Correção vazia ('refaz', 'ficou ruim'): olha o que ela tinha respondido e DESTILA a lição
+        real ('quando pedir X, evitar Y') — assim até um 'ta ruim' ensina algo concreto."""
+        try:
+            it = self._cur()
+            log = (it or {}).get("log") or []
+            ult_kemy, ult_user = "", ""
+            for e in reversed(log[:-1]):   # ignora a própria correção (última msg)
+                if not ult_kemy and e.get("r") == "kemy":
+                    ult_kemy = e.get("t", "")
+                elif ult_kemy and e.get("r") != "kemy":
+                    ult_user = e.get("t", "")
+                    break
+            if not ult_kemy:
+                return
+            out = self.llm.chat(
+                "A pessoa NÃO gostou da minha última resposta (disse só '" + correction[:60] + "'). "
+                "Pelo pedido e pela resposta abaixo, formule UMA lição curta e GERAL pra eu não repetir o "
+                "erro (ex.: 'quando pedir resumo, ser mais direto', 'em código, entregar completo sem "
+                "placeholder'). Começe com 'quando'/'evitar'/'preferir'. Se não dá pra inferir, responda NONE.",
+                [{"role": "user", "content": ("PEDIDO: " + ult_user[:400] + "\nMINHA RESPOSTA: "
+                                              + ult_kemy[:800])}], max_tokens=80, fast=True)
+            licao = (out or "").strip().strip('"').rstrip(".")
+            if licao and not licao.upper().startswith("NONE") and len(licao) > 12:
+                self._cerebro_add(licao, "correção", w=3)
+        except Exception:
+            pass
 
     def _think(self, text: str) -> str:
         """Metacognição VISÍVEL: antes de responder o difícil, a Kemy monta um plano curto (+ o que
@@ -8955,6 +9016,7 @@ class WebApi:
         provedor. Usado só no tier hard (raro), pra não pesar no uso normal."""
         provs = self.llm.providers() or []
         mt, fa, pf = _chat_tier_params(tier)
+        self._msg("sys", "⚙️ Duas especialistas pensando em paralelo…", store=False)
         cands, lock = [], threading.Lock()
 
         def _gen(prov):
@@ -8977,6 +9039,7 @@ class WebApi:
             return ""
         if len(cands) == 1:
             return cands[0]
+        self._msg("sys", "⚖️ Julgando qual das duas respostas é melhor…", store=False)
         # JUIZ: compara as duas e entrega a melhor versão (pode fundir o melhor de cada)
         judge_sys = ("Você é um avaliador exigente. Recebeu a PERGUNTA e DUAS respostas de IAs diferentes. "
                      "Escolha a que responde MELHOR (mais correta, completa, clara e útil) e entregue-a como "
@@ -9015,20 +9078,25 @@ class WebApi:
             if not linhas:
                 return reply
             self._msg("sys", "🔎 Conferindo os fatos antes de te entregar…", store=False)
-            fontes = ""
+            fontes, links = "", []
             for c in linhas:
                 try:
-                    fontes += f"\nAFIRMAÇÃO: {c}\nFONTES:\n" + (web_search(c, limit=3) or "(nada)")[:1200] + "\n"
+                    r = web_search(c, limit=3) or ""
+                    fontes += f"\nAFIRMAÇÃO: {c}\nFONTES:\n" + (r or "(nada)")[:1000] + "\n"
+                    links += re.findall(r"\((https?://[^)\s]+)\)", r)[:1]
                 except Exception:
                     pass
             if len(fontes.strip()) < 40:
                 return reply
+            paginas = self._fetch_pages(links, per=1500)   # lê a 1ª fonte de cada afirmação (paralelo)
+            if paginas:
+                fontes += "\nLEITURA DAS FONTES (texto real):\n" + paginas[:4500]
             veredito = self.llm.chat(
                 "Você é um checador de fatos rigoroso. Compare a RESPOSTA com as FONTES da web. "
                 "Se alguma afirmação está ERRADA ou desatualizada, reescreva a RESPOSTA INTEIRA corrigida "
                 "(mesmo tom/idioma, sem citar a checagem). Se está tudo certo (ou as fontes não bastam "
                 "pra afirmar erro), responda exatamente OK.",
-                [{"role": "user", "content": "RESPOSTA:\n" + (reply or "")[:3500] + "\n\n" + fontes[:3800]}],
+                [{"role": "user", "content": "RESPOSTA:\n" + (reply or "")[:3500] + "\n\n" + fontes[:8000]}],
                 max_tokens=1200, fast=True)
             v = (veredito or "").strip()
             if not v or v.upper().rstrip(".") == "OK" or len(v) < 60:
@@ -9043,7 +9111,7 @@ class WebApi:
                             r"subtra\w+|multiplic\w+|divid\w+|porcent\w+|percentual|juros|desconto de|"
                             r"parcel\w+|presta[çc][ãa]o|m[ée]dia (de|entre)|raiz|pot[êe]ncia|fatorial|"
                             r"quantos dias (entre|falta|至|at[ée])|dias entre|que dia (cai|ser[áa])|"
-                            r"km em|metros em|horas em|minutos em|libras em|kg em|reais em|d[óo]lar\w* em)\b")
+                            r"km em|metros em|horas em|minutos em|libras em|kg em)\b")
     # Sandbox do interpretador: bloqueia builtin perigoso, módulo de sistema (em import OU uso com
     # ponto) e loop infinito. Falha segura: script barrado só cai pro fluxo normal (sem rodar).
     _UNSAFE_PY = re.compile(
@@ -9056,6 +9124,11 @@ class WebApi:
 
     def _wants_compute(self, text: str) -> bool:
         t = (text or "").strip()
+        # câmbio/cripta/cotação PRECISA de taxa AO VIVO — script local não tem internet e chutaria
+        # uma cotação velha como "exata". Isso vai pra busca web, não pra calculadora.
+        if re.search(r"(?i)\b(d[óo]lar\w*|euros?|libras? esterlinas?|ienes?|bitcoin|btc|ethereum|"
+                     r"cripto\w*|cota[çc][ãa]o|c[âa]mbio)\b", t):
+            return False
         return bool(re.search(r"\d", t) and self._CALC_KEYS.search(t) and not is_build_request(t))
 
     def _compute_answer(self, text: str) -> str:
@@ -9087,6 +9160,29 @@ class WebApi:
         except Exception:
             return ""
 
+    def _fetch_pages(self, urls: list, per: int = 2500) -> str:
+        """Lê até 4 páginas em PARALELO (espera = a mais lenta, não a soma) e devolve o texto real.
+        É o que faz a pesquisa ser PROFUNDA de verdade: ler a fonte, não só o título."""
+        vistos, alvo = set(), []
+        for u in urls:
+            if u.startswith("http") and u not in vistos:
+                vistos.add(u); alvo.append(u)
+        alvo = alvo[:4]
+        out, lock = {}, threading.Lock()
+
+        def _get(u):
+            t = web_page_text(u, per)
+            if t:
+                with lock:
+                    out[u] = t
+
+        ths = [threading.Thread(target=_get, args=(u,), daemon=True) for u in alvo]
+        for th in ths:
+            th.start()
+        for th in ths:
+            th.join(timeout=14)
+        return "\n\n".join(f"[FONTE {u}]:\n{t}" for u, t in out.items())
+
     def _wants_research(self, text: str, tier: str) -> bool:
         t = (text or "").strip().lower()
         if re.match(r"(?i)^(pesquisa profunda|pesquise? a fundo|investiga|deep research|estude e me diga)\b", t):
@@ -9112,22 +9208,28 @@ class WebApi:
             if not queries:
                 queries = [q[:120]]
             self._msg("sys", "🔬 Pesquisa profunda: " + " · ".join(x[:46] for x in queries), store=False)
-            dossie = ""
+            dossie, links = "", []
             for sq in queries:
                 try:
                     r = web_search(sq, limit=4)
                     if r:
-                        dossie += f"\n### Busca: {sq}\n{r[:2200]}\n"
+                        dossie += f"\n### Busca: {sq}\n{r[:1500]}\n"
+                        links += re.findall(r"\((https?://[^)\s]+)\)", r)[:2]
                 except Exception:
                     pass
             if len(dossie.strip()) < 80:
                 return ""
+            # LÊ as melhores fontes (texto real das páginas, em paralelo) — profundidade de verdade
+            paginas = self._fetch_pages(links)
+            if paginas:
+                self._msg("sys", f"📖 Li {paginas.count('[FONTE ')} fonte(s) por inteiro…", store=False)
+                dossie += "\n### LEITURA DAS FONTES (conteúdo real das páginas):\n" + paginas[:9000]
             reply = self.llm.chat(
                 system + "\n\n=== MODO PESQUISA PROFUNDA ===\nVocê pesquisou a fundo (dossiê abaixo, vários "
                 "ângulos). Responda COMPLETO e organizado: o essencial primeiro, depois os detalhes/comparações "
                 "que importam, e feche com uma recomendação prática. NO FINAL liste 'Fontes:' com os links "
                 "mais relevantes do dossiê (só os que usou). Se o dossiê divergir, diga qual versão parece "
-                "mais confiável e por quê.\n\nDOSSIÊ:\n" + dossie[:9000],
+                "mais confiável e por quê.\n\nDOSSIÊ:\n" + dossie[:14000],
                 [{"role": "user", "content": q[:800]}], max_tokens=2500)
             reply = (reply or "").strip()
             if reply:
