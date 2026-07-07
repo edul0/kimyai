@@ -4661,12 +4661,18 @@ def start_preview_server(api, port: int = 8799) -> int | None:
     por http://127.0.0.1:PORT — faz fetch/modulos/caminhos/JSON funcionarem (file:// quebra)."""
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-    # injetado nas paginas servidas: avisa a Kemy se der erro de JS no navegador.
+    # injetado nas paginas servidas: avisa a Kemy se der erro de JS no navegador E avisa o
+    # modal de preview do app na hora (postMessage -> barra vermelha com "pedir pra corrigir").
     ERR_JS = ("<script>(function(){function s(d){try{fetch('/_kemy_err',{method:'POST',"
-              "body:JSON.stringify(d)})}catch(e){}}window.addEventListener('error',function(e){"
+              "body:JSON.stringify(d)})}catch(e){}try{parent.postMessage({kemyPvErr:(d.msg||'')+"
+              "(d.src?' ('+String(d.src).split('/').pop()+':'+(d.line||0)+')':'')},'*')}catch(e){}}"
+              "window.addEventListener('error',function(e){"
               "s({msg:String(e.message||''),src:String(e.filename||''),line:e.lineno||0})});"
               "window.addEventListener('unhandledrejection',function(e){s({msg:'promise: '+"
-              "String(e.reason||'')})});})();</script>").encode("utf-8")
+              "String(e.reason||'')})});"
+              "var ce=console.error;console.error=function(){try{s({msg:'console.error: '+"
+              "Array.prototype.slice.call(arguments).join(' ').slice(0,300)})}catch(e){}"
+              "return ce.apply(console,arguments)};})();</script>").encode("utf-8")
 
     class Handler(SimpleHTTPRequestHandler):
         def log_message(self, *a):
@@ -10879,6 +10885,21 @@ class WebApi:
             return {"ok": True, "path": rel}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def ide_review(self, rel: str) -> None:
+        """Botão 'Melhorar' do editor: a Kemy revisa o arquivo aberto (bugs, qualidade, visual)."""
+        rel = (rel or "").strip()
+        if not rel:
+            return
+        self.send_text(f"revisa o arquivo {rel} do projeto: corrija bugs, melhore a qualidade e o "
+                       "visual, SEM quebrar nem remover o que já funciona. Entregue o arquivo pronto.")
+
+    def fix_preview_error(self, msg: str) -> None:
+        """Botão da barra vermelha do preview: manda o erro de runtime pra Kemy corrigir."""
+        m = re.sub(r"\s+", " ", str(msg or ""))[:300].strip()
+        if m:
+            self.send_text(f"o preview do site deu este erro de JavaScript em tempo real: \"{m}\" — "
+                           "ache a causa no código do projeto e corrija.")
 
     def _learn_from_edit(self, rel: str, old: str, new: str) -> None:
         """Compara o antes/depois da SUA edição e extrai uma PREFERÊNCIA durável de estilo/código,
