@@ -285,19 +285,20 @@ JSDOM.fromFile(file, { runScripts: 'dangerously', resources: 'usable', pretendTo
      try {
        w.document.dispatchEvent(new w.Event('DOMContentLoaded', {bubbles:true}));
      } catch(e){}
+     let clicked = 0, forms = 0;
      try {
        const sel = 'button, [onclick], .btn, [data-section], .nav-link, input[type=submit], a[role=button]';
        w.document.querySelectorAll(sel).forEach(el => {
-         try { el.click(); } catch(e){ push('clicar em <'+el.tagName.toLowerCase()+'> falhou: '+e.message); }
+         try { el.click(); clicked++; } catch(e){ push('clicar em <'+el.tagName.toLowerCase()+'> falhou: '+e.message); }
        });
        w.document.querySelectorAll('form').forEach(f => {
-         try { (f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}))); }
+         try { (f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}))); forms++; }
          catch(e){ push('submeter form falhou: '+e.message); }
        });
      } catch(e){ push('teste falhou: '+e.message); }
      setTimeout(() => {
        const uniq = [...new Set(errors)].slice(0, 15);
-       console.log(JSON.stringify({ ok: uniq.length === 0, errors: uniq }));
+       console.log(JSON.stringify({ ok: uniq.length === 0, errors: uniq, clicked: clicked, forms: forms }));
        process.exit(0);
      }, 400);
    }, 600);
@@ -2052,6 +2053,39 @@ def code_ids(text: str) -> set:
     return set(_HTML_ID_RE.findall(text or ""))
 
 
+def code_wiring(text: str) -> list:
+    """FIAÇÃO de eventos: qual elemento dispara qual função (causa→efeito). É o que faz a IA
+    entender que remover a função X mata o botão Y."""
+    fios: list[str] = []
+    try:
+        # <tag id="btnNovo" ... onclick="abrirModal(...)"> (id e onclick em qualquer ordem)
+        for tag in re.findall(r"<[a-zA-Z][^>]{0,300}>", text or "")[:400]:
+            mid = re.search(r"""\bid\s*=\s*["']([\w-]+)["']""", tag)
+            mfn = re.search(r"""\bonclick\s*=\s*["']\s*([A-Za-z_$][\w$]*)\s*\(""", tag)
+            if mid and mfn:
+                fios.append(f"{mid.group(1)}→{mfn.group(1)}")
+            elif mfn:
+                mtx = re.search(r"<(\w+)", tag)
+                fios.append(f"<{mtx.group(1) if mtx else '?'}>→{mfn.group(1)}")
+        # getElementById('x').addEventListener('click', fn) / .onclick = fn
+        for mid, ev, fn in re.findall(
+                r"getElementById\(\s*['\"]([\w-]+)['\"]\s*\)\s*\.\s*addEventListener\(\s*['\"](\w+)['\"]\s*,\s*([A-Za-z_$][\w$]*)",
+                text or ""):
+            fios.append(f"{mid}→{fn}({ev})")
+        for mid, fn in re.findall(
+                r"getElementById\(\s*['\"]([\w-]+)['\"]\s*\)\s*\.\s*onclick\s*=\s*([A-Za-z_$][\w$]*)",
+                text or ""):
+            fios.append(f"{mid}→{fn}")
+    except Exception:
+        pass
+    vist: set = set()
+    out: list[str] = []
+    for f in fios:
+        if f not in vist:
+            vist.add(f); out.append(f)
+    return out
+
+
 def code_map(base: Path, max_files: int = 12) -> str:
     """RAIO-X do projeto: por arquivo, as funções, ids e chaves de localStorage. Vai pro contexto
     ANTES de editar — a IA enxerga a ESTRUTURA (o que existe e se conecta), não só texto."""
@@ -2074,9 +2108,12 @@ def code_map(base: Path, max_files: int = 12) -> str:
         fns = sorted(code_defs(t))
         ids = sorted(code_ids(t))
         ls = sorted(set(re.findall(r"localStorage\.(?:get|set)Item\(\s*['\"]([\w-]+)", t)))
+        fios = code_wiring(t)
         seg = f"- {rel}: funções[{', '.join(fns[:18])}{'…' if len(fns) > 18 else ''}]"
         if ids:
             seg += f" · ids[{', '.join(ids[:14])}{'…' if len(ids) > 14 else ''}]"
+        if fios:
+            seg += f" · fiação[{', '.join(fios[:10])}{'…' if len(fios) > 10 else ''}]"
         if ls:
             seg += f" · localStorage[{', '.join(ls[:6])}]"
         linhas.append(seg)
@@ -9083,6 +9120,7 @@ class WebApi:
         # Foto do estado bom + baseline de erros ANTES de mexer; depois compara e, se piorou
         # e não deu pra consertar, VOLTA sozinha (o usuário nunca fica com o app quebrado).
         is_edit = bool(current) and (base / "index.html").exists() and (files or edits0)
+        self._last_test_stats = None   # números da verificação DESTA geração (não os da anterior)
         pre_err: set = set()
         pre_txt: dict = {}
         shrink_issues: list[str] = []
@@ -9180,6 +9218,16 @@ class WebApi:
                         chat = ((chat or "Feito.").strip() + "\n\n🧭 O que eu mudei (verificado no código):\n" + resumo)
             except Exception:
                 pass
+        # 🧪 prova de verificação na ENTREGA NOVA: números reais do teste (não promessa)
+        if (not is_edit) and files:
+            st = getattr(self, "_last_test_stats", None) or {}
+            if st.get("clicked"):
+                extra = f"\n\n🧪 Testei de verdade antes de entregar: cliquei em {st['clicked']} botões"
+                if st.get("forms"):
+                    extra += f" e submeti {st['forms']} formulário(s)"
+                extra += (" — nenhum erro." if not st.get("errors")
+                          else f" — achei {len(st['errors'])} erro(s) e corrigi o que deu.")
+                chat = (chat or "Feito.").strip() + extra
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
         self._gen_thumbs(extract_thumb_requests(reply), base)
@@ -10902,6 +10950,10 @@ class WebApi:
                                capture_output=True, text=True, timeout=40, **proc_quiet())
             line = next((ln for ln in reversed((p.stdout or "").splitlines()) if ln.strip().startswith("{")), "")
             data = json.loads(line) if line else {}
+            # guarda os NÚMEROS da verificação (quantos botões/forms testou) — prova real na entrega
+            self._last_test_stats = {"clicked": int(data.get("clicked") or 0),
+                                     "forms": int(data.get("forms") or 0),
+                                     "errors": [e for e in (data.get("errors") or []) if e]}
             if data.get("ok"):
                 return []
             return [e for e in (data.get("errors") or []) if e][:15]
