@@ -9178,6 +9178,14 @@ class WebApi:
                         self._msg("sys", "🧪 Testei clicando em tudo e achei erro — corrigindo antes de entregar…", store=False)
                         if self._autofix_buttons(base, "web", ["ERRO ao RODAR/clicar: " + e for e in runtime]):
                             self._ensure_scripts_linked(base)
+                # 👁 ela VÊ a própria entrega: screenshot real + juiz visual -> conserta o "feio".
+                if self.boost and design_req:
+                    self._visual_checked = False
+                    vis = self._visual_check(base)
+                    if vis:
+                        self._msg("sys", "👁 Vi problemas na tela — ajustando o visual antes de entregar…", store=False)
+                        if self._autofix_buttons(base, "web", vis):
+                            self._ensure_scripts_linked(base)
         except Exception:
             pass
         # Reforco de seguranca: avisa (e nao deixa passar) chave de API vazando no codigo.
@@ -9227,6 +9235,8 @@ class WebApi:
                     extra += f" e submeti {st['forms']} formulário(s)"
                 extra += (" — nenhum erro." if not st.get("errors")
                           else f" — achei {len(st['errors'])} erro(s) e corrigi o que deu.")
+                if getattr(self, "_visual_checked", False):
+                    extra += " 👁 Também olhei a captura da tela pra conferir o visual."
                 chat = (chat or "Feito.").strip() + extra
         self._maybe_run(extract_run_commands(reply), base)
         self._gen_images(extract_image_requests(reply), base)
@@ -10912,6 +10922,80 @@ class WebApi:
             except Exception:
                 continue
         return errs
+
+    # ===================== OLHOS: ela VÊ o que gerou (screenshot + juiz visual) =====================
+    def _find_browser(self) -> str:
+        """Acha um navegador com modo headless: Edge (todo Windows tem, por causa do WebView2),
+        Chrome, ou Chromium (Linux/mac). É o que tira a foto REAL do app gerado."""
+        cands = [
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            shutil.which("msedge") or "", shutil.which("chromium") or "",
+            shutil.which("chromium-browser") or "", shutil.which("google-chrome") or "",
+            "/opt/pw-browsers/chromium",
+        ]
+        for c in cands:
+            try:
+                if c and Path(c).exists():
+                    return c
+            except Exception:
+                continue
+        return ""
+
+    def _screenshot_page(self, base: Path):
+        """Foto REAL (1280x800) do index.html renderizado — headless, sem abrir janela."""
+        idx = self._find_index(base)
+        br = self._find_browser()
+        if idx is None or not idx.exists() or not br:
+            return None
+        out = config_dir() / "_kemy_shot.png"
+        try:
+            out.unlink(missing_ok=True)
+            subprocess.run([br, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+                            "--window-size=1280,800", f"--screenshot={out}", idx.resolve().as_uri()],
+                           capture_output=True, timeout=35, **proc_quiet())
+            if not out.exists():   # navegadores antigos usam --headless sem '=new'
+                subprocess.run([br, "--headless", "--disable-gpu", "--hide-scrollbars",
+                                "--window-size=1280,800", f"--screenshot={out}", idx.resolve().as_uri()],
+                               capture_output=True, timeout=35, **proc_quiet())
+            if not out.exists() and os.name != "nt":   # Linux rodando como root exige --no-sandbox
+                subprocess.run([br, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-sandbox",
+                                "--window-size=1280,800", f"--screenshot={out}", idx.resolve().as_uri()],
+                               capture_output=True, timeout=35, **proc_quiet())
+            if out.exists() and out.stat().st_size > 4000:
+                return out.read_bytes()
+        except Exception:
+            pass
+        return None
+
+    def _visual_check(self, base: Path) -> list:
+        """Ela OLHA a própria entrega: screenshot real + modelo de visão como diretor de arte.
+        Problemas visuais objetivos (desalinhado, texto cortado, tela crua) viram ordem de conserto.
+        É o que o teste de clique NÃO enxerga — função ok mas FEIO."""
+        png = self._screenshot_page(base)
+        if not png:
+            return []
+        try:
+            b64 = base64.b64encode(png).decode("ascii")
+            self._msg("sys", "👁 Olhando a tela do app que eu gerei…", store=False)
+            v = self.llm.vision(
+                "Esta é a captura REAL de um app/site que EU acabei de gerar. Avalie como um diretor de "
+                "arte exigente e liste até 4 problemas VISUAIS OBJETIVOS e acionáveis, um por linha "
+                "(ex.: 'texto sobreposto no card X', 'tela quase toda branca/crua', 'elementos "
+                "desalinhados na tabela', 'botão saindo da tela', 'cores sem contraste'). IGNORE gosto "
+                "pessoal — só defeito claro. Se estiver visualmente bom, responda exatamente OK.",
+                b64, "image/png")
+            v = (v or "").strip()
+            self._visual_checked = True
+            if not v or v.upper().startswith("OK"):
+                return []
+            linhas = [l.strip("-•* ").strip() for l in v.splitlines() if len(l.strip()) > 12][:4]
+            return [f"PROBLEMA VISUAL (visto na captura real da tela): {l}" for l in linhas]
+        except Exception:
+            return []
 
     def _functional_test(self, base: Path) -> list:
         """RODA o app de verdade (headless, Node+jsdom): carrega o index.html, executa o JS,
