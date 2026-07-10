@@ -53,7 +53,12 @@
   .side>.iconbtn:hover{background:var(--panel2)}
   html.light .side{background:rgba(255,255,255,.55)}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 4px}
-  .brand b{font-size:17px;font-weight:700;letter-spacing:-.2px;color:var(--text)}
+  /* a logo é o ÚNICO momento de gradiente — assinatura da marca; o resto fica sóbrio */
+  .brand b{font-size:19px;font-weight:800;letter-spacing:-.2px;
+    background:linear-gradient(120deg,#fff 8%,#c4b0ff 48%,var(--accent) 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  html.light .brand b{background:linear-gradient(120deg,#3a2f6b 5%,#7a5cf0 55%,#9d7bff 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   .brand small{color:var(--muted);font-weight:600;letter-spacing:.5px}
   .newbtn{border:0;border-radius:8px;padding:10px;font-weight:600;font-size:13px;color:#fff;cursor:pointer;
     background:var(--accent);transition:.15s}
