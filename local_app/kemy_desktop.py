@@ -307,6 +307,45 @@ JSDOM.fromFile(file, { runScripts: 'dangerously', resources: 'usable', pretendTo
 """
 
 
+_META_EN_RE = re.compile(
+    r"(?i)^\s*(we need|we should|we must|we can|we'll|the user|let'?s|let us|i need to|i should|"
+    r"as kemy|the assistant|so the answer|they want|okay, |ok, the user|first, |produce |craft )")
+
+
+def strip_reasoning(text: str) -> str:
+    """Remove RACIOCÍNIO INTERNO que alguns modelos (gpt-oss/DeepSeek) vazam na resposta:
+    blocos <think>, canais 'analysis...assistantfinal' e parágrafos-meta em inglês antes da
+    resposta real. O usuário deve ver SÓ a resposta — nunca o pensamento."""
+    t = text or ""
+    if not t:
+        return t
+    # 1) blocos <think>/<thinking> (DeepSeek e afins)
+    t = re.sub(r"(?is)<think(?:ing)?>.*?(?:</think(?:ing)?>|$)", "", t)
+    # 2) canais do gpt-oss: 'analysis ... assistantfinal RESPOSTA'
+    m = re.split(r"(?i)\bassistant\s*final\b[:\s]*", t)
+    if len(m) > 1 and len(m[-1].strip()) > 1:
+        t = m[-1]
+    elif re.match(r"(?i)^\s*analysis\b", t):
+        t = re.sub(r"(?is)^\s*analysis\b.*?(?=\n\n|$)", "", t, count=1)
+    # 3) parágrafos-meta em INGLÊS no começo ('We need to respond as Kemy...', 'Should be short'),
+    # seguidos da resposta real em português — o pensamento cai, a resposta fica.
+    def _en(p: str) -> bool:
+        e = len(re.findall(r"(?i)\b(the|we|should|need|must|user|respond|response|answer|tone|"
+                           r"short|formal|question|no markdown|emojis|ask|keep|make sure)\b", p))
+        pt = len(re.findall(r"(?i)[ãõçáéíóúâê]|\b(você|voce|não|nao|pra|como|isso|obrigad\w|dia|bem)\b", p))
+        return e >= 2 and pt == 0
+
+    def _pt(p: str) -> bool:
+        return bool(re.search(r"(?i)[ãõçáéíóúâê]|\b(você|voce|não|nao|pra|como|isso|meu|minha|bem)\b", p))
+
+    paras = re.split(r"\n\s*\n", t.strip())
+    while len(paras) > 1 and (_META_EN_RE.match(paras[0])
+                              or (_en(paras[0]) and any(_pt(p) for p in paras[1:]))):
+        paras.pop(0)
+    t = "\n\n".join(paras).strip()
+    return t if t else (text or "").strip()
+
+
 def is_destructive_cmd(cmd: str) -> bool:
     """True se o comando pode APAGAR/ALTERAR o sistema OU baixar-e-executar codigo / usar
     ofuscacao (vetor de prompt injection). Rede de seguranca: nada disso roda sem confirmar."""
@@ -2862,7 +2901,11 @@ class LLMClient:
             msg = ch.get("message", {})
             txt = msg.get("content")
             if not txt:
-                txt = msg.get("reasoning_content") or ch.get("text") or ""
+                # modelo de raciocínio devolveu só o "pensamento": tenta EXTRAIR a resposta final
+                # dele (nunca mostrar o raciocínio cru pro usuário).
+                txt = strip_reasoning(msg.get("reasoning_content") or ch.get("text") or "")
+            else:
+                txt = strip_reasoning(txt)   # raciocínio embutido no content (gpt-oss/DeepSeek)
             if txt:
                 return txt
         except Exception:
@@ -5239,6 +5282,8 @@ class WebApi:
             os._exit(0)
 
     def _msg(self, role: str, text: str, save: str | None = None, store: bool = True) -> None:
+        if role == "kemy":
+            text = strip_reasoning(text)   # rede final: raciocínio interno NUNCA chega à tela
         text = strip_emojis(text)   # UI limpa/sobria, sem emojis
         self._js(f"addMsg({json.dumps(role)},{json.dumps(text)},{json.dumps(save)})")
         if store and role in ("user", "kemy"):

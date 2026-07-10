@@ -93,17 +93,20 @@
   .menu::-webkit-scrollbar{width:8px}
   .menu::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
   .menu.open{display:block}
-  .menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);
-    padding:8px 12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+  .menu button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;
+    color:var(--text);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13.5px;font-weight:600;
+    white-space:nowrap}
   .menu button:hover{background:var(--panel)}
   .menusep{height:1px;background:var(--line);margin:5px 4px}
   .menulbl{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:1.4px;padding:9px 12px 3px;text-transform:uppercase}
   /* avatar */
-  .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px 0 10px;gap:10px}
-  .avatar{width:256px;height:256px;position:relative}
-  .l2dwrap{width:238px;height:272px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  /* avatar COMPACTO: presença sem roubar a tela do chat (o status ja vive na topbar) */
+  .stage{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0 2px;gap:4px}
+  .avatar{width:132px;height:132px;position:relative}
+  .l2dwrap{width:132px;height:150px;display:flex;align-items:center;justify-content:center;overflow:hidden}
   #l2d{width:100%;height:100%}
-  .statelbl{font-size:13px;font-weight:700;color:var(--st);letter-spacing:1.2px;text-transform:uppercase;opacity:.85}
+  .statelbl{display:none}
+  body.overlay .statelbl{display:block;font-size:15px;font-weight:700;color:var(--st);letter-spacing:1.2px;text-transform:uppercase;opacity:.85}
   /* modo overlay: so a VTuber, sobrepondo a tela */
   body.overlay .side,body.overlay .top,body.overlay .chat,body.overlay .composer{display:none!important}
   body.overlay .app{grid-template-columns:1fr}
