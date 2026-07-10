@@ -7721,6 +7721,12 @@ class WebApi:
         if re.fullmatch(r"(?:fa[çc]a? (?:sua|a sua|uma) prova|se test[ae]|se avali[ae]|auto[- ]?avalia\w*|"
                         r"benchmark|roda (?:seu|o) benchmark|mostra (?:sua|a) evolu[çc][ãa]o)", t):
             self.self_benchmark(); return True
+        # Linha do tempo: "linha do tempo", "versões do projeto", "restaura <hash>"
+        if re.fullmatch(r"(?:linha do tempo|vers[oõ]es(?: do projeto)?|hist[oó]rico do projeto|mostra as vers[oõ]es)", t):
+            self.list_versions(); return True
+        mrest = re.match(r"(?i)^restaura(?:r)?\s+(?:a\s+)?(?:vers[aã]o\s+)?([0-9a-f]{5,12})\b", t)
+        if mrest:
+            self.restore_version(mrest.group(1)); return True
         # Ciberseguranca: auditar / blindar o projeto
         if re.search(r"(?i)\b(corrig\w+|blind\w+|conserta\w*|arrum\w*|deixa\w* seguro|torna\w* seguro)\b.*\bseguran[çc]a\b|\bblinda\b.*\b(projeto|sistema|app)\b|corrig\w+ as falhas", t):
             self.audit_security(fix=True); return True
@@ -8568,6 +8574,23 @@ class WebApi:
         ("português", "Qual é o plural de 'cidadão'? Responda só a palavra.", "cidadaos"),
         ("código", "Escreva SÓ o código de uma função JavaScript chamada dobro(n) que retorna o dobro de n. Sem explicação.", "__js_dobro__"),
     ]
+    # NÍVEL 2: destrava quando ela gabarita o nível 1 (>=11/12) — a régua sobe junto com ela.
+    _BENCH2 = [
+        ("matemática", "Um produto custa R$ 240 e sobe 25%, depois cai 20% sobre o novo preço. Preço final? Só o número.", "240"),
+        ("matemática", "Quanto é 12! dividido por 10!? Responda só o número.", "132"),
+        ("lógica", "Ana mente às segundas, terças e quartas; diz a verdade nos outros dias. Ela diz: 'ontem eu menti'. "
+                    "Hoje só pode ser quinta ou que outro dia? Responda só o dia.", "segunda"),
+        ("lógica", "Complete: 1, 1, 2, 3, 5, 8, 13, ... Responda só o próximo número.", "21"),
+        ("lógica", "Num grupo de 23 pessoas, é MAIS provável ou MENOS provável que duas façam aniversário no mesmo dia? "
+                    "Responda com uma palavra: mais ou menos.", "mais"),
+        ("fatos", "Qual planeta do sistema solar tem mais luas conhecidas: Júpiter ou Saturno? Só o nome.", "saturno"),
+        ("fatos", "Em que ano caiu o Muro de Berlim? Só o ano.", "1989"),
+        ("instrução", "Escreva a palavra 'kemy' de trás pra frente. Só a resposta.", "ymek"),
+        ("extração", "Do texto 'Reunião movida de 14:30 para 16:15 na sala B7', extraia só o novo horário.", "16:15"),
+        ("formato", "Responda SÓ um objeto JSON com as chaves 'a' valendo 1 e 'b' valendo [2,3]. Sem texto.", "__json_ab__"),
+        ("português", "Corrija: 'fazem dois anos que ele saiu'. Responda só a frase corrigida.", "faz dois anos"),
+        ("código", "Escreva SÓ uma função JavaScript inverte(s) que retorna a string s invertida. Sem explicação.", "__js_inverte__"),
+    ]
 
     @staticmethod
     def _bench_norm(s: str) -> str:
@@ -8584,30 +8607,44 @@ class WebApi:
                 return sorted(json.loads(m.group(0))) == [2, 4, 6, 8, 10] if m else False
             except Exception:
                 return False
-        if expect == "__js_dobro__":
+        if expect == "__json_ab__":
+            try:
+                m = re.search(r"\{.*\}", r, re.S)
+                d = json.loads(m.group(0)) if m else {}
+                return d.get("a") == 1 and d.get("b") == [2, 3]
+            except Exception:
+                return False
+        if expect in ("__js_dobro__", "__js_inverte__"):
             code = re.sub(r"^```[a-z]*|```$", "", r.strip(), flags=re.M).strip()
+            fn, chamada, esperado = (("dobro", "console.log(dobro(21))", "42")
+                                     if expect == "__js_dobro__"
+                                     else ("inverte", "console.log(inverte('kemy'))", "ymek"))
             node = shutil.which("node")
             if node:   # prova REAL: executa o código e confere o resultado
                 try:
-                    p = subprocess.run([node, "-e", code + "\nconsole.log(dobro(21))"],
+                    p = subprocess.run([node, "-e", code + "\n" + chamada],
                                        capture_output=True, text=True, timeout=10)
-                    return "42" in (p.stdout or "")
+                    return esperado in (p.stdout or "")
                 except Exception:
                     return False
-            return bool(re.search(r"dobro", code) and re.search(r"\*\s*2|n\s*\+\s*n|2\s*\*", code))
+            return bool(re.search(fn, code))
         if expect.isdigit():   # número: "9.000"/"9,000" contam como "9000" (separador de milhar)
             r = re.sub(r"(?<=\d)[.,](?=\d)", "", r)
         return self._bench_norm(expect) in self._bench_norm(r)
 
     def self_benchmark(self) -> None:
         """📊 A Kemy roda uma prova em si mesma (12 tarefas com gabarito) e compara com a última:
-        é a PROVA de que está evoluindo — autoavaliação de verdade, não achismo."""
-        self._msg("kemy", "Vou fazer uma prova em mim mesma (12 tarefas com gabarito). Um minuto…")
+        é a PROVA de que está evoluindo. Gabaritou o nível 1 (>=11/12)? A régua sobe: nível 2."""
+        hf0 = config_dir() / "kemy_benchmark.json"
+        hist0 = self._load_json(hf0, [])
+        nivel = 2 if any(h.get("score", 0) >= 11 and h.get("nivel", 1) == 1 for h in hist0) else 1
+        prova = self._BENCH2 if nivel == 2 else self._BENCH
+        self._msg("kemy", f"Vou fazer uma prova em mim mesma — nível {nivel} (12 tarefas com gabarito). Um minuto…")
         self._state("thinking")
 
         def work():
             res, falhas = [], []
-            for cat, q, exp in self._BENCH:
+            for cat, q, exp in prova:
                 try:
                     out = self.llm.chat(
                         "Responda EXATAMENTE o que foi pedido, sem explicação extra.",
@@ -8625,26 +8662,29 @@ class WebApi:
             for cat, ok in res:
                 a, b = cats.get(cat, (0, 0))
                 cats[cat] = (a + (1 if ok else 0), b + 1)
-            # histórico -> delta (a prova de EVOLUÇÃO)
+            # histórico -> delta (a prova de EVOLUÇÃO); compara só com provas do MESMO nível
             hf = config_dir() / "kemy_benchmark.json"
             hist = self._load_json(hf, [])
-            prev = hist[-1]["score"] if hist else None
+            mesmos = [h for h in hist if h.get("nivel", 1) == nivel]
+            prev = mesmos[-1]["score"] if mesmos else None
             hist.append({"ts": round(time.time(), 1), "date": datetime.datetime.now().strftime("%d/%m %H:%M"),
-                         "score": score, "total": total,
+                         "score": score, "total": total, "nivel": nivel,
                          "cats": {k: f"{a}/{b}" for k, (a, b) in cats.items()}})
             self._save_json(hf, hist[-60:])
             delta = ""
             if prev is not None:
                 d = score - prev
                 delta = (f" ({'+' if d > 0 else ''}{d} vs última)" if d else " (igual à última)")
-            linhas = [f"📊 Minha prova: {score}/{total}{delta}",
+            linhas = [f"📊 Minha prova (nível {nivel}): {score}/{total}{delta}",
                       "   " + " · ".join(f"{k} {a}/{b}" for k, (a, b) in cats.items())]
+            if nivel == 1 and score >= 11:
+                linhas.append("🎓 Gabaritei o nível 1 — a próxima prova será NÍVEL 2 (mais difícil).")
             if falhas:
                 linhas.append("Onde errei:")
                 linhas += falhas[:4]
-            if len(hist) > 1:
-                serie = " → ".join(f"{h['score']}/{h['total']}" for h in hist[-6:])
-                linhas.append(f"Evolução: {serie}")
+            if len(mesmos) >= 1:
+                serie = " → ".join(f"{h['score']}/{h['total']}" for h in (mesmos + [hist[-1]])[-6:])
+                linhas.append(f"Evolução (nível {nivel}): {serie}")
             log_telemetry({"ev": "benchmark", "score": score, "total": total})
             self._msg("kemy", "\n".join(linhas))
             self._state("idle")
@@ -9779,6 +9819,54 @@ class WebApi:
                 webbrowser.open(idx.as_uri())
             except Exception:
                 pass
+
+    # ===================== LINHA DO TEMPO: toda versão do projeto, com volta segura =====================
+    def list_versions(self) -> None:
+        """🕐 Lista as 'fotos' (commits) do projeto atual pra UI — cada geração/edição/restauração
+        vira um ponto na linha do tempo que dá pra voltar."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        rc, out = self._git(base, ["log", "--pretty=%h|%ct|%s", "-30"])
+        if rc != 0 or not out.strip():
+            self._msg("sys", "Este projeto ainda não tem versões salvas (gere ou edite algo primeiro).", store=False)
+            return
+        versoes = []
+        for ln in out.strip().splitlines():
+            try:
+                h, ts, msg = ln.split("|", 2)
+                dt = datetime.datetime.fromtimestamp(int(ts))
+                versoes.append({"hash": h, "quando": dt.strftime("%d/%m %H:%M"), "msg": msg[:70]})
+            except Exception:
+                continue
+        try:
+            self._js(f"showVersions({json.dumps(versoes, ensure_ascii=False)})")
+        except Exception:
+            linhas = [f"- {v['quando']} · {v['msg']} ({v['hash']})" for v in versoes[:15]]
+            self._msg("kemy", "🕐 Linha do tempo do projeto:\n" + "\n".join(linhas)
+                      + "\nDiga 'restaura <hash>' pra voltar a um ponto.")
+
+    def restore_version(self, h: str) -> None:
+        """Volta o projeto pra uma versão da linha do tempo — SEM perder nada: o estado atual vira
+        uma foto antes ('antes de restaurar'), então dá pra ir e voltar à vontade."""
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        h = re.sub(r"[^0-9a-fA-F]", "", str(h or ""))[:12]
+        if not h:
+            return
+        rc, _ = self._git(base, ["cat-file", "-e", h + "^{commit}"])
+        if rc != 0:
+            self._msg("sys", f"Não achei a versão '{h}' neste projeto.", store=False)
+            return
+        self._git_snapshot(base, "antes de restaurar " + h)   # nada se perde
+        rc, out = self._git(base, ["checkout", h, "--", "."])
+        if rc != 0:
+            self._msg("sys", f"Não consegui restaurar: {out[:120]}", store=False)
+            return
+        self._git_snapshot(base, "restaurei a versão " + h)
+        log_telemetry({"ev": "restore", "hash": h})
+        self._msg("kemy", f"🕐 Pronto! O projeto voltou pra versão {h}. O estado de antes ficou salvo — "
+                  "se mudar de ideia, é só abrir a linha do tempo e restaurar de novo.")
+        self._open_preview(base)
 
     def _maybe_tests(self, base: Path, text: str) -> None:
         """Gera e roda testes (pytest/unittest) quando o usuario pede, e tenta corrigir falhas."""
