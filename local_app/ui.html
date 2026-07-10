@@ -7,21 +7,24 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap');
   :root{
-    --bg:#0b0d12; --bg2:#10131a; --panel:rgba(255,255,255,.04); --panel2:rgba(255,255,255,.065);
-    --line:rgba(255,255,255,.10); --text:#e9edf6; --muted:#8f9ab0;
-    --accent:#8b7bff; --accent2:#2fe1c1; --gold:#e7c66b; --user:#9fe7d2;
-    --idle:#2fe1c1; --listening:#5ab0ff; --thinking:#ffc857; --speaking:#b98bff; --error:#ff6b6b;
+    /* IDENTIDADE "Entardecer": índigo profundo + CORAL quente (assinatura) + lavanda (apoio).
+       Calor = companhia — nenhum outro app de IA tem essa cara. */
+    --bg:#0f1119; --bg2:#141726; --panel:rgba(255,255,255,.04); --panel2:rgba(255,255,255,.065);
+    --line:rgba(255,255,255,.10); --text:#f0f1f7; --muted:#9aa0b6;
+    --accent:#ff8a70; --accent2:#a7a3ff; --gold:#e7c66b; --user:#ffc2b3;
+    --idle:#ff8a70; --listening:#6db4ff; --thinking:#ffc857; --speaking:#c39bff; --error:#ff6b6b;
     --st:var(--idle); --r:12px;
   }
   /* Tema claro (no <html> pra nao conflitar com as classes de estado do body) */
   html.light{
-    --bg:#f7f9fc; --bg2:#eef2f8; --panel:rgba(16,28,54,.04); --panel2:rgba(16,28,54,.07);
-    --line:rgba(16,28,54,.12); --text:#1a2440; --muted:#5f6d8a; --accent:#6b46ff; --accent2:#0aa79b;
+    /* Entardecer claro: papel quente + coral mais fundo (contraste AA) */
+    --bg:#faf7f4; --bg2:#f2ede8; --panel:rgba(60,36,28,.05); --panel2:rgba(60,36,28,.08);
+    --line:rgba(60,36,28,.13); --text:#2a211d; --muted:#7d6f66; --accent:#e35f43; --accent2:#7a74e8;
   }
   html.light body{
     background:
-      radial-gradient(1200px 500px at 50% -20%, rgba(107,70,255,.08), transparent 65%),
-      linear-gradient(180deg,#fafbfe,#f2f5fa 40%);
+      radial-gradient(1200px 500px at 50% -20%, rgba(227,95,67,.07), transparent 65%),
+      linear-gradient(180deg,#fdfaf7,#f4efe9 40%);
   }
   html.light ::-webkit-scrollbar-thumb{background:rgba(16,28,54,.18);background-clip:padding-box}
   *{box-sizing:border-box}
@@ -35,10 +38,11 @@
   body{
     font-family:'Inter',"Segoe UI",system-ui,-apple-system,sans-serif;color:var(--text);
     font-feature-settings:"cv11","ss01";letter-spacing:.1px;-webkit-font-smoothing:antialiased;
-    /* fundo LIMPO: uma lavagem sutil de marca no topo, sem brilhos competindo */
+    /* fundo ENTARDECER: lavagem coral no horizonte (topo) sobre índigo profundo */
     background:
-      radial-gradient(1200px 500px at 50% -20%, rgba(139,123,255,.10), transparent 65%),
-      linear-gradient(180deg,#0d1016,#0b0d12 40%);
+      radial-gradient(1300px 520px at 50% -22%, rgba(255,138,112,.11), transparent 62%),
+      radial-gradient(900px 400px at 85% -10%, rgba(167,163,255,.07), transparent 60%),
+      linear-gradient(180deg,#131627,#0f1119 45%);
     overflow:hidden;
   }
   /* scrollbars premium */
@@ -46,18 +50,18 @@
   ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:10px;border:2px solid transparent;background-clip:padding-box}
   ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:padding-box}
   ::-webkit-scrollbar-track{background:transparent}
-  ::selection{background:rgba(139,123,255,.35)}
+  ::selection{background:rgba(255,138,112,.32)}
   .app{display:grid;grid-template-columns:248px 1fr;height:100vh}
   /* sidebar */
   .side{background:rgba(0,0,0,.22);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px;gap:10px;backdrop-filter:blur(12px)}
   html.light .side{background:rgba(255,255,255,.55)}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 4px}
   .brand b{font-family:'Sora','Inter',sans-serif;font-size:21px;font-weight:800;letter-spacing:.3px;
-    background:linear-gradient(120deg,#fff 10%,var(--accent2) 55%,var(--accent) 100%);
+    background:linear-gradient(120deg,#fff 5%,#ffc2a8 45%,var(--accent) 100%);
     -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   .brand small{color:var(--muted);font-weight:600;letter-spacing:.5px}
-  .newbtn{border:0;border-radius:var(--r);padding:12px;font-weight:700;color:#07120f;cursor:pointer;
-    background:var(--accent2);box-shadow:0 6px 18px rgba(47,225,193,.22);transition:.18s}
+  .newbtn{border:0;border-radius:var(--r);padding:12px;font-weight:700;color:#241210;cursor:pointer;
+    background:var(--accent);box-shadow:0 6px 18px rgba(255,138,112,.24);transition:.18s}
   .newbtn:hover{transform:translateY(-1px);filter:brightness(1.07)}
   .lbl{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1.5px;padding:4px 6px}
   .convos{display:flex;flex-direction:column;gap:6px;overflow:auto;flex:1}
@@ -65,7 +69,7 @@
   .conv:hover{background:var(--panel);color:var(--text)}
   .conv.active{background:var(--panel2);color:var(--text);border-color:var(--line)}
   .conv .bar{width:3px;align-self:stretch;border-radius:3px;background:transparent}
-  .conv.active .bar{background:linear-gradient(var(--accent),var(--accent2))}
+  .conv.active .bar{background:linear-gradient(var(--accent),#ffc2a8)}
   .conv .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:600}
   .conv .del{opacity:.5;border:0;background:none;color:inherit;cursor:pointer;font-size:13px}
   .conv .del:hover{opacity:1;color:var(--error)}
@@ -145,7 +149,7 @@
   .chat{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
   .msg{max-width:74%;padding:12px 16px;border-radius:16px;line-height:1.6;font-size:14px;white-space:pre-wrap;word-wrap:break-word;animation:rise .25s cubic-bezier(.2,.8,.2,1);user-select:text;-webkit-user-select:text;box-shadow:0 4px 14px rgba(0,0,0,.14)}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
-  .msg.user{align-self:flex-end;background:rgba(139,123,255,.16);border:1px solid rgba(139,123,255,.32);border-bottom-right-radius:6px}
+  .msg.user{align-self:flex-end;background:rgba(255,138,112,.13);border:1px solid rgba(255,138,112,.30);border-bottom-right-radius:6px}
   .msg.kemy{align-self:flex-start;background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:6px}
   .msg.sys{align-self:center;background:rgba(255,255,255,.03);color:var(--muted);font-size:11.5px;font-style:normal;padding:4px 12px;border-radius:20px;border:1px solid var(--line);box-shadow:none;opacity:.85;max-width:88%}
   .msg .save{margin-top:8px;font-size:12px;color:var(--accent2);font-weight:700}
@@ -163,7 +167,7 @@
   .msg .mdcopy{background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;
     padding:1px 8px;font-size:10.5px;cursor:pointer;text-transform:none;letter-spacing:0}
   .msg .mdcopy:hover{color:var(--accent2);border-color:var(--accent2)}
-  .msg code.mdi{background:rgba(139,123,255,.14);border:1px solid rgba(139,123,255,.22);border-radius:5px;
+  .msg code.mdi{background:rgba(167,163,255,.13);border:1px solid rgba(167,163,255,.24);border-radius:5px;
     padding:1px 6px;font-family:Consolas,'Courier New',monospace;font-size:12.5px}
   .msg b.mdh{display:block;margin:6px 0 2px;font-size:15px}
   .msg a{color:var(--accent2);text-decoration:none;border-bottom:1px dotted var(--accent2)}
@@ -181,13 +185,13 @@
   /* tela de boas-vindas elegante (chat vazio) */
   .welcome{margin:auto;max-width:560px;text-align:center;padding:30px 20px;animation:rise .4s ease}
   .welcome h2{font-family:'Sora','Inter',sans-serif;font-size:30px;font-weight:800;margin:0 0 8px;
-    background:linear-gradient(120deg,#fff,var(--accent2) 60%,var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+    background:linear-gradient(120deg,#fff,#ffc2a8 55%,var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   .welcome p{color:var(--muted);margin:0 0 22px;font-size:14.5px;line-height:1.6}
   .wchips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
   .wchip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:14px;
     padding:12px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:.18s;text-align:left;max-width:250px}
-  .wchip:hover{transform:translateY(-1px);border-color:var(--accent2);background:var(--panel2);box-shadow:0 8px 22px rgba(47,225,193,.10)}
-  .wchip b{display:block;color:var(--accent2);font-weight:700;margin-bottom:2px}
+  .wchip:hover{transform:translateY(-1px);border-color:var(--accent);background:var(--panel2);box-shadow:0 8px 22px rgba(255,138,112,.12)}
+  .wchip b{display:block;color:var(--accent);font-weight:700;margin-bottom:2px}
   /* arquivos alterados (chips clicaveis) */
   .filechips{display:flex!important;flex-wrap:wrap;gap:8px;align-self:flex-start!important;font-style:normal!important;background:none!important}
   .filechip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
@@ -282,8 +286,8 @@
   html.noavatar .stage{display:none}
   .row{display:flex;gap:10px;align-items:center}
   .input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 16px;color:var(--text);font-size:14px;outline:none;transition:.15s}
-  .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(139,123,255,.16);background:var(--panel2)}
-  .send{border:0;border-radius:var(--r);padding:13px 22px;font-weight:700;color:#07120f;cursor:pointer;background:var(--accent2);transition:.18s;box-shadow:0 6px 18px rgba(47,225,193,.18)}
+  .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,138,112,.18);background:var(--panel2)}
+  .send{border:0;border-radius:var(--r);padding:13px 22px;font-weight:700;color:#241210;cursor:pointer;background:var(--accent);transition:.18s;box-shadow:0 6px 18px rgba(255,138,112,.20)}
   .send:hover{transform:translateY(-1px);filter:brightness(1.07)}
   .toggles{display:flex;gap:8px;align-items:center}
   .talk{border:0;border-radius:var(--r);padding:11px 20px;font-weight:700;color:#08131e;cursor:pointer;background:var(--listening);transition:.18s}
