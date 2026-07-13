@@ -311,7 +311,7 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
                 "Usar contexto da conversa para evitar repetir perguntas.",
             ],
         )
-    if effective_mode == "coding" and (_has_any(text, REPO_MARKERS + MAINTENANCE_MARKERS) or str((compact_context or {}).get("repo") or "")):
+    if effective_mode == "coding" and (str((compact_context or {}).get("repo") or "") or _has_any(text, REPO_MARKERS) or (_has_any(text, MAINTENANCE_MARKERS) and not _has_any(text, CODE_MARKERS))):
         return ExecutionPlan(
             mode="coding",
             intent="manutencao de codigo/workspace",

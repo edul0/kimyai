@@ -66,8 +66,14 @@ class ExternalTools:
         self.settings = settings
 
     async def enrich(self, prompt: str, mode: str) -> dict[str, Any]:
+        import datetime
         context: list[str] = []
         used: list[str] = []
+
+        # Auto datetime context
+        now = datetime.datetime.now()
+        context.append(f"[SISTEMA] Data e hora atual do servidor: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        used.append("clock")
 
         calc = maybe_compute(prompt)
         if calc:
