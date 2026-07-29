@@ -194,6 +194,25 @@
   .tp-i.done{color:#b7dfbd}.tp-i.done .tp-dot{border-color:rgba(111,211,128,.55);background:rgba(80,180,100,.14);color:#8fe388}
   .tp-i.fail{color:#ffaaaa}.tp-i.fail .tp-dot{border-color:rgba(255,110,110,.55);background:rgba(255,90,90,.12);color:#ff8c8c}
   .taskpanel.complete .tp-live{background:#8fe388;box-shadow:0 0 9px #8fe388;animation:none}
+  .livecode{display:none;position:absolute;right:22px;bottom:112px;z-index:28;width:min(560px,calc(100% - 44px));
+    max-height:46vh;border:1px solid rgba(157,123,255,.38);border-radius:15px;overflow:hidden;
+    background:rgba(13,12,18,.96);box-shadow:0 22px 60px rgba(0,0,0,.48);backdrop-filter:blur(18px)}
+  .livecode.open{display:flex;flex-direction:column;animation:rise .22s ease}
+  .lc-head{display:flex;align-items:center;gap:9px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px}
+  .lc-head b{flex:1}.lc-badge{font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;color:#d8c9ff;
+    background:rgba(157,123,255,.14);border:1px solid rgba(157,123,255,.25);padding:3px 7px;border-radius:999px}
+  .lc-close{border:0;background:none;color:var(--muted);cursor:pointer;font-size:17px}
+  .lc-file{padding:7px 12px;color:#a99ac9;font:11px Consolas,monospace;border-bottom:1px solid var(--line)}
+  .lc-code{margin:0;padding:12px 14px;overflow:auto;min-height:110px;color:#d8deeb;font:12px/1.5 Consolas,monospace;
+    white-space:pre-wrap;word-break:break-word}
+  .livecode.complete .lc-badge{color:#9ce7aa;background:rgba(90,190,110,.12);border-color:rgba(90,190,110,.3)}
+  .activitymodal{display:none;position:fixed;inset:0;z-index:90;background:rgba(5,5,8,.72);align-items:center;justify-content:center}
+  .activitymodal.open{display:flex}.activitybox{width:min(720px,92vw);max-height:78vh;background:#16141c;border:1px solid var(--line);
+    border-radius:16px;overflow:hidden;box-shadow:0 26px 80px rgba(0,0,0,.55)}
+  .activityhead{display:flex;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .activityhead b{flex:1}.activitylist{padding:8px 16px 16px;overflow:auto;max-height:64vh}
+  .activityitem{display:grid;grid-template-columns:24px 1fr auto;gap:9px;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .activityitem small{color:var(--muted)}.activityitem.fail{color:#ffaaaa}.activityitem.blocked{color:#ffd27c}
   @keyframes tpp{0%,100%{box-shadow:0 0 0 0 rgba(34,224,200,.5)}50%{box-shadow:0 0 0 5px rgba(34,224,200,0)}}
   /* tela de boas-vindas elegante (chat vazio) */
   .welcome{margin:auto;max-width:560px;text-align:center;padding:30px 20px;animation:rise .4s ease}
@@ -342,6 +361,15 @@
   .topcontext{display:flex;flex-direction:column;gap:2px;margin-left:4px}
   .toptitle{font-family:'Sora',sans-serif;font-size:13px;font-weight:700;letter-spacing:-.15px}
   .topsub{font-size:10.5px;color:var(--muted)}
+  .aihealth{display:flex;align-items:center;gap:8px;max-width:250px;padding:7px 10px;border:1px solid var(--line);
+    border-radius:11px;background:rgba(255,255,255,.035);color:var(--text);cursor:pointer;transition:.18s;text-align:left}
+  .aihealth:hover{border-color:rgba(157,123,255,.5);background:rgba(157,123,255,.08)}
+  .aihealth-dot{width:8px;height:8px;border-radius:50%;background:#777;box-shadow:0 0 0 3px rgba(120,120,120,.1);flex:none}
+  .aihealth.ready .aihealth-dot{background:#7bd88f;box-shadow:0 0 9px rgba(123,216,143,.65)}
+  .aihealth.warn .aihealth-dot{background:#ffc857;box-shadow:0 0 9px rgba(255,200,87,.55)}
+  .aihealth-copy{display:flex;flex-direction:column;min-width:0;line-height:1.15}
+  .aihealth-copy b{font-size:11.5px;white-space:nowrap}.aihealth-copy small{font-size:9.5px;color:var(--muted);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pill{padding:7px 10px;border-radius:999px;background:var(--surface-soft);border:1px solid var(--line)}
   .stage{padding:18px 0 0}.avatar{width:116px;height:116px}.l2dwrap{width:116px;height:132px}.halo{inset:-5px}
   .chat{padding:18px max(32px,calc((100% - 900px)/2));gap:14px}
@@ -373,7 +401,7 @@
     .app{grid-template-columns:76px 1fr}.brand small,.brand b,.side .lbl,.side>.iconbtn{font-size:0}
     .brand::after{content:"K";font-family:'Sora';font-weight:800;font-size:19px;color:var(--accent)}
     .newbtn{font-size:0}.newbtn .ic{margin:0}.chat{padding:14px 16px}.composer{margin:0 10px 10px}
-    .topcontext{display:none}.wchips{grid-template-columns:1fr}.wchip:last-child{grid-column:auto}
+    .topcontext,.aihealth{display:none}.wchips{grid-template-columns:1fr}.wchip:last-child{grid-column:auto}
     .stage{padding-top:8px}.avatar{width:88px;height:88px}
   }
   /* Refinamento visual: identidade, foco e legibilidade */
@@ -539,7 +567,17 @@
           <span class="toptitle">Workspace local</span>
           <span class="topsub" id="stateDetail">Crie, automatize e acompanhe tudo em um só lugar</span>
         </div>
+        <button class="aihealth" id="aiHealth" onclick="api('test_providers')" title="Clique para testar todas as IAs configuradas">
+          <span class="aihealth-dot"></span>
+          <span class="aihealth-copy"><b id="aiHealthTitle">Verificando IAs…</b><small id="aiHealthDetail">Provedores e fallback</small></span>
+        </button>
         <span class="sp"></span>
+        <button class="iconbtn" onclick="api('git_undo')" title="Desfazer a última alteração do projeto">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 4 12l5 5"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg><span class="lab">Desfazer</span>
+        </button>
+        <button class="iconbtn" onclick="openActivity()" title="Ver modelos, comandos, testes e arquivos">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg><span class="lab">Atividade</span>
+        </button>
         <button class="iconbtn" onclick="api('see_screen')" title="A Kemy olha sua tela"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>Ver tela</button>
         <div class="menuwrap">
           <button class="iconbtn" onclick="toggleMenu()" title="Mais opções"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span class="badge" id="updBadge"></span></button>
@@ -550,6 +588,7 @@
             <button onclick="api('list_versions');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>Linha do tempo (versões)</button>
             <div class="menulbl">Avatar & Voz</div>
             <button onclick="toggleAvatar();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><line x1="3" y1="3" x2="21" y2="21"/></svg>Ocultar / mostrar avatar</button>
+            <button onclick="toggleLive2D();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8 14c2 2 6 2 8 0"/><path d="M9 9h.01M15 9h.01"/></svg>Live2D (modo mais pesado)</button>
             <button onclick="openVoice();closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>Voz da Kemy</button>
             <button onclick="api('toggle_wake');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12a10 10 0 0 1 20 0"/><path d="M6 12a6 6 0 0 1 12 0"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>Ei Kemy (wake word)</button>
             <button onclick="api('toggle_pet');closeMenu()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>Mascote no desktop</button>
@@ -640,6 +679,10 @@
         <div class="statelbl" id="statelbl">Pronta</div>
       </div>
       <div class="chat" id="chat"></div>
+      <div class="livecode" id="liveCode">
+        <div class="lc-head"><span class="tp-live"></span><b>Código sendo gerado</b><span class="lc-badge" id="liveCodeBadge">rascunho</span><button class="lc-close" onclick="closeLiveCode()">×</button></div>
+        <div class="lc-file" id="liveCodeFile">Preparando arquivos…</div><pre class="lc-code" id="liveCodeBody"></pre>
+      </div>
       <div class="composer">
         <button class="stopbtn" id="stopBtn" onclick="api('stop_all')"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Parar</button>
         <div class="row">
@@ -839,6 +882,19 @@
     var detail=document.getElementById("stateDetail"); if(detail) detail.textContent=STATE_DETAIL[s]||"Trabalhando na sua solicitação";
     var l=document.getElementById("statelbl"); if(l) l.textContent=STATE_TXT[s]||s;
     try{ setL2DMood(s); }catch(e){} }
+  function renderAIStatus(ai){
+    ai=ai||{}; var el=document.getElementById('aiHealth'),title=document.getElementById('aiHealthTitle'),detail=document.getElementById('aiHealthDetail');
+    if(!el||!title||!detail)return;
+    var available=Number(ai.available||0),configured=Number(ai.configured||0);
+    el.classList.remove('ready','warn');
+    if(available>0){
+      el.classList.add('ready'); title.textContent=available+(available===1?' IA pronta':' IAs prontas');
+      detail.textContent=ai.primary||((ai.providers||[]).join(', '));
+    }else{
+      el.classList.add('warn'); title.textContent=configured?'IAs indisponíveis':'Configure uma IA';
+      detail.textContent=configured?'Clique para diagnosticar':'Abra Configurações para adicionar uma chave';
+    }
+  }
   function vtsConnected(){ /* o rosto e a carinha do app; nao escondemos mais */ }
   function copyText(btn,text){
     function done(){ var o=btn.textContent; btn.textContent='✓ Copiado'; setTimeout(function(){btn.textContent=o;},1200); }
@@ -976,6 +1032,46 @@
   function streamChunk(delta){ if(!_streamEl)startStream();
     _streamEl.textContent+=delta; var c=document.getElementById("chat"); c.scrollTop=c.scrollHeight; }
   function endStream(){ if(_streamEl){ addCopyBtn(_streamEl, _streamEl.textContent); } _streamEl=null; }
+  var _codeDraft='';
+  window.codeStreamStart=function(){
+    _codeDraft=''; var box=document.getElementById('liveCode'),body=document.getElementById('liveCodeBody');
+    if(box){box.classList.add('open');box.classList.remove('complete')} if(body)body.textContent='';
+    var badge=document.getElementById('liveCodeBadge');if(badge)badge.textContent='rascunho';
+  };
+  window.codeStreamChunk=function(delta){
+    _codeDraft+=String(delta||''); if(_codeDraft.length>120000)_codeDraft=_codeDraft.slice(-120000);
+    var matches=Array.from(_codeDraft.matchAll(/<<<FILE:\s*([^>]+)>>>/g)),name='Gerando solução…',content=_codeDraft;
+    if(matches.length){var m=matches[matches.length-1];name=m[1].trim();content=_codeDraft.slice((m.index||0)+m[0].length).split('<<<END>>>')[0];}
+    var file=document.getElementById('liveCodeFile'),body=document.getElementById('liveCodeBody');
+    if(file)file.textContent=name;if(body){body.textContent=content.slice(-40000);body.scrollTop=body.scrollHeight;}
+  };
+  window.codeStreamEnd=function(){var b=document.getElementById('liveCodeBadge');if(b)b.textContent='validando';};
+  window.codeStreamSaved=function(count){
+    var box=document.getElementById('liveCode'),b=document.getElementById('liveCodeBadge');
+    if(box)box.classList.add('complete');if(b)b.textContent=(count||0)+' arquivo(s) salvo(s)';
+  };
+  window.codeStreamDiff=function(change){
+    var b=document.getElementById('liveCodeBadge'),file=document.getElementById('liveCodeFile');if(!change)return;
+    if(b){b.textContent='+'+(change.added||0)+'  −'+(change.removed||0)+' · ver diff';b.style.cursor='pointer';
+      b.onclick=function(){viewFile(change.key);};}
+    if(file)file.textContent=(change.path||'arquivo')+' · versão final validada';
+  };
+  function closeLiveCode(){var box=document.getElementById('liveCode');if(box)box.classList.remove('open');}
+  function closeActivity(){document.getElementById('activityModal').classList.remove('open');}
+  function openActivity(){
+    var modal=document.getElementById('activityModal'),list=document.getElementById('activityList');modal.classList.add('open');
+    list.innerHTML='<div class="activityitem"><span>…</span><span>Carregando atividade</span></div>';
+    var p=api('get_activity_status');if(!p||!p.then){list.innerHTML='<div class="activityitem">Disponível dentro do aplicativo.</div>';return;}
+    p.then(function(data){
+      var icons={model:'◈',command:'›_',test:'✓',file:'▣'},items=(data&&data.items)||[],html='';
+      if(data&&data.recoverable)html+='<div class="activityitem"><span>↻</span><span><b>'+data.recoverable+' tarefa(s) recuperável(is)</b><br><small>A Kemy pode continuar do último passo salvo.</small></span><button class="mdcopy" onclick="api(\'resume_latest_task\');closeActivity()">Retomar</button></div>';
+      items.slice().reverse().forEach(function(it){
+        var meta=[];if(it.ms!=null)meta.push((it.ms/1000).toFixed(1)+'s');if(it.fallback)meta.push('fallback');if(it.exit!=null)meta.push('exit '+it.exit);
+        html+='<div class="activityitem '+_esc(it.status||'')+'"><span>'+_esc(icons[it.kind]||'•')+'</span><span><b>'+_esc(it.label||it.kind)+'</b><br><small>'+_esc(it.kind||'atividade')+'</small></span><small>'+_esc(meta.join(' · '))+'</small></div>';
+      });
+      list.innerHTML=html||'<div class="activityitem"><span>○</span><span>Nenhuma atividade nesta sessão.</span></div>';
+    });
+  }
   function showFiles(list){
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg sys filechips";
@@ -1349,6 +1445,7 @@
     _booted=true;
     pywebview.api.bootstrap().then(function(st){
       renderConvos(st.convos,st.active); kemyState(st.state||"idle");
+      renderAIStatus(st.ai);
       (st.log||[]).forEach(function(m){ addMsg(m.r,m.t); });
       if(!(st.log&&st.log.length)) showWelcome();
       // rede de seguranca: se continuar "Conectando", consulta o estado
@@ -1356,8 +1453,8 @@
         if(document.body.className!=="offline"||tries>20){ clearInterval(iv); return; }
         try{ pywebview.api.get_state().then(function(s){ if(s) kemyState(s); }); }catch(e){}
       },1500);
-      // Carrega a VTuber Live2D DEPOIS que o app ja respondeu (nunca trava; SVG fica de reserva)
-      setTimeout(loadLive2D, 3000);
+      // A chibi leve é o padrão. Live2D baixa vários MB e só carrega quando o usuário optou por ele.
+      try{if(localStorage.getItem('kemyLive2D')==='on')setTimeout(loadLive2D,1200);}catch(e){}
     }).catch(function(e){ kemyState('idle'); addMsg('sys','Falha no boot: '+e); });
   }
   window.addEventListener('pywebviewready', boot);
@@ -1382,6 +1479,20 @@
   function _loadScript(src){ return new Promise(function(res,rej){
     var s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=rej;
     document.head.appendChild(s); }); }
+  function toggleLive2D(){
+    try{
+      var enabled=localStorage.getItem('kemyLive2D')==='on';
+      if(enabled){
+        localStorage.setItem('kemyLive2D','off');
+        var box=document.getElementById('l2dwrap'),fallback=document.getElementById('svgAvatar');
+        if(box)box.style.display='none';if(fallback)fallback.style.display='block';
+        addMsg('sys','Modo leve ativado. O Live2D continua disponível no menu.');
+      }else{
+        localStorage.setItem('kemyLive2D','on');loadLive2D();
+        addMsg('sys','Carregando Live2D… Você pode voltar ao modo leve pelo mesmo botão.');
+      }
+    }catch(e){}
+  }
   function loadLive2D(){
     if(window.__l2dStarted) return; window.__l2dStarted=true;
     _loadScript("https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js")
@@ -1412,5 +1523,9 @@
     }catch(e){ console.log('Live2D init falhou, usando SVG:',e); }
   }
 </script>
+<div class="activitymodal" id="activityModal" onclick="if(event.target===this)closeActivity()">
+  <div class="activitybox"><div class="activityhead"><b>Atividade da Kemy</b><button class="lc-close" onclick="closeActivity()">×</button></div>
+    <div class="activitylist" id="activityList"></div></div>
+</div>
 </body>
 </html>

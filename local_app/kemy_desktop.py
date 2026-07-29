@@ -39,6 +39,12 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog
 
+try:
+    from runtime_services import CredentialVault, activity, migrate_env_secrets
+    from professional_artifacts import build_docx, build_logo_kit, build_pdf, build_pptx, validate_artifact
+except ImportError:  # importado como pacote em testes
+    from local_app.runtime_services import CredentialVault, activity, migrate_env_secrets
+    from local_app.professional_artifacts import build_docx, build_logo_kit, build_pdf, build_pptx, validate_artifact
 
 if getattr(sys, "frozen", False):
     ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
@@ -621,6 +627,11 @@ def load_merged_env() -> dict[str, str]:
                 merged.update(parse_env_file(cand))
         except Exception:
             continue
+    # Segredos salvos pela interface ficam criptografados com a conta Windows.
+    try:
+        merged.update(CredentialVault(config_dir() / "credentials.dpapi").load())
+    except Exception:
+        pass
     return merged
 
 
@@ -2328,24 +2339,45 @@ def audit_dead_controls(base: Path) -> list[str]:
     return issues[:40]
 
 
+_PROJECT_CONTEXT_CACHE: dict[tuple[str, int], tuple[tuple, str]] = {}
+_IGNORED_CONTEXT_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next"}
+
+
 def read_project_files(base: Path, max_total: int = 22000) -> str:
     exts = (".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".json", ".py", ".md", ".txt")
     parts: list[str] = []
     total = 0
     if not base.exists():
         return ""
-    for p in sorted(base.rglob("*")):
-        if p.is_file() and p.suffix.lower() in exts:
-            try:
-                txt = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            block = f"<<<FILE: {p.relative_to(base)}>>>\n{txt}\n<<<END>>>\n"
-            if total + len(block) > max_total:
-                break
-            parts.append(block)
-            total += len(block)
-    return "".join(parts)
+    candidates = [p for p in sorted(base.rglob("*"))
+                  if p.is_file() and p.suffix.lower() in exts
+                  and not _IGNORED_CONTEXT_DIRS.intersection(p.relative_to(base).parts)]
+    signature = []
+    for p in candidates:
+        try:
+            st = p.stat(); signature.append((str(p.relative_to(base)), st.st_mtime_ns, st.st_size))
+        except OSError:
+            continue
+    cache_key = (str(base.resolve()), max_total)
+    cached = _PROJECT_CONTEXT_CACHE.get(cache_key)
+    sig_tuple = tuple(signature)
+    if cached and cached[0] == sig_tuple:
+        return cached[1]
+    for p in candidates:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        block = f"<<<FILE: {p.relative_to(base)}>>>\n{txt}\n<<<END>>>\n"
+        if total + len(block) > max_total:
+            break
+        parts.append(block)
+        total += len(block)
+    result = "".join(parts)
+    if len(_PROJECT_CONTEXT_CACHE) > 24:
+        _PROJECT_CONTEXT_CACHE.clear()
+    _PROJECT_CONTEXT_CACHE[cache_key] = (sig_tuple, result)
+    return result
 
 
 def relevant_project_files(base: Path, text: str, max_total: int = 22000) -> str:
@@ -2355,7 +2387,8 @@ def relevant_project_files(base: Path, text: str, max_total: int = 22000) -> str
             ".java", ".c", ".cpp", ".cs", ".php", ".rb", ".go", ".rs", ".sql", ".vue", ".svelte")
     if not base.exists():
         return ""
-    files = [p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in exts and not p.name.startswith("_")]
+    files = [p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in exts and not p.name.startswith("_")
+             and not _IGNORED_CONTEXT_DIRS.intersection(p.relative_to(base).parts)]
     if not files:
         return ""
     total_size = sum((p.stat().st_size for p in files), 0)
@@ -2508,6 +2541,7 @@ class LLMClient:
         self.groq_fast = _list("GROQ_FAST", ["openai/gpt-oss-120b", "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"])
         self.gemini_model = self.gemini_models[0]
         self._working: dict[str, str] = {}  # provedor -> modelo que funcionou
+        self._provider_failures: dict[str, dict] = {}
 
     def primary_label(self) -> str:
         """Provedor + modelo que sera tentado primeiro (mesma ordem do chat())."""
@@ -2684,17 +2718,31 @@ class LLMClient:
         for _idx, (prov, model, fn) in enumerate(attempts):
             if prov in getattr(self, "_dead_provs", set()):
                 continue
+            failure = self._provider_failures.get(prov) or {}
+            if float(failure.get("until") or 0) > time.time():
+                continue
             _t0 = time.time()
             try:
                 res = fn()
+                self._provider_failures.pop(prov, None)
                 self._working[("fast:" if fast else "") + prov] = model
+                elapsed_ms = int((time.time() - _t0) * 1000)
+                activity.record("model", f"{prov} · {model}", ms=elapsed_ms, fallback=_idx > 0, fast=fast)
                 log_telemetry({"ev": "llm", "prov": prov, "model": model, "ok": True,
-                               "ms": int((time.time() - _t0) * 1000), "fallback": _idx > 0, "fast": fast})
+                               "ms": elapsed_ms, "fallback": _idx > 0, "fast": fast})
                 return res
             except Exception as exc:
+                activity.record("model", f"{prov} · {model}", status="fail",
+                                ms=int((time.time() - _t0) * 1000), error=str(exc)[:120])
                 log_telemetry({"ev": "llm", "prov": prov, "model": model, "ok": False,
                                "ms": int((time.time() - _t0) * 1000), "fast": fast, "err": str(exc)[:160]})
                 errors.append(f"{prov}/{model}: {exc}")
+                previous = self._provider_failures.get(prov) or {}
+                failures = int(previous.get("count") or 0) + 1
+                self._provider_failures[prov] = {
+                    "count": failures,
+                    "until": time.time() + min(120, 15 * failures) if failures >= 2 else 0,
+                }
                 # chave invalida/proibida (401/403) -> desativa o provedor nesta sessao
                 code = getattr(exc, "code", None)
                 if code in (401, 403) or "401" in str(exc) or "Unauthorized" in str(exc):
@@ -2919,7 +2967,7 @@ class LLMClient:
 
     # ---- Streaming (resposta em tempo real) ----
     def chat_stream(self, system: str, messages: list[dict], on_chunk, max_tokens: int = 700,
-                    fast: bool = True, prefer: str = "") -> str:
+                    fast: bool = True, prefer: str = "", prefer_model: str = "") -> str:
         cb = self.cerebras_fast if fast else self.cerebras_models
         gq = self.groq_fast if fast else self.groq_models
         nv = self.nvidia_fast if fast else self.nvidia_models
@@ -2929,11 +2977,13 @@ class LLMClient:
         order = []
         if fast and self.gemini:
             order.append(("gemini", self.gemini_models[0]))
+        if not fast and self.nvidia:
+            order.append(("nvidia", prefer_model if prefer_model in nv else nv[0]))
         if self.cerebras:
             order.append(("cerebras", cb[0]))
         if self.groq:
             order.append(("groq", gq[0]))
-        if self.nvidia:
+        if self.nvidia and fast:
             order.append(("nvidia", nv[0]))
         if self.sambanova:
             order.append(("sambanova", sn[0]))
@@ -2962,11 +3012,18 @@ class LLMClient:
             order.sort(key=lambda a: 0 if a[0] == prefer else 1)
         errs = []
         for prov, model in order:
+            _t0 = time.time()
             try:
                 if prov == "gemini":
-                    return self._gemini_stream(system, messages, model, on_chunk, max_tokens)
-                return self._openai_stream(urls[prov], keys[prov], model, system, messages, on_chunk, max_tokens)
+                    result = self._gemini_stream(system, messages, model, on_chunk, max_tokens)
+                else:
+                    result = self._openai_stream(urls[prov], keys[prov], model, system, messages, on_chunk, max_tokens)
+                activity.record("model", f"{prov} · {model}", ms=int((time.time()-_t0)*1000),
+                                fallback=bool(errs), streaming=True)
+                return result
             except Exception as exc:
+                activity.record("model", f"{prov} · {model}", status="fail",
+                                ms=int((time.time()-_t0)*1000), error=str(exc)[:120], streaming=True)
                 errs.append(f"{prov}: {exc}")
         raise RuntimeError("stream falhou (" + "; ".join(errs) + ")")
 
@@ -5088,6 +5145,11 @@ class WebApi:
         self.host, self.port = host, int(port)
         self.base_url = f"http://{host}:{port}"
         self.env_path = config_dir() / ".env"
+        try:
+            migrate_env_secrets(self.env_path, self.SECRET_KEYS,
+                                CredentialVault(config_dir() / "credentials.dpapi"))
+        except Exception:
+            pass
         self.env_vars = load_merged_env()
         self.workspace_root = self._workspace()
         self.llm = LLMClient(self.env_vars)
@@ -5344,7 +5406,47 @@ class WebApi:
         it = self._cur() or {}
         return {"state": "idle" if self.connected else "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
-                "log": it.get("log", [])}
+                "log": it.get("log", []), "ai": self.get_ai_status()}
+
+    def get_ai_status(self) -> dict:
+        """Resumo seguro para a UI: nunca inclui chaves, tokens ou credenciais."""
+        try:
+            providers = list(self.llm.providers())
+            dead = set(getattr(self.llm, "_dead_provs", set()))
+            active = [name for name in providers if name not in dead]
+            return {
+                "configured": len(providers),
+                "available": len(active),
+                "providers": active,
+                "unavailable": sorted(dead.intersection(providers)),
+                "primary": self.llm.primary_label() if active else "",
+            }
+        except Exception:
+            return {"configured": 0, "available": 0, "providers": [], "unavailable": [], "primary": ""}
+
+    def get_activity_status(self) -> dict:
+        data = activity.snapshot()
+        try:
+            pending = self.taskdb.unfinished()
+        except Exception:
+            pending = []
+        data["recoverable"] = len(pending)
+        data["recovery"] = [
+            {"id": str(t.get("id", "")), "prompt": str(t.get("prompt", ""))[:100],
+             "step": int(t.get("step") or 0), "plan": t.get("plan") or []}
+            for t in pending[:5]
+        ]
+        return data
+
+    def resume_latest_task(self) -> bool:
+        pending = self.taskdb.unfinished()
+        if not pending:
+            self._msg("sys", "Não há tarefa interrompida para retomar.", store=False)
+            return False
+        task = pending[0]
+        self._run_background(task["prompt"], tid=task["id"], bg=Path(task["folder"]),
+                             resume_from=int(task.get("step", 0)))
+        return True
 
     def get_state(self) -> str:
         """Consultado pela UI como rede de seguranca (caso o push de estado falhe)."""
@@ -5410,6 +5512,7 @@ class WebApi:
             data = {}
         path = config_dir() / ".env"
         changed = 0
+        secret_updates = {}
         for k, v in (data or {}).items():
             if k not in self.SETTINGS_KEYS:
                 continue
@@ -5418,9 +5521,17 @@ class WebApi:
                 continue
             if v == "":
                 continue
-            _set_env_var(path, k, v)
+            if k in self.SECRET_KEYS:
+                secret_updates[k] = v
+            else:
+                _set_env_var(path, k, v)
             os.environ[k] = v          # aplica na sessao atual (Speaker le do os.environ)
             changed += 1
+        if secret_updates:
+            try:
+                CredentialVault(config_dir() / "credentials.dpapi").update(secret_updates)
+            except Exception as exc:
+                self._msg("sys", f"Não consegui proteger as credenciais no cofre do Windows: {exc}", store=False)
         # recarrega tudo (chaves de IA, NVIDIA, Nano Banana, Minecraft…)
         self.env_path = path
         self.env_vars = load_merged_env()
@@ -7899,6 +8010,39 @@ class WebApi:
                 pass
         return full
 
+    def _code_streaming(self, system: str, msgs: list, max_tokens: int = 16000,
+                        prefer_model: str = "") -> str:
+        """Mostra o rascunho de arquivos enquanto o modelo gera; salvar/validar ocorre depois."""
+        self._js("codeStreamStart()")
+        pending = {"text": "", "last": 0.0}
+
+        def on_chunk(delta: str) -> None:
+            pending["text"] += delta
+            now = time.time()
+            # PyWebView é uma ponte entre processos: ~11 atualizações/s parece fluido
+            # e reduz bastante serialização/repintura durante respostas grandes.
+            if now - pending["last"] >= 0.09:
+                try:
+                    self._js(f"codeStreamChunk({json.dumps(pending['text'])})")
+                except Exception:
+                    pass
+                pending["text"] = ""
+                pending["last"] = now
+
+        try:
+            return self.llm.chat_stream(system, msgs, on_chunk, max_tokens=max_tokens,
+                                        fast=False, prefer_model=prefer_model)
+        finally:
+            if pending["text"]:
+                try:
+                    self._js(f"codeStreamChunk({json.dumps(pending['text'])})")
+                except Exception:
+                    pass
+            try:
+                self._js("codeStreamEnd()")
+            except Exception:
+                pass
+
     def _auto_learn(self, text: str) -> None:
         """Aprende sozinha: salva preferencias/correcoes na memoria, sem precisar dizer 'lembre'."""
         t = (text or "").strip()
@@ -9186,7 +9330,13 @@ class WebApi:
         if usou_moa:
             reply = self._moa(system, hist, text, route, prefer_model=nv_lead)  # Mixture of Agents
         else:
-            reply = self.llm.chat(system, hist, max_tokens=(9000 if self.econ else 16000), prefer=prefer, prefer_model=nv_lead)
+            try:
+                reply = self._code_streaming(system, hist, max_tokens=(9000 if self.econ else 16000),
+                                             prefer_model=nv_lead)
+            except Exception:
+                # Nem todo provedor suporta streaming; mantém o fallback tradicional.
+                reply = self.llm.chat(system, hist, max_tokens=(9000 if self.econ else 16000),
+                                      prefer=prefer, prefer_model=nv_lead)
         if panel_on:
             self._panel_step(2, "done")
         # Revisao cruzada SO quando NAO houve MoA (a sintese do MoA ja e uma revisao) -> evita
@@ -9328,6 +9478,7 @@ class WebApi:
         self._gen_thumbs(extract_thumb_requests(reply), base)
         self._gen_graphics(extract_graphic_requests(reply), base)
         self._maybe_make_pdf(base, text, files)
+        self._maybe_make_professional_artifacts(base, text)
         self._maybe_tests(base, text)                    # 5) Testes automaticos
         if files or edits0:
             self._git_snapshot(base, "kemy: " + text[:60])   # 6) Git: foto pra desfazer
@@ -9954,11 +10105,14 @@ class WebApi:
     def _run_tests(self, base: Path):
         for cmd in (["python", "-m", "pytest", "-q"], ["py", "-m", "pytest", "-q"], ["python3", "-m", "pytest", "-q"]):
             try:
+                _t0 = time.time()
                 p = subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=60)
                 o = ((p.stdout or "") + (p.stderr or "")).strip()
                 if "No module named pytest" in o:
                     # tenta unittest
                     break
+                activity.record("test", "pytest", status="done" if p.returncode == 0 else "fail",
+                                exit=p.returncode, ms=int((time.time()-_t0)*1000))
                 return o or "(sem saída)"
             except FileNotFoundError:
                 continue
@@ -9966,7 +10120,10 @@ class WebApi:
                 return None
         for cmd in (["python", "-m", "unittest", "discover", "-q"], ["py", "-m", "unittest", "discover", "-q"]):
             try:
+                _t0 = time.time()
                 p = subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=60)
+                activity.record("test", "unittest", status="done" if p.returncode == 0 else "fail",
+                                exit=p.returncode, ms=int((time.time()-_t0)*1000))
                 return ((p.stdout or "") + (p.stderr or "")).strip() or "(sem saída)"
             except FileNotFoundError:
                 continue
@@ -10295,6 +10452,7 @@ class WebApi:
         except Exception:
             pass
         self._maybe_make_pdf(base, text, [])
+        self._maybe_make_professional_artifacts(base, text)
         try:
             self._git_snapshot(base, "kemy agente: " + text[:50])
         except Exception:
@@ -10341,6 +10499,88 @@ class WebApi:
                 pass
         else:
             self._msg("sys", "Gerei o documento em HTML; pra virar PDF abra ele e use Ctrl+P → Salvar como PDF.", store=False)
+
+    def _artifact_spec(self, text: str, kind: str) -> dict:
+        if kind == "slides":
+            schema = '{"brand":"","primary":"7657E8","accent":"FF8B7B","slides":[{"title":"","subtitle":"","bullets":[""]}]}'
+            rule = "Crie 8 a 12 slides, narrativa capa-problema-insights-solução-plano-conclusão, no máximo 6 bullets curtos."
+        else:
+            schema = '{"title":"","subtitle":"","brand":"","primary":"7657E8","sections":[{"title":"","paragraphs":[""],"bullets":[""]}]}'
+            rule = "Crie seções completas, linguagem profissional, conteúdo útil e pronto para entregar; não use placeholders."
+        prompt = ("Retorne SOMENTE JSON válido no esquema " + schema + ". " + rule +
+                  "\nPedido do usuário: " + (text or "")[:1800])
+        raw = self.llm.chat("Você é diretor editorial e designer de informação.", [{"role": "user", "content": prompt}],
+                            max_tokens=4200, fast=False)
+        try:
+            raw = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.I).strip()
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+    def _maybe_make_professional_artifacts(self, base: Path, text: str) -> None:
+        """Gera arquivos Office e identidade visual reais, além do preview HTML."""
+        low = (text or "").lower()
+        wants_slides = any(k in low for k in ("slides", "slide", "apresentação", "apresentacao", "powerpoint", "pptx"))
+        wants_doc = any(k in low for k in ("documento", "docx", "word", "proposta", "relatório", "relatorio"))
+        wants_pdf = "pdf" in low
+        wants_logo = any(k in low for k in ("logo", "logotipo", "identidade visual", "marca"))
+        if not (wants_slides or wants_doc or wants_pdf or wants_logo):
+            return
+        artifacts = base / "artefatos"
+        made = []
+        try:
+            specs = {}
+            if wants_slides or wants_doc or wants_pdf:
+                from concurrent.futures import ThreadPoolExecutor
+                jobs = {}
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="kemy-artifact") as pool:
+                    if wants_slides:
+                        jobs["slides"] = pool.submit(self._artifact_spec, text, "slides")
+                    if wants_doc or wants_pdf:
+                        jobs["document"] = pool.submit(self._artifact_spec, text, "document")
+                    for name, future in jobs.items():
+                        try:
+                            specs[name] = future.result()
+                        except Exception:
+                            specs[name] = {}
+            if wants_slides:
+                self._msg("sys", "📊 Estruturando apresentação profissional…", store=False)
+                spec = specs.get("slides") or {}
+                dest = artifacts / "apresentacao-kemy.pptx"
+                if spec and build_pptx(spec, dest):
+                    made.append(dest); activity.record("file", str(dest.relative_to(base)), format="pptx")
+            doc_spec = None
+            if wants_doc or wants_pdf:
+                self._msg("sys", "📝 Diagramando documento profissional…", store=False)
+                doc_spec = specs.get("document") or {}
+                if wants_doc:
+                    dest = artifacts / "documento-kemy.docx"
+                    if doc_spec and build_docx(doc_spec, dest):
+                        made.append(dest)
+                if wants_pdf:
+                    dest = artifacts / "documento-kemy.pdf"
+                    if doc_spec and build_pdf(doc_spec, dest):
+                        made.append(dest)
+            if wants_logo:
+                brand = re.search(r"(?:para|da|do|marca)\s+([A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 _-]{1,30})", text or "", re.I)
+                spec = {"brand": brand.group(1).strip() if brand else "Nova marca",
+                        "primary": "7657E8", "accent": "FF8B7B"}
+                made.extend(build_logo_kit(spec, artifacts / "identidade-visual"))
+            if made:
+                verified = []
+                for path in made:
+                    check = validate_artifact(path)
+                    activity.record("file", str(path.relative_to(base)), status="done" if check["ok"] else "fail",
+                                    format=path.suffix.lstrip("."), size=check["size"], validation=check["detail"])
+                    if check["ok"]:
+                        verified.append(path)
+                made = verified
+                self._show_chips([self._register_change(str(p.relative_to(base)).replace("\\", "/"), "", p.read_text(
+                    encoding="utf-8", errors="ignore") if p.suffix in (".svg", ".txt") else "arquivo binário") for p in made])
+                if made:
+                    self._msg("sys", "✅ Artefatos profissionais validados: " + ", ".join(p.name for p in made), store=False)
+        except Exception as exc:
+            self._msg("sys", f"Não consegui finalizar todos os artefatos: {exc}", store=False)
 
     def _localize_images(self, base: Path) -> None:
         """Baixa as imagens do Pollinations citadas no HTML/CSS e troca por arquivos locais,
@@ -10634,9 +10874,17 @@ class WebApi:
                 continue
             n += 1
             changed.append(self._register_change(rel, old, new))
+            activity.record("file", rel, change="created" if not old else "updated",
+                            lines=max(1, new.count("\n") + 1))
         if not n:
             return None
         self._show_chips(changed)
+        try:
+            self._js(f"codeStreamSaved({n})")
+            if changed:
+                self._js(f"codeStreamDiff({json.dumps(changed[0])})")
+        except Exception:
+            pass
         return None  # preview e aberto no fim do build; chips mostram os arquivos
 
     def _polish_html(self, base: Path) -> None:
@@ -11471,6 +11719,7 @@ class WebApi:
             # GUARD paranoico: destrutivo exige confirmacao visual (mesmo com Auto ligado).
             if is_destructive_cmd(cmd) and not self._confirm_danger(cmd):
                 log_telemetry({"ev": "cmd", "cmd": cmd[:200], "blocked": True})
+                activity.record("command", cmd, status="blocked")
                 self._msg("sys", "🛡️ Bloqueei um comando que pode apagar/alterar coisas (não confirmado).", store=False)
                 continue
             run = cmd
@@ -11480,12 +11729,15 @@ class WebApi:
             _t0 = time.time()
             try:
                 p = subprocess.run(run, shell=True, cwd=str(base), capture_output=True, text=True, timeout=180)
+                activity.record("command", cmd, status="done" if p.returncode == 0 else "fail",
+                                exit=p.returncode, ms=int((time.time() - _t0) * 1000))
                 log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": p.returncode,
                                "ms": int((time.time() - _t0) * 1000), "err": (p.stderr or "")[:160]})
                 out = ((p.stdout or "") + (p.stderr or "")).strip()[:800]
                 if out:
                     self._msg("sys", out, store=False)
             except Exception as exc:
+                activity.record("command", cmd, status="fail", error=str(exc)[:120])
                 log_telemetry({"ev": "cmd", "cmd": cmd[:200], "exit": "erro", "err": str(exc)[:160]})
                 self._msg("sys", f"Falha: {exc}", store=False)
 
