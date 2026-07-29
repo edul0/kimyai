@@ -111,9 +111,14 @@ class LLMRouter:
         mode: str = "coding",
         attachments: list[dict[str, Any]] | None = None,
         visual_items: list[dict[str, Any]] | None = None,
+        exclude_providers: set[str] | None = None,
     ) -> dict[str, Any]:
         has_visual = bool(visual_items)
         route = self.route_for(mode, has_visual=has_visual)
+        if exclude_providers:
+            alternative = [provider for provider in route if provider not in exclude_providers]
+            if alternative:
+                route = alternative
         choice = self.choose(mode, has_visual=has_visual)
         if self.settings.llm_mode != "providers" or not route:
             return self._mock_response(prompt, mode, choice, has_visual=has_visual)
@@ -533,6 +538,8 @@ class LLMRouter:
             return (
                 f"{base} "
                 "Modo coding estrito: se o pedido for para corrigir, estruturar, refatorar ou evoluir codigo existente, nao mude para criacao de site novo e nao troque o tipo de entrega. "
+                "A resposta de implementacao deve ser um `<kemy_artifact title=\"...\">` com cada arquivo completo em `<file path=\"...\">...</file>`, inclusive testes. "
+                "Edite apenas arquivos necessarios; preserve todo comportamento fora do pedido. Nao envie somente snippets quando a tarefa pedir alteracao real. "
                 "Use o contexto do workspace/repositorio ativo e proponha alteracoes diretamente nos arquivos desse projeto. "
                 "Quando o usuario mencionar Vercel, Supabase, Render, GitHub ou deploy, entregue passos praticos e configuracoes reais dessa integracao no proprio projeto. "
                 "Nao invente funcoes fora do pedido. Se houver ambiguidade, escolha a interpretacao mais conservadora focada no objetivo principal do usuario. "

@@ -312,10 +312,23 @@ def build_execution_plan(message: str, mode: str, compact_context: dict[str, Any
             ],
         )
     if effective_mode == "coding" and (_has_any(text, REPO_MARKERS + MAINTENANCE_MARKERS) or str((compact_context or {}).get("repo") or "")):
+        detected_stack = [
+            label
+            for marker, label in (
+                ("fastapi", "FastAPI"),
+                ("supabase", "Supabase/Postgres"),
+                ("react", "React"),
+                ("vite", "Vite"),
+                ("typescript", "TypeScript"),
+                ("python", "Python"),
+                ("node", "Node.js"),
+            )
+            if marker in text
+        ]
         return ExecutionPlan(
             mode="coding",
             intent="manutencao de codigo/workspace",
-            stack="stack real detectada no repositorio ou workspace vinculado",
+            stack=" + ".join(detected_stack) if detected_stack else "stack real detectada no repositorio ou workspace vinculado",
             language="linguagem dos arquivos afetados",
             deliverable="patch no projeto existente com preview quando houver frontend",
             expected_files=["arquivos alterados do repositorio", "relatorio curto de validacao"],

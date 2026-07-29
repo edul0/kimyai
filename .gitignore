@@ -13,8 +13,10 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+.build-venv/
 venv/
 env/
+build-install.pid
 
 # Logs e dados de sessão
 logs/

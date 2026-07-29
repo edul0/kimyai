@@ -23,6 +23,21 @@ class JobAutofixHeuristicsTests(unittest.TestCase):
         better = self.manager._is_review_candidate_better("site", "Concluido.", "<kemy_artifact title=\"x\"></kemy_artifact>")
         self.assertTrue(better)
 
+    def test_engineering_review_accepts_more_verifiable_code(self):
+        original = "Altere a funcao e pronto."
+        candidate = (
+            "Arquivo afetado: `app/service.py`.\n```python\n"
+            "def load():\n    try:\n        return repository.load()\n"
+            "    except TimeoutError:\n        return fallback()\n```\n"
+            "Preserva o contrato existente e evita regressao. Teste com `pytest -q`."
+        )
+        self.assertTrue(self.manager._is_review_candidate_better("coding", original, candidate))
+
+    def test_engineering_review_rejects_verbose_placeholder(self):
+        original = "Arquivo corrigido com validacao, compatibilidade e teste executavel via pytest."
+        candidate = ("TODO: adicione aqui o restante do codigo. " * 30).strip()
+        self.assertFalse(self.manager._is_review_candidate_better("coding", original, candidate))
+
     def test_site_edit_context_reuses_previous_project(self):
         session_data = {
             "historico": [

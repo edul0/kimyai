@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
 import html
@@ -9,16 +10,20 @@ import re
 import time
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .agents import build_coding_prompt, build_local_prompt_brief, build_prompt_refiner_prompt
+from .agent_runtime import SolutionHistory, StrongSandboxRuntime, confidence_from_evidence
 from .artifact_parser import parse_kemy_artifact, strip_artifact_wrapper
 from .attachment_service import prepare_attachments
+from .code_intelligence import RepositoryContext, RepositoryIntelligence, SafeCodeValidator, reasoning_budget
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
 from .document_service import DocumentService
+from .evaluation import DeliveryEvaluator
+from .frontend_runtime import BrowserReport, FrontendBrowserRuntime
 from .github_service import GitHubService
 from .intent_planner import build_execution_plan, classify_request_mode, validate_request_intent
 from .llm_router import LLMRouter
@@ -30,7 +35,7 @@ from .tools import ExternalTools
 
 
 def utcnow() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class JobCanceledError(Exception):
@@ -54,6 +59,11 @@ class JobManager:
             user_email=settings.github_user_email,
         )
         self.response_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.code_validator = SafeCodeValidator()
+        self.frontend_browser = FrontendBrowserRuntime()
+        self.solution_history = SolutionHistory(storage)
+        self.delivery_evaluator = DeliveryEvaluator()
+        self.strong_sandbox = StrongSandboxRuntime()
 
     def create(self, session_id: str, message: str, mode: str, attachments: list[dict[str, Any]] | None = None, github_repo: str | None = None) -> JobState:
         now = utcnow()
@@ -256,6 +266,27 @@ class JobManager:
                         "Regra obrigatoria: atualize o mesmo workspace de codigo do contexto acima.\n"
                         "Preserve o que funciona e aplique somente o pedido atual.\n"
                     )
+            repository_context: RepositoryContext | None = None
+            if job.modo == "coding":
+                try:
+                    repository_context = RepositoryIntelligence(self.settings.workspace_root).build_context(job.pedido)
+                except (OSError, ValueError):
+                    repository_context = None
+                if repository_context and repository_context.tree:
+                    technical_memory = session_data.get("technical_memory") or {}
+                    project_id = hashlib.sha256(repository_context.root.encode("utf-8")).hexdigest()[:20]
+                    previous_solutions = self.solution_history.relevant(project_id, job.pedido)
+                    prompt = (
+                        f"{prompt}\n\n"
+                        "[CONTEXTO REAL DO REPOSITORIO - FONTE DE VERDADE]\n"
+                        f"{repository_context.as_prompt()}\n\n"
+                        "[MEMORIA TECNICA DA SESSAO]\n"
+                        f"{json.dumps(technical_memory, ensure_ascii=False)[:5000]}\n\n"
+                        "[SOLUCOES ANTERIORES COM EVIDENCIA]\n"
+                        f"{json.dumps(previous_solutions, ensure_ascii=False)[:5000]}\n\n"
+                        "Nao invente arquivo, simbolo, rota ou dependencia que nao apareca no contexto. "
+                        "Se criar algo novo, marque claramente como novo e justifique.\n"
+                    )
             if attachment_context.get("prompt_context"):
                 prompt = f"{prompt}\n\n[ANEXOS PROCESSADOS]\n{attachment_context['prompt_context']}"
             execution_plan_data = execution_plan.as_dict()
@@ -273,7 +304,10 @@ class JobManager:
                 self._raise_if_canceled(job)
                 result = await self.pollinations.generate(job.pedido)
                 self._raise_if_canceled(job)
-                result["tools_used"] = ["pollinations"]
+                result = await self._review_generated_image(job, result)
+                result["tools_used"] = ["pollinations"] + (
+                    ["visual-art-director"] if result.get("visual_qa", {}).get("provider") else []
+                )
                 result["execution_plan"] = execution_plan_data
                 result["intent_validation"] = intent_validation.as_dict()
                 await self._finish_job(job, result)
@@ -337,9 +371,19 @@ class JobManager:
                 self._raise_if_canceled(job)
                 result = await self._maybe_self_review(job, prompt, result, execution_plan.as_prompt())
                 self._raise_if_canceled(job)
+                if job.modo == "coding" and self.settings.code_validation_enabled:
+                    result = await self._validate_and_autofix_code(
+                        job, prompt, result, execution_plan.as_prompt(), repository_context
+                    )
+                    self._raise_if_canceled(job)
                 self._set_cached_response(cache_key, result)
             if job.modo == "site":
                 result = self._ensure_site_artifact(job, result)
+                if self.settings.code_validation_enabled:
+                    result = await self._validate_and_autofix_code(
+                        job, prompt, result, execution_plan.as_prompt(), repository_context=None
+                    )
+                    result = self._ensure_site_artifact(job, result)
             result = self._hydrate_artifacts(job, result)
             self._raise_if_canceled(job)
             result["pipeline"] = {
@@ -378,6 +422,61 @@ class JobManager:
             self.save(job)
             await self.supabase.insert_job(job.model_dump())
 
+    async def _review_generated_image(self, job: JobState, result: dict[str, Any]) -> dict[str, Any]:
+        """Uses a free visual model as art director when Gemini is configured."""
+        if self.settings.llm_mode != "providers" or not self.settings.gemini_api_key:
+            result["visual_qa"] = {
+                "status": "local-only",
+                "message": "Formato e integridade validados; critica semantica requer Gemini gratuito configurado.",
+            }
+            return result
+        data_url = str(result.get("image_data_url") or "")
+        if not data_url.startswith("data:image/") or "," not in data_url:
+            return result
+        try:
+            header, encoded = data_url.split(",", 1)
+            image_bytes = base64.b64decode(encoded, validate=True)
+            mime_type = header.split(";", 1)[0].replace("data:", "")
+        except (ValueError, TypeError):
+            return result
+        critique_prompt = (
+            "Voce e Kemy Art Director QA. Compare a imagem anexada com o pedido literal do usuario.\n"
+            "Valide: assunto, quantidade de elementos, marca/texto exato, estilo, paleta, composicao, formato, "
+            "legibilidade, anatomia, artefatos, recortes e ausencia de elementos aleatorios.\n"
+            "Comece obrigatoriamente com APROVADO ou REPROVADO. Depois escreva no maximo 6 correcoes concretas. "
+            "Nao elogie e nao exponha cadeia de pensamento.\n\n"
+            f"Pedido: {job.pedido}\n"
+            f"Brief usado: {result.get('enhanced_prompt', '')[:5000]}"
+        )
+        critique = await self.router.generate(
+            critique_prompt,
+            mode="auditoria",
+            visual_items=[{"data": image_bytes, "mime_type": mime_type}],
+        )
+        text = str(critique.get("raw") or "").strip()
+        approved = text.upper().startswith("APROVADO")
+        result["visual_qa"] = {
+            "status": "approved" if approved else "rejected",
+            "critique": text[:2500],
+            "provider": critique.get("provider"),
+            "model": critique.get("model"),
+        }
+        if approved:
+            return result
+        repaired_prompt = (
+            f"{job.pedido}. ART DIRECTOR CORRECTIONS (mandatory): {text[:1800]}. "
+            "Preserve every original user requirement while fixing these issues."
+        )
+        regenerated = await self.pollinations.generate(repaired_prompt)
+        regenerated["original_user_prompt"] = job.pedido
+        regenerated["visual_qa"] = {
+            "status": "regenerated-after-critique",
+            "critique": text[:2500],
+            "provider": critique.get("provider"),
+            "model": critique.get("model"),
+        }
+        return regenerated
+
     async def _refine_prompt(
         self,
         job: JobState,
@@ -413,30 +512,240 @@ class JobManager:
             return result
         raw = str(result.get("raw") or result.get("summary") or "").strip()
         reason = self._self_review_reason(job.modo, result, raw)
+        if not reason and self.settings.deep_reasoning_enabled:
+            reason = "revisao-deliberada-de-engenharia"
         if not reason:
             return result
-        review_prompt = self._build_self_review_prompt(job, prompt, raw, execution_plan_prompt, reason)
+        current = dict(result)
+        current_raw = raw
+        reviews: list[dict[str, Any]] = []
+        passes = min(3, max(1, int(self.settings.reasoning_review_passes or 1)))
+        if self.settings.adaptive_reasoning_budget:
+            passes = reasoning_budget(job.pedido)
+        draft_provider = str(result.get("provider") or "")
+        for pass_number in range(1, passes + 1):
+            review_prompt = self._build_self_review_prompt(
+                job, prompt, current_raw, execution_plan_prompt, reason, pass_number=pass_number
+            )
+            try:
+                reviewed = await self.router.generate(
+                    review_prompt,
+                    mode="auditoria",
+                    exclude_providers={draft_provider} if draft_provider else None,
+                )
+                candidate = str(reviewed.get("raw") or reviewed.get("summary") or "").strip()
+                accepted = bool(candidate) and self._is_review_candidate_better(job.modo, current_raw, candidate)
+                reviews.append({
+                    "pass": pass_number,
+                    "accepted": accepted,
+                    "provider": reviewed.get("provider"),
+                    "model": reviewed.get("model"),
+                })
+                if not accepted:
+                    break
+                current_raw = candidate[: self.settings.self_review_max_chars]
+                current["raw"] = current_raw
+                current["summary"] = reviewed.get("summary") or current.get("summary") or "Resposta refinada automaticamente."
+            except Exception as exc:
+                reviews.append({"pass": pass_number, "accepted": False, "error": type(exc).__name__})
+                break
+        applied = any(item["accepted"] for item in reviews)
+        current["qa_autofix"] = {"applied": applied, "reason": reason, "passes": reviews}
+        if applied:
+            current["tools_used"] = list(dict.fromkeys((result.get("tools_used") or []) + ["deep-reasoning-qa"]))
+        return current
+
+    async def _validate_and_autofix_code(
+        self,
+        job: JobState,
+        prompt: str,
+        result: dict[str, Any],
+        execution_plan_prompt: str,
+        repository_context: RepositoryContext | None,
+    ) -> dict[str, Any]:
+        current = dict(result)
+        raw = str(current.get("raw") or "")
+        existing_paths = set(repository_context.tree) if repository_context else None
+        allow_new_files = any(
+            marker in job.pedido.lower()
+            for marker in ("crie", "criar", "adicione", "adicionar", "novo arquivo", "nova rota", "implemente")
+        )
+        require_tests = job.modo == "coding" and any(
+            marker in job.pedido.lower()
+            for marker in ("corrija", "conserte", "bug", "erro", "refatore", "implemente", "adicione")
+        )
+        design_request = job.pedido if job.modo == "site" or any(
+            marker in job.pedido.lower()
+            for marker in ("design", "interface", "frontend", "visual", "layout", "cor ", "tema")
+        ) else ""
+        base_root = repository_context.root if repository_context else None
+        report = self.code_validator.validate(
+            raw,
+            existing_paths=existing_paths,
+            allow_new_files=allow_new_files,
+            base_root=base_root,
+            require_tests=require_tests,
+            design_request=design_request,
+        )
+        browser_report: BrowserReport | None = None
+        if job.modo == "site" and report.ok and self.settings.browser_qa_enabled:
+            browser_report = await self.frontend_browser.inspect(raw)
+            visual_design_critique = await self._review_frontend_screenshot(job, browser_report)
+            if visual_design_critique and visual_design_critique.upper().startswith("REPROVADO"):
+                browser_report.ok = False
+                browser_report.errors.append(f"Direcao de arte: {visual_design_critique[:1800]}")
+            if browser_report.available and not browser_report.ok:
+                report.ok = False
+                report.errors.extend(browser_report.errors)
+                report.checks.append({"name": "browser-runtime", "status": "failed", "detail": browser_report.as_prompt()[:1600]})
+        attempts: list[dict[str, Any]] = [{"attempt": 0, **report.as_dict()}]
+        max_attempts = min(3, max(0, int(self.settings.code_autofix_attempts or 0)))
+        original_provider = str(result.get("provider") or "")
+        for attempt in range(1, max_attempts + 1):
+            if report.ok:
+                break
+            correction_prompt = (
+                "Voce e Kemy Code Repair. Corrija a entrega usando os erros reais da validacao.\n"
+                "Responda SOMENTE com um kemy_artifact completo. Cada arquivo alterado deve usar "
+                "<file path=\"caminho/real\">conteudo completo</file>.\n"
+                "Aplique patch incremental: preserve APIs, nomes e comportamento que nao precisam mudar.\n"
+                "Inclua ou atualize testes especificos para o defeito. Nao use TODO, pseudocodigo ou dependencias pagas.\n"
+                "Nao invente arquivos/simbolos ausentes sem declarar a criacao.\n\n"
+                f"Esta e a tentativa {attempt}. Replaneje com base nas evidencias atuais. "
+                "Se um erro se repetiu, descarte a hipotese anterior e escolha uma abordagem tecnicamente diferente; "
+                "nao repita o mesmo patch com mais texto.\n"
+                f"Modo da tarefa: {job.modo}. Para frontend, corrija tela vazia, assets, scripts e interacoes sem trocar o design pedido.\n\n"
+                f"Pedido original:\n{job.pedido}\n\n"
+                f"Plano:\n{execution_plan_prompt}\n\n"
+                f"Erros da execucao/analise estatica:\n{report.as_prompt()}\n\n"
+                f"Contexto relevante do repositorio:\n"
+                f"{repository_context.as_prompt()[:14000] if repository_context else '- indisponivel'}\n\n"
+                f"Entrega atual:\n{raw[:16000]}"
+            )
+            repaired = await self.router.generate(
+                correction_prompt,
+                mode="coding",
+                exclude_providers={original_provider} if original_provider else None,
+            )
+            candidate = str(repaired.get("raw") or "")
+            candidate_report = self.code_validator.validate(
+                candidate,
+                existing_paths=existing_paths,
+                allow_new_files=allow_new_files,
+                base_root=base_root,
+                require_tests=require_tests,
+                design_request=design_request,
+            )
+            candidate_browser: BrowserReport | None = None
+            if job.modo == "site" and candidate_report.ok and self.settings.browser_qa_enabled:
+                candidate_browser = await self.frontend_browser.inspect(candidate)
+                candidate_critique = await self._review_frontend_screenshot(job, candidate_browser)
+                if candidate_critique and candidate_critique.upper().startswith("REPROVADO"):
+                    candidate_browser.ok = False
+                    candidate_browser.errors.append(f"Direcao de arte: {candidate_critique[:1800]}")
+                if candidate_browser.available and not candidate_browser.ok:
+                    candidate_report.ok = False
+                    candidate_report.errors.extend(candidate_browser.errors)
+                    candidate_report.checks.append({
+                        "name": "browser-runtime", "status": "failed",
+                        "detail": candidate_browser.as_prompt()[:1600],
+                    })
+            attempts.append({"attempt": attempt, **candidate_report.as_dict(), "provider": repaired.get("provider"), "model": repaired.get("model")})
+            if candidate_report.ok or len(candidate_report.errors) < len(report.errors):
+                raw = candidate
+                report = candidate_report
+                browser_report = candidate_browser
+                current["raw"] = raw
+                current["summary"] = repaired.get("summary") or current.get("summary")
+            else:
+                break
+        current["code_validation"] = {
+            "ok": report.ok,
+            "attempts": attempts,
+            "sandbox": "isolated-project-copy-static-only",
+        }
+        browser_payload = browser_report.as_dict() if browser_report else {
+            "available": False, "ok": False, "warnings": ["Browser QA nao aplicavel ou validacao estatica falhou antes da abertura."]
+        }
+        current["browser_validation"] = browser_payload
+        sandbox_payload = {"available": False, "ok": False, "error": "Sandbox forte desativado ou validacao estatica pendente."}
+        if self.settings.strong_sandbox_enabled and report.ok:
+            sandbox_payload = await asyncio.to_thread(
+                self.strong_sandbox.validate_artifact,
+                raw,
+                base_root,
+                existing_paths,
+            )
+        current["sandbox_validation"] = sandbox_payload
+        current["confidence"] = confidence_from_evidence(
+            report.ok, browser=browser_payload, sandbox=sandbox_payload
+        ).as_dict()
+        current["agent_run"] = {
+            "state": "completed" if report.ok else "needs_attention",
+            "goal": job.pedido[:500],
+            "iterations": len(attempts),
+            "completion_criteria": [
+                "arquivos pertencem ao workspace ou foram criados explicitamente",
+                "sintaxe e formatos passam nos validadores locais",
+                "nenhum caminho escapa da copia isolada",
+                "testes acompanham alteracoes quando aplicavel",
+            ],
+            "evidence": {
+                "validation_ok": report.ok,
+                "checks": report.checks,
+                "remaining_errors": report.errors,
+                "repository_files_indexed": len(repository_context.tree) if repository_context else 0,
+                "symbols_indexed": len(repository_context.symbols) if repository_context else 0,
+            },
+        }
+        if repository_context:
+            current["technical_memory"] = repository_context.technical_memory()
+            project_id = hashlib.sha256(repository_context.root.encode("utf-8")).hexdigest()[:20]
+            self.solution_history.record(project_id, {
+                "fingerprint": hashlib.sha256(f"{job.pedido}|{raw}".encode("utf-8")).hexdigest()[:24],
+                "request": job.pedido[:500],
+                "success": report.ok,
+                "errors": report.errors[:12],
+                "checks": report.checks[:20],
+                "provider": current.get("provider"),
+                "model": current.get("model"),
+                "confidence": current["confidence"],
+            })
+        current["tools_used"] = list(dict.fromkeys(
+            (current.get("tools_used") or []) +
+            ["repository-index", "safe-static-analysis"] +
+            (["code-autofix"] if len(attempts) > 1 else [])
+        ))
+        current["evaluation"] = self.delivery_evaluator.evaluate(current)
+        return current
+
+    async def _review_frontend_screenshot(self, job: JobState, report: BrowserReport) -> str:
+        if (
+            not report.available
+            or not report.screenshot_data_url
+            or self.settings.llm_mode != "providers"
+            or not self.settings.gemini_api_key
+        ):
+            return ""
         try:
-            reviewed = await self.router.generate(review_prompt, mode="auditoria")
-            candidate = str(reviewed.get("raw") or reviewed.get("summary") or "").strip()
-            if not candidate:
-                return result
-            if not self._is_review_candidate_better(job.modo, raw, candidate):
-                result["qa_autofix"] = {"applied": False, "reason": reason, "discarded": True}
-                return result
-            merged = dict(result)
-            merged["raw"] = candidate[: self.settings.self_review_max_chars]
-            merged["summary"] = reviewed.get("summary") or result.get("summary") or "Resposta refinada automaticamente."
-            merged["qa_autofix"] = {
-                "applied": True,
-                "reason": reason,
-                "provider": reviewed.get("provider"),
-                "model": reviewed.get("model"),
-            }
-            merged["tools_used"] = list(dict.fromkeys((result.get("tools_used") or []) + ["auto-qa-refiner"]))
-            return merged
-        except Exception:
-            return result
+            header, encoded = report.screenshot_data_url.split(",", 1)
+            image_bytes = base64.b64decode(encoded, validate=True)
+            mime_type = header.split(";", 1)[0].replace("data:", "")
+        except (ValueError, TypeError):
+            return ""
+        prompt = (
+            "Voce e Kemy Product Design QA. Compare o screenshot desktop com o pedido literal.\n"
+            "Avalie aderencia ao segmento, marca, publico, cores, estilo, hierarquia, contraste, tipografia, grid, "
+            "densidade, legibilidade, acabamento e identidade propria. Reprove templates genericos ou visual diferente "
+            "do solicitado. Comece com APROVADO ou REPROVADO e liste no maximo 6 correcoes objetivas.\n\n"
+            f"Pedido: {job.pedido}"
+        )
+        reviewed = await self.router.generate(
+            prompt,
+            mode="auditoria",
+            visual_items=[{"data": image_bytes, "mime_type": mime_type}],
+        )
+        return str(reviewed.get("raw") or "").strip()
 
     def _self_review_reason(self, mode: str, result: dict[str, Any], raw: str) -> str:
         lowered = raw.lower()
@@ -463,10 +772,14 @@ class JobManager:
         raw: str,
         execution_plan_prompt: str,
         reason: str,
+        pass_number: int = 1,
     ) -> str:
         base = (
-            "Voce e Kimi QA Refiner. Reescreva a resposta final para o usuario em alta qualidade, sem explicar o processo.\n"
-            "Objetivo: manter o pedido original e corrigir lacunas de entrega.\n"
+            "Voce e Kemy Deep QA, um segundo engenheiro senior independente.\n"
+            "Analise silenciosamente a solucao, encontre falhas reais e devolva somente a versao final corrigida.\n"
+            "Use raciocinio interno estruturado: requisitos -> arquitetura -> corretude -> casos extremos -> seguranca -> testes.\n"
+            "Nao exponha cadeia de pensamento. Mostre apenas decisoes tecnicas necessarias e a entrega final.\n"
+            "Objetivo: preservar o pedido original, corrigir lacunas e tornar a entrega executavel.\n"
             "NUNCA devolva analise de auditoria, checklist interno, JSON cru ou metacomentario.\n"
         )
         if job.modo == "site":
@@ -474,15 +787,21 @@ class JobManager:
                 "Obrigatorio para site: responder com <kemy_artifact title=\"...\"> contendo pelo menos:\n"
                 "1) <file path=\"preview.html\"> com HTML completo\n"
                 "2) <file path=\"README.md\"> com instrucoes de uso\n"
+                "Audite aderencia visual literal: nome/marca, segmento, publico, cores, estilo, secoes, componentes e funcionalidades pedidos.\n"
+                "Audite qualidade de design: hierarquia, contraste, tipografia, espacamento, grid, responsividade, acessibilidade, estados e microinteracoes.\n"
+                "Rejeite template generico, mesmo bonito, se nao representar exatamente o pedido do usuario.\n"
                 "Sem texto fora do artifact.\n"
             )
         else:
             extra = (
-                "Para coding: entregar resposta tecnica acionavel com diagnostico curto, correcao proposta e trechos de codigo objetivos.\n"
-                "Sem desculpas vagas. Sem enrolacao.\n"
+                "Para coding: confira aderencia ao repositorio e a stack, imports, tipos, contratos, tratamento de erros, "
+                "concorrencia, seguranca, compatibilidade e regressao. Preserve APIs existentes.\n"
+                "Entregue diagnostico curto, arquivos afetados, patch/codigo completo e testes executaveis.\n"
+                "Nao aceite placeholders, pseudocodigo, funcoes vazias, dependencias pagas obrigatorias ou desculpas vagas.\n"
             )
         return (
             f"{base}{extra}\n"
+            f"Passo de revisao: {pass_number}\n"
             f"Motivo do refino: {reason}\n\n"
             f"Plano esperado:\n{execution_plan_prompt}\n\n"
             f"Pedido original:\n{job.pedido}\n\n"
@@ -498,11 +817,33 @@ class JobManager:
             candidate_ok = "<kemy_artifact" in candidate_l or "<html" in candidate_l
             if candidate_ok and not original_ok:
                 return True
-        if len(candidate.strip()) >= max(320, int(len(original.strip()) * 1.2)):
+        original_score = self._engineering_quality_score(mode, original)
+        candidate_score = self._engineering_quality_score(mode, candidate)
+        if candidate_score > original_score:
             return True
-        if "```" in candidate and "```" not in original:
+        if candidate_score == original_score and len(candidate.strip()) >= max(320, int(len(original.strip()) * 1.08)):
             return True
         return False
+
+    def _engineering_quality_score(self, mode: str, text: str) -> int:
+        """Cheap deterministic gate: a review must add engineering evidence, not verbosity."""
+        lowered = text.lower()
+        score = min(len(text) // 500, 6)
+        signals = {
+            "implementation": ["```", "<file path=", "diff --git", "arquivo", "files"],
+            "verification": ["teste", "pytest", "npm test", "compileall", "como validar"],
+            "correctness": ["erro", "excecao", "fallback", "edge case", "caso limite", "validacao"],
+            "security": ["segur", "xss", "secret", "variavel de ambiente", "sanitize", "escape"],
+            "compatibility": ["compatib", "preserv", "regress", "api existente", "contrato"],
+        }
+        for markers in signals.values():
+            if any(marker in lowered for marker in markers):
+                score += 2
+        if mode == "site" and ("<kemy_artifact" in lowered or "<!doctype html" in lowered):
+            score += 5
+        penalties = ["todo", "fixme", "adicione aqui", "restante do codigo", "não posso", "nao posso"]
+        score -= sum(2 for marker in penalties if marker in lowered)
+        return score
 
     def _build_site_edit_context(self, job: JobState, session_data: dict[str, Any]) -> str:
         snapshot = self._latest_site_snapshot(session_data)
@@ -1888,6 +2229,53 @@ Site de contingencia personalizado pela Kemy para: {pedido}
                 "orchestrator_mode": pipeline.get("orchestrator_mode"),
                 "system": pipeline.get("system"),
             }
+        if isinstance(result.get("code_validation"), dict):
+            validation = result["code_validation"]
+            metadata["code_validation"] = {
+                "ok": validation.get("ok"),
+                "sandbox": validation.get("sandbox"),
+                "attempt_count": len(validation.get("attempts") or []),
+            }
+        if isinstance(result.get("agent_run"), dict):
+            run = result["agent_run"]
+            metadata["agent_run"] = {
+                "state": run.get("state"),
+                "iterations": run.get("iterations"),
+                "completion_criteria": run.get("completion_criteria"),
+                "evidence": run.get("evidence"),
+            }
+        if isinstance(result.get("visual_qa"), dict):
+            visual_qa = result["visual_qa"]
+            metadata["visual_qa"] = {
+                "status": visual_qa.get("status"),
+                "provider": visual_qa.get("provider"),
+                "model": visual_qa.get("model"),
+                "critique": str(visual_qa.get("critique") or "")[:1200],
+            }
+        if isinstance(result.get("image_validation"), dict):
+            metadata["image_validation"] = result["image_validation"]
+        if isinstance(result.get("browser_validation"), dict):
+            browser = result["browser_validation"]
+            metadata["browser_validation"] = {
+                "available": browser.get("available"),
+                "ok": browser.get("ok"),
+                "errors": list(browser.get("errors") or [])[:12],
+                "warnings": list(browser.get("warnings") or [])[:12],
+                "viewports": list(browser.get("viewports") or [])[:4],
+            }
+        if isinstance(result.get("confidence"), dict):
+            metadata["confidence"] = result["confidence"]
+        if isinstance(result.get("sandbox_validation"), dict):
+            sandbox = result["sandbox_validation"]
+            metadata["sandbox_validation"] = {
+                "available": sandbox.get("available"),
+                "ok": sandbox.get("ok"),
+                "command": sandbox.get("command"),
+                "error": sandbox.get("error"),
+                "returncode": sandbox.get("returncode"),
+            }
+        if isinstance(result.get("evaluation"), dict):
+            metadata["evaluation"] = result["evaluation"]
         workspace_snapshot = result.get("workspace_snapshot")
         if not isinstance(workspace_snapshot, dict):
             workspace_snapshot = self._workspace_snapshot_from_result(result)
@@ -1964,6 +2352,9 @@ Site de contingencia personalizado pela Kemy para: {pedido}
         if workspace_snapshot:
             assistant_entry["workspace_snapshot"] = workspace_snapshot
             assistant_entry["result"]["workspace_snapshot"] = workspace_snapshot
+        if isinstance(result.get("technical_memory"), dict):
+            data["technical_memory"] = result["technical_memory"]
+            assistant_entry["technical_memory"] = result["technical_memory"]
         history.append(assistant_entry)
         memory = data.setdefault("memoria", [])
         fact = self._memory_fact(pedido)
