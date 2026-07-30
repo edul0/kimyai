@@ -40,10 +40,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog
 
 try:
-    from runtime_services import CredentialVault, activity, migrate_env_secrets
+    from runtime_services import CredentialVault, TaskStore, activity, migrate_env_secrets
     from professional_artifacts import build_docx, build_logo_kit, build_pdf, build_pptx, validate_artifact
 except ImportError:  # importado como pacote em testes
-    from local_app.runtime_services import CredentialVault, activity, migrate_env_secrets
+    from local_app.runtime_services import CredentialVault, TaskStore, activity, migrate_env_secrets
     from local_app.professional_artifacts import build_docx, build_logo_kit, build_pdf, build_pptx, validate_artifact
 
 if getattr(sys, "frozen", False):
@@ -3107,69 +3107,6 @@ def _healthcheck(url: str, timeout_seconds: float = 1.8) -> bool:
         return False
 
 
-class TaskStore:
-    """Fila de tarefas de 2º plano em SQLite (ACID) — sobrevive a crash/queda de energia.
-    Guarda o plano e QUAL passo já concluiu, pra RETOMAR de onde parou (não do zero)."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = str(path)
-        try:
-            with self._c() as c:
-                c.execute("create table if not exists tasks(id text primary key, prompt text, "
-                          "folder text, plan text, step integer default 0, status text, "
-                          "created real, updated real, result text)")
-        except Exception:
-            pass
-
-    def _c(self):
-        import sqlite3
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.execute("pragma journal_mode=WAL")   # durabilidade mesmo em crash
-        return conn
-
-    def add(self, tid: str, prompt: str, folder: str) -> None:
-        try:
-            now = time.time()
-            with self._c() as c:
-                c.execute("insert or replace into tasks(id,prompt,folder,plan,step,status,created,updated,result)"
-                          " values(?,?,?,?,?,?,?,?,?)", (tid, prompt, folder, "[]", 0, "running", now, now, ""))
-        except Exception:
-            pass
-
-    def set_plan(self, tid: str, plan: list) -> None:
-        try:
-            with self._c() as c:
-                c.execute("update tasks set plan=?,updated=? where id=?",
-                          (json.dumps(plan), time.time(), tid))
-        except Exception:
-            pass
-
-    def set_step(self, tid: str, step: int) -> None:
-        try:
-            with self._c() as c:
-                c.execute("update tasks set step=?,updated=? where id=?", (step, time.time(), tid))
-        except Exception:
-            pass
-
-    def finish(self, tid: str, status: str, result: str = "") -> None:
-        try:
-            with self._c() as c:
-                c.execute("update tasks set status=?,result=?,updated=? where id=?",
-                          (status, (result or "")[:2000], time.time(), tid))
-        except Exception:
-            pass
-
-    def unfinished(self) -> list:
-        try:
-            with self._c() as c:
-                cur = c.execute("select id,prompt,folder,plan,step from tasks where status='running' "
-                                "order by updated desc")
-                return [{"id": r[0], "prompt": r[1], "folder": r[2],
-                         "plan": json.loads(r[3] or "[]"), "step": r[4]} for r in cur.fetchall()]
-        except Exception:
-            return []
-
-
 class LocalAPI:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -5160,6 +5097,8 @@ class WebApi:
         self.continuous = False
         self.autonomous = False
         self.boost = True   # ✨ Capricho: autorrevisao do codigo (qualidade nivel pro, gratis)
+        self.performance_profile = "balanced"
+        self.deep_mode = False
         self.convos_file = config_dir() / "conversations.json"
         self.convos, self.active_id = [], None
         self._load_convos()
@@ -5290,6 +5229,11 @@ class WebApi:
     def _state(self, s: str) -> None:
         self._last_state = s   # lido pelo overlay do OBS (/state)
         self._js(f"kemyState({json.dumps(s)})")
+        if s == "idle":
+            try:
+                self._js("refreshRuntimeStatus()")
+            except Exception:
+                pass
 
     def obs_state(self) -> dict:
         """Estado atual pro overlay transparente do OBS (avatar.html)."""
@@ -5406,7 +5350,8 @@ class WebApi:
         it = self._cur() or {}
         return {"state": "idle" if self.connected else "offline", "active": self.active_id,
                 "convos": [{"id": c["id"], "title": c.get("title") or "Nova conversa"} for c in self.convos],
-                "log": it.get("log", []), "ai": self.get_ai_status()}
+                "log": it.get("log", []), "ai": self.get_ai_status(),
+                "performance_profile": self.performance_profile}
 
     def get_ai_status(self) -> dict:
         """Resumo seguro para a UI: nunca inclui chaves, tokens ou credenciais."""
@@ -5447,6 +5392,37 @@ class WebApi:
         self._run_background(task["prompt"], tid=task["id"], bg=Path(task["folder"]),
                              resume_from=int(task.get("step", 0)))
         return True
+
+    def list_artifacts(self) -> list:
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        allowed = {".pdf", ".pptx", ".docx", ".xlsx", ".svg", ".png", ".jpg", ".jpeg", ".zip"}
+        items = []
+        try:
+            for path in base.rglob("*"):
+                if path.is_file() and path.suffix.lower() in allowed and ".git" not in path.parts:
+                    stat = path.stat()
+                    items.append({"path": str(path.relative_to(base)).replace("\\", "/"),
+                                  "name": path.name, "format": path.suffix.lower().lstrip("."),
+                                  "size": stat.st_size, "updated": stat.st_mtime})
+        except Exception:
+            pass
+        return sorted(items, key=lambda item: item["updated"], reverse=True)[:100]
+
+    def open_artifact(self, rel: str) -> bool:
+        it = self._cur()
+        base = Path(it["project"]) if it else (self.workspace_root / "projeto")
+        try:
+            target = (base / str(rel or "")).resolve()
+            if base.resolve() not in target.parents or not target.is_file():
+                return False
+            if os.name == "nt":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            else:
+                webbrowser.open(target.as_uri())
+            return True
+        except Exception:
+            return False
 
     def get_state(self) -> str:
         """Consultado pela UI como rede de seguranca (caso o push de estado falhe)."""
@@ -6382,6 +6358,21 @@ class WebApi:
         else:
             self.autonomous = not self.autonomous
             self._js(f"setToggle('auto',{json.dumps(self.autonomous)})")
+
+    def cycle_performance_profile(self) -> str:
+        profiles = ("fast", "balanced", "deep")
+        current = getattr(self, "performance_profile", "balanced")
+        profile = profiles[(profiles.index(current) + 1) % len(profiles)] if current in profiles else "balanced"
+        self.performance_profile = profile
+        self.econ = profile == "fast"
+        self.boost = profile != "fast"
+        self.deep_mode = profile == "deep"
+        self._js(f"setPerformanceProfile({json.dumps(profile)})")
+        labels = {"fast": "Rápido: menos chamadas e contexto enxuto.",
+                  "balanced": "Equilibrado: velocidade e revisão automática.",
+                  "deep": "Profundo: máxima revisão e raciocínio, pode demorar mais."}
+        self._msg("sys", labels[profile], store=False)
+        return profile
 
     def stop_speak(self) -> None:
         self.speaker.stop()
@@ -9341,7 +9332,7 @@ class WebApi:
             self._panel_step(2, "done")
         # Revisao cruzada SO quando NAO houve MoA (a sintese do MoA ja e uma revisao) -> evita
         # empilhar mais uma chamada lenta e a Kemy "travar" em pedidos complexos.
-        if self.boost and not usou_moa:
+        if self.boost and (not usou_moa or self.deep_mode):
             self._panel_step(3, "doing")
             reply = self._refine(system, hist, text, reply)   # revisao cruzada
             self._panel_step(3, "done")

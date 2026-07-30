@@ -578,6 +578,9 @@
         <button class="iconbtn" onclick="openActivity()" title="Ver modelos, comandos, testes e arquivos">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3"/></svg><span class="lab">Atividade</span>
         </button>
+        <button class="iconbtn" onclick="openArtifacts()" title="Abrir documentos, slides, PDFs e imagens">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 12h8M8 16h5"/></svg><span class="lab">Artefatos</span>
+        </button>
         <button class="iconbtn" onclick="api('see_screen')" title="A Kemy olha sua tela"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>Ver tela</button>
         <div class="menuwrap">
           <button class="iconbtn" onclick="toggleMenu()" title="Mais opções"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span class="badge" id="updBadge"></span></button>
@@ -695,7 +698,7 @@
             <button class="talk" id="talk" onclick="api('listen')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>Falar</button>
             <button class="tg conv" id="tgConv" onclick="toggle('conv')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-8 8H7l-4 3v-11a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg><span class="lab">Conversa</span></button>
             <button class="tg auto" id="tgAuto" onclick="toggle('auto')"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 4 14 11 14 10 22 20 10 13 10"/></svg><span class="lab">Auto</span></button>
-            <button class="tg boost on" id="tgBoost" onclick="toggle('boost')" title="Autorrevisão do código (qualidade nível pro)"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg><span class="lab">Capricho: ON</span></button>
+            <button class="tg boost on" id="tgBoost" onclick="cycleProfile()" title="Alternar velocidade e profundidade"><svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg><span class="lab">Equilibrado</span></button>
           </div>
           <button class="tg mute" onclick="api('stop_speak')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 3 9 3 15 6 15 11 19" fill="currentColor"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>Silenciar</button>
         </div>
@@ -895,6 +898,15 @@
       detail.textContent=configured?'Clique para diagnosticar':'Abra Configurações para adicionar uma chave';
     }
   }
+  var _runtimeRefreshAt=0;
+  window.refreshRuntimeStatus=function(){
+    var now=Date.now();if(now-_runtimeRefreshAt<1800)return;_runtimeRefreshAt=now;
+    var p=api('get_activity_status');if(!p||!p.then)return;
+    p.then(function(data){var last=data&&data.last_model,detail=document.getElementById('aiHealthDetail');
+      if(last&&detail){var seconds=last.ms!=null?(last.ms/1000).toFixed(1)+'s':'';
+        detail.textContent=last.label+(seconds?' · '+seconds:'')+(last.fallback?' · fallback':'');}
+    });
+  };
   function vtsConnected(){ /* o rosto e a carinha do app; nao escondemos mais */ }
   function copyText(btn,text){
     function done(){ var o=btn.textContent; btn.textContent='✓ Copiado'; setTimeout(function(){btn.textContent=o;},1200); }
@@ -1060,6 +1072,7 @@
   function closeActivity(){document.getElementById('activityModal').classList.remove('open');}
   function openActivity(){
     var modal=document.getElementById('activityModal'),list=document.getElementById('activityList');modal.classList.add('open');
+    document.getElementById('activityTitle').textContent='Atividade da Kemy';
     list.innerHTML='<div class="activityitem"><span>…</span><span>Carregando atividade</span></div>';
     var p=api('get_activity_status');if(!p||!p.then){list.innerHTML='<div class="activityitem">Disponível dentro do aplicativo.</div>';return;}
     p.then(function(data){
@@ -1072,6 +1085,19 @@
       list.innerHTML=html||'<div class="activityitem"><span>○</span><span>Nenhuma atividade nesta sessão.</span></div>';
     });
   }
+  function openArtifacts(){
+    var modal=document.getElementById('activityModal'),list=document.getElementById('activityList');modal.classList.add('open');
+    document.getElementById('activityTitle').textContent='Central de artefatos';
+    list.innerHTML='<div class="activityitem"><span>…</span><span>Localizando arquivos</span></div>';
+    var p=api('list_artifacts');if(!p||!p.then){list.innerHTML='<div class="activityitem">Disponível dentro do aplicativo.</div>';return;}
+    p.then(function(items){
+      var icons={pdf:'PDF',pptx:'P',docx:'W',xlsx:'X',svg:'◇',png:'▧',jpg:'▧',jpeg:'▧',zip:'ZIP'};
+      list.innerHTML=(items||[]).map(function(it){var kb=Math.max(1,Math.round((it.size||0)/1024));
+        return '<div class="activityitem"><span>'+_esc(icons[it.format]||'▣')+'</span><span><b>'+_esc(it.name)+'</b><br><small>'+_esc(it.path)+' · '+kb+' KB</small></span><button class="mdcopy" data-path="'+_esc(it.path)+'" onclick="openArtifactPath(this)">Abrir</button></div>';
+      }).join('')||'<div class="activityitem"><span>○</span><span>Nenhum artefato gerado neste projeto.</span></div>';
+    });
+  }
+  function openArtifactPath(button){api('open_artifact',button.getAttribute('data-path')||'');}
   function showFiles(list){
     const c=document.getElementById("chat");
     const d=document.createElement("div"); d.className="msg sys filechips";
@@ -1375,6 +1401,13 @@
     var b=document.getElementById(ids[name]); if(!b)return; b.classList.toggle("on",on);
     var lab=b.querySelector(".lab"); if(lab) lab.textContent=(labs[name]||name)+(on?": ON":""); }
   function toggle(name){ api('toggle',name); }
+  function setPerformanceProfile(profile){
+    var b=document.getElementById('tgBoost'),lab=b&&b.querySelector('.lab');
+    var names={fast:'Rápido',balanced:'Equilibrado',deep:'Profundo'};
+    if(lab)lab.textContent=names[profile]||'Equilibrado';
+    if(b){b.dataset.profile=profile;b.classList.toggle('on',profile!=='fast');}
+  }
+  function cycleProfile(){api('cycle_performance_profile');}
   var _hist=[], _hi=-1;
   function sendText(){ const i=document.getElementById("inp"); const t=i.value.trim(); if(!t)return;
     _hist.push(t); if(_hist.length>50)_hist.shift(); _hi=_hist.length; i.value=""; api('send_text',t); }
@@ -1446,6 +1479,7 @@
     pywebview.api.bootstrap().then(function(st){
       renderConvos(st.convos,st.active); kemyState(st.state||"idle");
       renderAIStatus(st.ai);
+      setPerformanceProfile(st.performance_profile||'balanced');
       (st.log||[]).forEach(function(m){ addMsg(m.r,m.t); });
       if(!(st.log&&st.log.length)) showWelcome();
       // rede de seguranca: se continuar "Conectando", consulta o estado
@@ -1524,7 +1558,7 @@
   }
 </script>
 <div class="activitymodal" id="activityModal" onclick="if(event.target===this)closeActivity()">
-  <div class="activitybox"><div class="activityhead"><b>Atividade da Kemy</b><button class="lc-close" onclick="closeActivity()">×</button></div>
+  <div class="activitybox"><div class="activityhead"><b id="activityTitle">Atividade da Kemy</b><button class="lc-close" onclick="closeActivity()">×</button></div>
     <div class="activitylist" id="activityList"></div></div>
 </div>
 </body>

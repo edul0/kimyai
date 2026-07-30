@@ -11,6 +11,7 @@ import os
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 
@@ -115,3 +116,69 @@ def migrate_env_secrets(path: Path, secret_keys: set[str], vault: CredentialVaul
 
 
 activity = ActivityTracker()
+
+
+class TaskStore:
+    """Fila SQLite ACID para tarefas retomáveis após falha ou reinicialização."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = str(path)
+        try:
+            with self._connect() as conn:
+                conn.execute("create table if not exists tasks(id text primary key, prompt text, "
+                             "folder text, plan text, step integer default 0, status text, "
+                             "created real, updated real, result text)")
+        except Exception:
+            pass
+
+    @contextmanager
+    def _connect(self):
+        import sqlite3
+        conn = sqlite3.connect(self.path, timeout=10)
+        try:
+            conn.execute("pragma journal_mode=WAL")
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def add(self, tid: str, prompt: str, folder: str) -> None:
+        try:
+            now = time.time()
+            with self._connect() as conn:
+                conn.execute("insert or replace into tasks(id,prompt,folder,plan,step,status,created,updated,result)"
+                             " values(?,?,?,?,?,?,?,?,?)", (tid, prompt, folder, "[]", 0, "running", now, now, ""))
+        except Exception:
+            pass
+
+    def set_plan(self, tid: str, plan: list) -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute("update tasks set plan=?,updated=? where id=?", (json.dumps(plan), time.time(), tid))
+        except Exception:
+            pass
+
+    def set_step(self, tid: str, step: int) -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute("update tasks set step=?,updated=? where id=?", (step, time.time(), tid))
+        except Exception:
+            pass
+
+    def finish(self, tid: str, status: str, result: str = "") -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute("update tasks set status=?,result=?,updated=? where id=?",
+                             (status, (result or "")[:2000], time.time(), tid))
+        except Exception:
+            pass
+
+    def unfinished(self) -> list:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute("select id,prompt,folder,plan,step from tasks where status='running' "
+                                    "order by updated desc").fetchall()
+            return [{"id": row[0], "prompt": row[1], "folder": row[2],
+                     "plan": json.loads(row[3] or "[]"), "step": row[4]} for row in rows]
+        except Exception:
+            return []

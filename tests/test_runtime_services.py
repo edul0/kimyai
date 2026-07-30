@@ -10,7 +10,7 @@ from local_app.professional_artifacts import (
     build_pptx,
     validate_artifact,
 )
-from local_app.runtime_services import ActivityTracker, CredentialVault, migrate_env_secrets
+from local_app.runtime_services import ActivityTracker, CredentialVault, TaskStore, migrate_env_secrets
 
 
 class RuntimeServicesTests(unittest.TestCase):
@@ -21,6 +21,18 @@ class RuntimeServicesTests(unittest.TestCase):
         data = tracker.snapshot()
         self.assertEqual(data["last_model"]["label"], "nvidia · model")
         self.assertNotIn("token", data["items"][0])
+
+    def test_task_store_resumes_from_persisted_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(Path(tmp) / "tasks.db")
+            store.add("task-1", "criar sistema", tmp)
+            store.set_plan("task-1", ["analisar", "implementar", "testar"])
+            store.set_step("task-1", 2)
+            pending = store.unfinished()
+            self.assertEqual(pending[0]["step"], 2)
+            self.assertEqual(pending[0]["plan"][2], "testar")
+            store.finish("task-1", "done")
+            self.assertEqual(store.unfinished(), [])
 
     def test_windows_vault_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
