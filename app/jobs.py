@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents import build_coding_prompt, build_local_prompt_brief, build_prompt_refiner_prompt
-from .agent_runtime import SolutionHistory, StrongSandboxRuntime, confidence_from_evidence
+from .agent_runtime import ErrorLessonHistory, SolutionHistory, StrongSandboxRuntime, confidence_from_evidence
 from .artifact_parser import parse_kemy_artifact, strip_artifact_wrapper
 from .attachment_service import prepare_attachments
 from .code_intelligence import RepositoryContext, RepositoryIntelligence, SafeCodeValidator, reasoning_budget
@@ -63,6 +63,7 @@ class JobManager:
         self.code_validator = SafeCodeValidator()
         self.frontend_browser = FrontendBrowserRuntime()
         self.solution_history = SolutionHistory(storage)
+        self.error_lessons = ErrorLessonHistory(storage)
         self.delivery_evaluator = DeliveryEvaluator()
         self.strong_sandbox = StrongSandboxRuntime()
 
@@ -215,7 +216,7 @@ class JobManager:
                 await self._event_async(job, "Kemy", f"Raciocinio tecnico: {reasoning_trace}", 20)
                 self._raise_if_canceled(job)
             attachment_context = prepare_attachments([item.model_dump() if hasattr(item, "model_dump") else item for item in (job.anexos or [])])
-            learning_context = self._build_error_learning_context(session_data)
+            learning_context = self._build_error_learning_context(session_data, job.modo, job.pedido)
             validation_prompt = intent_validation.as_prompt()
 
             await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
@@ -1315,12 +1316,15 @@ class JobManager:
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         return f"resp:{job.modo}:{digest}"
 
-    def _build_error_learning_context(self, session_data: dict[str, Any] | None) -> str:
+    def _build_error_learning_context(
+        self,
+        session_data: dict[str, Any] | None,
+        mode: str = "auto",
+        request: str = "",
+    ) -> str:
         lessons = (session_data or {}).get("error_memory") or []
-        if not isinstance(lessons, list) or not lessons:
-            return ""
         lines: list[str] = []
-        for item in lessons[-6:]:
+        for item in lessons[-4:] if isinstance(lessons, list) else []:
             if not isinstance(item, dict):
                 continue
             mode = str(item.get("mode") or "auto")
@@ -1330,10 +1334,17 @@ class JobManager:
                 continue
             lesson = self._lesson_from_error(error, mode, pedido)
             lines.append(f"- [{mode}] {lesson}")
+        for item in self.error_lessons.relevant(mode, request, limit=4):
+            lesson = str(item.get("lesson") or "").strip()
+            if lesson:
+                count = int(item.get("occurrences") or 1)
+                line = f"- [{mode}; recorrencia {count}x] {lesson}"
+                if line not in lines:
+                    lines.append(line)
         if not lines:
             return ""
         return (
-            "## Aprendizados de erros recentes desta conversa\n"
+            "## Aprendizados de erros anteriores\n"
             "Use estes pontos como protecoes, sem mencionar ao usuario se nao for necessario:\n"
             f"{chr(10).join(lines)}\n"
         )
@@ -1350,8 +1361,21 @@ class JobManager:
             return "checar assinatura das funcoes antes de chamar geradores de documento/slide"
         if "codigo" in lowered or "code" in lowered or "repo" in lowered or "git" in lowered:
             return "quando houver workspace/repositorio, ler contexto e editar codigo existente em vez de criar template generico"
-        clipped = re.sub(r"\s+", " ", error).strip()[:180]
-        return clipped or "revalidar pedido, modo e entregavel antes de responder"
+        return "revalidar pedido, modo, dependencias e entregavel antes de responder"
+
+    def _error_category(self, error: str, mode: str, pedido: str = "") -> str:
+        lowered = f"{error} {pedido}".lower()
+        if "document" in lowered and "site" in lowered:
+            return "mode-mismatch"
+        if "preview" in lowered or "iframe" in lowered or "html" in lowered:
+            return "frontend-preview"
+        if "autentic" in lowered:
+            return "authentication"
+        if "missing" in lowered and "argument" in lowered:
+            return "function-contract"
+        if "codigo" in lowered or "code" in lowered or "repo" in lowered or "git" in lowered:
+            return "repository-context"
+        return "delivery-validation"
 
     def _record_error_learning(self, job: JobState, exc: Exception | str, lesson: str | None = None) -> None:
         try:
@@ -1374,6 +1398,11 @@ class JobManager:
             data["error_memory"] = errors[-12:]
             data["updated_at"] = now
             self.storage.set_json(key, data, ttl=self.settings.session_ttl_seconds)
+            self.error_lessons.record(
+                job.modo,
+                self._error_category(error_text, job.modo, job.pedido),
+                entry["lesson"],
+            )
         except Exception:
             return
 

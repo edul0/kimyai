@@ -1,6 +1,7 @@
 import unittest
 
 from app.agent_runtime import (
+    ErrorLessonHistory,
     ImpactGraph,
     LocalSemanticSearch,
     SolutionHistory,
@@ -39,6 +40,18 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         history.record("project", {"fingerprint": "a", "request": "corrigir login token", "success": True})
         found = history.relevant("project", "erro no token de login")
         self.assertEqual(found[0]["fingerprint"], "a")
+
+    def test_error_lessons_are_global_compact_and_private(self):
+        storage = Storage()
+        history = ErrorLessonHistory(storage)
+        history.record("coding", "authentication", "validar autenticacao antes de editar")
+        history.record("coding", "authentication", "validar autenticacao antes de editar")
+
+        restarted = ErrorLessonHistory(storage)
+        found = restarted.relevant("coding", "corrigir login autenticacao")
+        self.assertEqual(found[0]["occurrences"], 2)
+        self.assertNotIn("request", found[0])
+        self.assertNotIn("error", found[0])
 
     async def test_browser_runtime_reports_missing_artifact(self):
         report = await FrontendBrowserRuntime().inspect("sem artifact")

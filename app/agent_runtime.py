@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,6 +138,56 @@ class SolutionHistory:
             for index, item in enumerate(items)
         ]
         return [item["entry"] for item in LocalSemanticSearch().rank(request, documents, limit=limit)]
+
+
+class ErrorLessonHistory:
+    """Memoria global de protecoes, sem guardar pedido, erro bruto ou dados pessoais."""
+
+    def __init__(self, storage: Storage, ttl_seconds: int = 7_776_000, max_items: int = 120):
+        self.storage = storage
+        self.ttl_seconds = ttl_seconds
+        self.max_items = max_items
+
+    def record(self, mode: str, category: str, lesson: str) -> None:
+        safe_mode = re.sub(r"[^a-z0-9_-]", "", str(mode).lower())[:32] or "auto"
+        safe_category = re.sub(r"[^a-z0-9_-]", "", str(category).lower())[:48] or "general"
+        safe_lesson = " ".join(str(lesson).split())[:300]
+        if not safe_lesson:
+            return
+        key = f"error-lessons:{safe_mode}"
+        items = list(self.storage.get_json(key, []) or [])
+        fingerprint = hashlib.sha256(f"{safe_category}|{safe_lesson}".encode("utf-8")).hexdigest()[:20]
+        previous = next((item for item in items if item.get("fingerprint") == fingerprint), None)
+        if previous:
+            previous["occurrences"] = int(previous.get("occurrences") or 0) + 1
+            previous["last_seen_at"] = time.time()
+        else:
+            items.append({
+                "fingerprint": fingerprint,
+                "category": safe_category,
+                "lesson": safe_lesson,
+                "occurrences": 1,
+                "last_seen_at": time.time(),
+            })
+        items.sort(key=lambda item: (int(item.get("occurrences") or 0), float(item.get("last_seen_at") or 0)), reverse=True)
+        self.storage.set_json(key, items[: self.max_items], ttl=self.ttl_seconds)
+
+    def relevant(self, mode: str, request: str, limit: int = 5) -> list[dict[str, Any]]:
+        items = list(self.storage.get_json(f"error-lessons:{mode}", []) or [])
+        if not items:
+            return []
+        documents = [
+            {
+                "path": str(index),
+                "content": f"{item.get('category', '')} {item.get('lesson', '')}",
+                "entry": item,
+            }
+            for index, item in enumerate(items)
+        ]
+        ranked = LocalSemanticSearch().rank(request, documents, limit=max(limit * 2, limit))
+        entries = [item["entry"] for item in ranked]
+        entries.sort(key=lambda item: int(item.get("occurrences") or 0), reverse=True)
+        return entries[:limit]
 
 
 class StrongSandboxRuntime:
