@@ -293,13 +293,23 @@ function setPreviewTab(tab) {
 function setAuthMode(mode) {
   state.authMode = mode;
   const register = mode === "register";
+  const recovery = mode === "recovery";
   $("nameField").classList.toggle("hidden", !register);
-  $("authTitle").textContent = register ? "Criar conta na Kemy" : "Entrar na Kemy";
-  $("authSubtitle").textContent = register
+  $("authTitle").textContent = recovery ? "Redefinir sua senha" : register ? "Criar conta na Kemy" : "Entrar na Kemy";
+  $("authSubtitle").textContent = recovery
+    ? "Crie uma nova senha com pelo menos 8 caracteres."
+    : register
     ? "Crie um acesso por email e senha para manter conversas, tarefas e contexto."
     : "Use email ou usuário e senha para acessar suas conversas, tarefas e memória do workspace.";
-  $("authSubmit").textContent = register ? "Criar conta" : "Entrar no workspace";
+  $("authSubmit").textContent = recovery ? "Salvar nova senha" : register ? "Criar conta" : "Entrar no workspace";
   $("authModeBtn").textContent = register ? "Já tenho conta" : "Criar conta";
+  $("authModeBtn").classList.toggle("hidden", recovery);
+  $("forgotPasswordBtn").classList.toggle("hidden", mode !== "login");
+  $("cancelRecoveryBtn").classList.toggle("hidden", !recovery);
+  $("loginEmail").closest("label").classList.toggle("hidden", recovery);
+  $("loginPass").autocomplete = recovery ? "new-password" : register ? "new-password" : "current-password";
+  $("loginError").textContent = "";
+  $("loginSuccess").textContent = "";
 }
 
 async function checkAuth() {
@@ -330,6 +340,26 @@ async function checkAuth() {
 async function submitAuth(event) {
   event.preventDefault();
   $("loginError").textContent = "";
+  $("loginSuccess").textContent = "";
+  if (state.authMode === "recovery") {
+    try {
+      const params = new URLSearchParams(location.hash.slice(1));
+      await api("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({
+          access_token: params.get("access_token") || "",
+          password: $("loginPass").value,
+        }),
+      });
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      setAuthMode("login");
+      $("loginPass").value = "";
+      $("loginSuccess").textContent = "Senha alterada. Agora você já pode entrar.";
+    } catch (error) {
+      $("loginError").textContent = error.message || "Não foi possível alterar a senha.";
+    }
+    return;
+  }
   const path = state.authMode === "register" ? "/api/auth/register" : "/api/auth/login";
   try {
     await api(path, {
@@ -345,6 +375,27 @@ async function submitAuth(event) {
     $("loginError").textContent = error.message || (state.authMode === "register"
       ? "Nao foi possivel criar a conta."
       : "Email ou senha invalidos.");
+  }
+}
+
+async function forgotPassword() {
+  $("loginError").textContent = "";
+  $("loginSuccess").textContent = "";
+  const email = $("loginEmail").value.trim();
+  if (!email || !email.includes("@")) {
+    $("loginError").textContent = "Informe seu email para recuperar a senha.";
+    $("loginEmail").focus();
+    return;
+  }
+  try {
+    const data = await api("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    $("loginSuccess").textContent = data.message
+      || "Se a conta existir, enviaremos as instruções por email.";
+  } catch (error) {
+    $("loginError").textContent = error.message || "Não foi possível solicitar a recuperação.";
   }
 }
 
@@ -1809,6 +1860,11 @@ function clearAttachments() {
 
 on("authForm", "submit", submitAuth);
 on("authModeBtn", "click", () => setAuthMode(state.authMode === "login" ? "register" : "login"));
+on("forgotPasswordBtn", "click", forgotPassword);
+on("cancelRecoveryBtn", "click", () => {
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+  setAuthMode("login");
+});
 on("themeToggle", "click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
 on("logoutBtn", "click", () => logout().catch(console.error));
 on("newSessionBtn", "click", () => newSession({ openChat: true }).catch(console.error));
@@ -1917,7 +1973,8 @@ window.addEventListener("keydown", (event) => {
 });
 
 setTheme(localStorage.getItem("kemy.theme") || "light");
-setAuthMode("login");
+const authHash = new URLSearchParams(location.hash.slice(1));
+setAuthMode(authHash.get("type") === "recovery" && authHash.get("access_token") ? "recovery" : "login");
 updatePreviewFullscreenUI();
 setPreviewTab("live");
 setSurface(state.activeSurface);

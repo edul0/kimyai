@@ -15,7 +15,19 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import DEFAULT_AGENTS
-from .auth import COOKIE_NAME, MAX_AGE, create_token, create_user, find_user, token_subject, verify_password, verify_token
+from .auth import (
+    COOKIE_NAME,
+    MAX_AGE,
+    AuthAttemptLimiter,
+    create_token,
+    create_user,
+    find_user,
+    password_needs_rehash,
+    token_subject,
+    upgrade_user_password,
+    verify_password,
+    verify_token,
+)
 from .quota import check_and_consume, usage_today
 from .config import get_settings
 from .jobs import JobManager, utcnow
@@ -35,6 +47,7 @@ from .github_service import GitHubService
 
 settings = get_settings()
 storage = Storage(settings.redis_url)
+auth_limiter = AuthAttemptLimiter(storage)
 jobs = JobManager(storage, settings)
 supabase_auth = SupabaseStore(settings)
 github = GitHubService(
@@ -871,6 +884,8 @@ async def status():
         },
         "openrouter_free": jobs.router.openrouter_free_state,
         "gemini": jobs.router.gemini_state,
+        "model_catalog": jobs.router.model_catalog.snapshot(),
+        "learning": jobs.router.trace_store.snapshot() if jobs.router.trace_store else {},
     }
 
 
@@ -878,6 +893,9 @@ async def status():
 async def login(payload: dict, response: Response, request: Request):
     email = str(payload.get("email") or payload.get("username", "")).strip().lower()
     password = str(payload.get("password", ""))
+    retry_after = auth_limiter.retry_after("login", email)
+    if retry_after:
+        raise HTTPException(429, f"Muitas tentativas. Tente novamente em {retry_after} segundos.")
     stored_user = find_user(storage, email)
     valid_local = email == settings.auth_user and password == settings.auth_password
     valid_registered = bool(stored_user and verify_password(password, stored_user.get("password_hash", "")))
@@ -888,7 +906,11 @@ async def login(payload: dict, response: Response, request: Request):
         except Exception:
             valid_supabase = False
     if not (valid_local or valid_registered or valid_supabase):
+        auth_limiter.fail("login", email)
         raise HTTPException(401, "Login invalido.")
+    auth_limiter.clear("login", email)
+    if valid_registered and stored_user and password_needs_rehash(stored_user.get("password_hash", "")):
+        upgrade_user_password(storage, stored_user, password)
     token = create_token(email, settings)
     response.set_cookie(
         COOKIE_NAME,
@@ -939,6 +961,43 @@ async def register(payload: dict, response: Response, request: Request):
         samesite="lax",
     )
     return {"status": "ok", "user": email, "persistent_auth": supabase_created}
+
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(payload: dict):
+    email = str(payload.get("email") or "").strip().lower()
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise HTTPException(400, "Informe um email valido.")
+    retry_after = auth_limiter.retry_after("password-reset", email)
+    if retry_after:
+        raise HTTPException(429, f"Aguarde {retry_after} segundos antes de solicitar outro email.")
+    auth_limiter.fail("password-reset", email)
+    redirect_to = f"{settings.app_public_url.rstrip('/')}/"
+    try:
+        await supabase_auth.request_password_reset(email, redirect_to)
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "message": "Se houver uma conta com esse email, enviaremos as instrucoes de recuperacao.",
+    }
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password(payload: dict):
+    access_token = str(payload.get("access_token") or "").strip()
+    password = str(payload.get("password") or "")
+    if not access_token:
+        raise HTTPException(400, "Link de recuperacao invalido ou expirado.")
+    if len(password) < 8:
+        raise HTTPException(400, "A nova senha deve ter pelo menos 8 caracteres.")
+    try:
+        updated = await supabase_auth.update_password_with_token(access_token, password)
+    except Exception:
+        updated = False
+    if not updated:
+        raise HTTPException(400, "Link de recuperacao invalido ou expirado.")
+    return {"status": "ok", "message": "Senha alterada com sucesso."}
 
 
 @app.post("/api/auth/logout")

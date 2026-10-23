@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "CHATGPT_API_KEY"))
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
+    ollama_base_url: str | None = Field(default=None, alias="OLLAMA_BASE_URL")
+    ollama_chat_model: str = Field(default="qwen3:8b", alias="OLLAMA_CHAT_MODEL")
+    ollama_code_model: str = Field(default="qwen2.5-coder:7b", alias="OLLAMA_CODE_MODEL")
+    ollama_reasoning_model: str = Field(default="deepseek-r1:8b", alias="OLLAMA_REASONING_MODEL")
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
     serper_api_key: str | None = Field(default=None, alias="SERPER_API_KEY")
     e2b_api_key: str | None = Field(default=None, alias="E2B_API_KEY")
@@ -93,6 +97,7 @@ class Settings(BaseSettings):
     @property
     def configured_providers(self) -> dict[str, bool]:
         return {
+            "ollama": bool(self.ollama_base_url),
             "gemini": bool(self.gemini_api_key),
             "groq": bool(self.groq_api_key),
             "cerebras": bool(self.cerebras_api_key),

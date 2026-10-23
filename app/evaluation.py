@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .request_contract import evaluate_contract
+
 
 class DeliveryEvaluator:
     """Stable, model-independent metrics used to compare pipeline changes over time."""
@@ -10,6 +12,14 @@ class DeliveryEvaluator:
         validation = result.get("code_validation") or {}
         browser = result.get("browser_validation") or {}
         confidence = result.get("confidence") or {}
+        contract = result.get("request_contract") or {}
+        output_parts = [str(result.get("raw") or result.get("summary") or "")]
+        output_parts.extend(
+            str(item.get("content") or item.get("text") or "")
+            for item in result.get("files") or []
+            if isinstance(item, dict)
+        )
+        contract_report = evaluate_contract(contract, "\n".join(output_parts))
         files = result.get("files") or []
         metrics = {
             "static_validation": 1.0 if validation.get("ok") else 0.0,
@@ -18,18 +28,21 @@ class DeliveryEvaluator:
             "tests_present": 1.0 if self._has_tests(result) else 0.0,
             "evidence_confidence": float(confidence.get("score") or 0.0),
             "autofix_iterations": max(0, len(validation.get("attempts") or []) - 1),
+            "request_adherence": contract_report["score"],
         }
         weighted = (
             metrics["static_validation"] * 0.3
             + metrics["browser_validation"] * 0.2
             + metrics["artifact_completeness"] * 0.2
             + metrics["tests_present"] * 0.15
-            + metrics["evidence_confidence"] * 0.15
+            + metrics["evidence_confidence"] * 0.1
+            + metrics["request_adherence"] * 0.05
         )
         return {
             "score": round(weighted * 100, 1),
             "metrics": metrics,
             "grade": "excellent" if weighted >= 0.85 else "good" if weighted >= 0.65 else "needs-improvement",
+            "request_contract": contract_report,
         }
 
     @staticmethod

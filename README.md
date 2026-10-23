@@ -98,6 +98,7 @@ dist\KemyDesktop\KemyDesktop.exe
 ### Basicas
 
 - `FREE_ONLY`
+- `OLLAMA_BASE_URL` ativa modelos locais gratuitos; use `OLLAMA_CHAT_MODEL`, `OLLAMA_CODE_MODEL` e `OLLAMA_REASONING_MODEL` para especializar a Kemy.
 - `LLM_MODE`
 - `KEMY_ADAPTIVE_ROUTER_ENABLED`
 - `KEMY_SELF_REVIEW_ENABLED`

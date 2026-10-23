@@ -5,6 +5,27 @@ from app.llm_router import LLMRouter
 
 
 class AdaptiveRouterTests(unittest.TestCase):
+    def test_ollama_adds_free_local_specialists(self):
+        settings = Settings(
+            LLM_MODE="providers",
+            OLLAMA_BASE_URL="http://localhost:11434",
+            OLLAMA_CHAT_MODEL="chat-local",
+            OLLAMA_CODE_MODEL="code-local",
+            OLLAMA_REASONING_MODEL="reason-local",
+        )
+        router = LLMRouter(settings)
+        self.assertEqual(router.route_for("coding")[0], "ollama")
+        self.assertEqual(router.model_for("ollama", "coding"), "code-local")
+        self.assertEqual(router.model_for("ollama", "site"), "code-local")
+        self.assertEqual(router.model_for("ollama", "auditoria"), "reason-local")
+        self.assertEqual(router.model_for("ollama", "planejamento"), "reason-local")
+        self.assertEqual(router.model_for("ollama", "documento"), "chat-local")
+
+    def test_ollama_is_not_enabled_without_explicit_url(self):
+        settings = Settings(LLM_MODE="providers", GROQ_API_KEY="g")
+        router = LLMRouter(settings)
+        self.assertNotIn("ollama", router.route_for("coding"))
+
     def test_route_reorders_after_failures(self):
         settings = Settings(
             LLM_MODE="providers",

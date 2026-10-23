@@ -21,6 +21,7 @@ from .attachment_service import prepare_attachments
 from .code_intelligence import RepositoryContext, RepositoryIntelligence, SafeCodeValidator, reasoning_budget
 from .config import Settings
 from .context_memory import build_context_snapshot, split_request_parts
+from .request_contract import build_request_contract
 from .document_service import DocumentService
 from .evaluation import DeliveryEvaluator
 from .frontend_runtime import BrowserReport, FrontendBrowserRuntime
@@ -46,7 +47,7 @@ class JobManager:
     def __init__(self, storage: Storage, settings: Settings):
         self.storage = storage
         self.settings = settings
-        self.router = LLMRouter(settings)
+        self.router = LLMRouter(settings, storage=storage)
         self.pollinations = PollinationsImageService(settings)
         self.tools = ExternalTools(settings)
         self.supabase = SupabaseStore(settings)
@@ -204,6 +205,7 @@ class JobManager:
             history = session_data.get("historico", [])
             memory = session_data.get("memoria", [])
             compact_context = build_context_snapshot(session_data.get("contexto_compacto"), job.pedido)
+            request_contract = build_request_contract(job.pedido)
             execution_plan = build_execution_plan(job.pedido, job.modo, compact_context)
             if execution_plan.mode != job.modo:
                 job.modo = execution_plan.mode
@@ -219,6 +221,7 @@ class JobManager:
             await self._event_async(job, "Kemy", "Lapidando o pedido com a fazedora de prompts.", 24)
             self._raise_if_canceled(job)
             execution_plan_prompt = f"{validation_prompt}\n\n{execution_plan.as_prompt()}"
+            execution_plan_prompt = f"{execution_plan_prompt}\n\n{request_contract.as_prompt()}"
             if learning_context:
                 execution_plan_prompt = f"{execution_plan_prompt}\n\n{learning_context}"
             refined_prompt = await self._refine_prompt(job, history, compact_context, execution_plan_prompt)
@@ -310,6 +313,7 @@ class JobManager:
                 )
                 result["execution_plan"] = execution_plan_data
                 result["intent_validation"] = intent_validation.as_dict()
+                result["request_contract"] = request_contract.as_dict()
                 await self._finish_job(job, result)
                 return
 
@@ -344,6 +348,7 @@ class JobManager:
                 }
                 result["execution_plan"] = execution_plan_data
                 result["intent_validation"] = intent_validation.as_dict()
+                result["request_contract"] = request_contract.as_dict()
                 await self._finish_job(job, result)
                 return
 
@@ -377,6 +382,7 @@ class JobManager:
                     )
                     self._raise_if_canceled(job)
                 self._set_cached_response(cache_key, result)
+            result["request_contract"] = request_contract.as_dict()
             if job.modo == "site":
                 result = self._ensure_site_artifact(job, result)
                 if self.settings.code_validation_enabled:
@@ -396,6 +402,7 @@ class JobManager:
                 result["github_repo"] = job.github_repo
             result["execution_plan"] = execution_plan_data
             result["intent_validation"] = intent_validation.as_dict()
+            result["request_contract"] = request_contract.as_dict()
             tools_used = list(dict.fromkeys((result.get("tools_used") or []) + (tool_context.get("used") or [])))
             if cached_response:
                 tools_used.append("response-cache")
@@ -2395,6 +2402,8 @@ Site de contingencia personalizado pela Kemy para: {pedido}
             return
         result = dict(result or {})
         result.setdefault("mode", job.modo)
+        if self.router.trace_store:
+            self.router.trace_store.record_delivery(job.modo, result)
         if job.github_repo and not result.get("github_repo"):
             result["github_repo"] = job.github_repo
         self._event(job, "Kemy", "Finalizando mensagem.", 92)

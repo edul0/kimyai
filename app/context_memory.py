@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .request_contract import build_request_contract
+
 
 MAX_ITEMS = 12
 MAX_TEXT = 260
@@ -83,6 +85,7 @@ def build_context_snapshot(
         "request_parts": [],
         "last_user_intent": "",
         "last_answer_summary": "",
+        "request_contract": {},
     }
     if previous:
         for key in snapshot:
@@ -98,6 +101,7 @@ def build_context_snapshot(
             _append_unique(snapshot[key], item)
 
     parts = split_request_parts(user_message)
+    snapshot["request_contract"] = build_request_contract(user_message).as_dict()
     if parts:
         snapshot["request_parts"] = parts
         snapshot["last_user_intent"] = compact_text(parts[0]["text"])
@@ -133,4 +137,15 @@ def context_to_prompt(context: dict[str, Any] | None) -> str:
     if open_questions:
         lines.append("Perguntas/pendencias abertas:")
         lines.extend(f"- {item}" for item in open_questions[-5:])
+    contract = context.get("request_contract") or {}
+    if contract:
+        lines.append("Contrato verificavel do pedido atual:")
+        if contract.get("exact_terms"):
+            lines.append("- Textos/nomes literais: " + ", ".join(contract["exact_terms"]))
+        if contract.get("colors"):
+            lines.append("- Cores literais: " + ", ".join(contract["colors"]))
+        if contract.get("features"):
+            lines.append("- Capacidades obrigatorias: " + ", ".join(contract["features"]))
+        if contract.get("constraints"):
+            lines.append("- Restricoes: " + " | ".join(contract["constraints"]))
     return "\n".join(lines)

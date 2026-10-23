@@ -99,6 +99,7 @@ curl -X POST http://localhost:8000/api/comando \
 5. Preencha as secrets pedidas pelo Blueprint:
    ```
    KEMY_AUTH_PASSWORD=<senha forte>
+   APP_PUBLIC_URL=https://seu-servico.onrender.com
    GEMINI_API_KEY=<sua-chave>
    GROQ_API_KEY=<sua-chave>
    CEREBRAS_API_KEY=<sua-chave>
@@ -122,6 +123,7 @@ curl -X POST http://localhost:8000/api/comando \
 
 - Esse blueprint agora fica compatível com o `free tier`.
 - `GOTENBERG_URL` deve ficar vazio no Render grátis.
+- `OLLAMA_BASE_URL` deve ficar vazio no Render; use Ollama na instalação local ou em uma máquina própria acessível pela Kemy.
 - PDFs comuns usam `Playwright + Chromium` e slides usam `marp-cli` dentro da própria aplicação, sem serviço extra pago.
 - Se o Chromium não estiver disponível por algum detalhe do ambiente, ainda existe fallback final com `reportlab`.
 

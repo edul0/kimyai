@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from .config import Settings
+from .learning_runtime import LearningTraceStore, ModelCatalog
+from .storage import Storage
 
 
 @dataclass(frozen=True)
@@ -33,11 +35,11 @@ class LLMRouter:
     """Chooses free-tier providers and keeps paid fallbacks opt-in."""
 
     ROUTES = {
-        "coding": ["groq", "gemini", "cerebras", "openrouter", "openai"],
-        "site": ["gemini", "groq", "cerebras", "openrouter", "openai"],
-        "auditoria": ["cerebras", "groq", "gemini", "openrouter", "openai"],
-        "planejamento": ["gemini", "groq", "cerebras", "openrouter", "openai"],
-        "documento": ["gemini", "groq", "cerebras", "openrouter", "openai"],
+        "coding": ["ollama", "groq", "gemini", "cerebras", "openrouter", "openai"],
+        "site": ["gemini", "ollama", "groq", "cerebras", "openrouter", "openai"],
+        "auditoria": ["cerebras", "ollama", "groq", "gemini", "openrouter", "openai"],
+        "planejamento": ["gemini", "ollama", "groq", "cerebras", "openrouter", "openai"],
+        "documento": ["gemini", "ollama", "groq", "cerebras", "openrouter", "openai"],
     }
 
     MODELS = {
@@ -47,8 +49,10 @@ class LLMRouter:
         "openai": "gpt-4.1-mini",
     }
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, storage: Storage | None = None):
         self.settings = settings
+        self.trace_store = LearningTraceStore(storage) if storage else None
+        self.model_catalog = ModelCatalog(settings)
         self.provider_metrics: dict[str, dict[str, ProviderMetrics]] = {}
         self.openrouter_free_state = {
             "available": None,
@@ -65,7 +69,7 @@ class LLMRouter:
 
     def choose(self, mode: str = "coding", has_visual: bool = False) -> ProviderChoice:
         for provider in self.route_for(mode, has_visual=has_visual):
-            return ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
+            return ProviderChoice(provider, self.model_for(provider, mode), self.reason_for(provider, mode))
         return ProviderChoice("mock", "local-planner", "no cloud keys configured")
 
     def route_for(self, mode: str = "coding", has_visual: bool = False) -> list[str]:
@@ -86,7 +90,13 @@ class LLMRouter:
             return ["gemini"] + [provider for provider in available if provider != "gemini"]
         return available
 
-    def model_for(self, provider: str) -> str:
+    def model_for(self, provider: str, mode: str = "coding") -> str:
+        if provider == "ollama":
+            if mode in {"coding", "site"}:
+                return self.settings.ollama_code_model
+            if mode in {"auditoria", "planejamento"}:
+                return self.settings.ollama_reasoning_model
+            return self.settings.ollama_chat_model
         if provider == "groq" and self.settings.default_model.startswith("groq/"):
             return self.settings.default_model.replace("groq/", "", 1)
         if provider == "gemini":
@@ -97,6 +107,7 @@ class LLMRouter:
 
     def reason_for(self, provider: str, mode: str) -> str:
         reasons = {
+            "ollama": "modelo local gratuito, privado e especializado por tarefa",
             "groq": "melhor rota gratuita para gerar codigo rapido",
             "gemini": "melhor rota gratuita para contexto longo, planejamento e leitura visual",
             "cerebras": "melhor rota gratuita para revisao e auditoria rapida",
@@ -114,6 +125,8 @@ class LLMRouter:
         exclude_providers: set[str] | None = None,
     ) -> dict[str, Any]:
         has_visual = bool(visual_items)
+        if self.settings.ollama_base_url:
+            await self.model_catalog.discover_ollama()
         route = self.route_for(mode, has_visual=has_visual)
         if exclude_providers:
             alternative = [provider for provider in route if provider not in exclude_providers]
@@ -125,12 +138,14 @@ class LLMRouter:
 
         attempts = []
         for provider in route:
-            current = ProviderChoice(provider, self.model_for(provider), self.reason_for(provider, mode))
+            current = ProviderChoice(provider, self.model_for(provider, mode), self.reason_for(provider, mode))
             max_attempts = max(1, int(self.settings.llm_retry_attempts or 1))
             for attempt_idx in range(max_attempts):
                 started = time.perf_counter()
                 try:
-                    if provider == "groq":
+                    if provider == "ollama":
+                        result = await self._ollama(prompt, current, mode)
+                    elif provider == "groq":
                         result = await self._groq(prompt, current, mode)
                     elif provider == "gemini":
                         result = await self._gemini(prompt, current, mode, visual_items=visual_items)
@@ -188,13 +203,24 @@ class LLMRouter:
                     "avg_latency_ms": round(metrics.avg_latency_ms, 1),
                     "score": round(self._provider_score(mode, provider, route.index(provider)), 4),
                     "last_error": metrics.last_error,
+                    "quality": self.trace_store.quality_metrics(mode, provider) if self.trace_store else {},
                 }
             )
         return {"mode": mode, "adaptive_enabled": self.settings.adaptive_router_enabled, "providers": stats}
 
     def _metrics(self, mode: str, provider: str) -> ProviderMetrics:
         mode_stats = self.provider_metrics.setdefault(mode, {})
-        return mode_stats.setdefault(provider, ProviderMetrics())
+        if provider not in mode_stats:
+            persisted = self.trace_store.provider_metrics(mode, provider) if self.trace_store else {}
+            mode_stats[provider] = ProviderMetrics(
+                attempts=int(persisted.get("attempts") or 0),
+                successes=int(persisted.get("successes") or 0),
+                failures=int(persisted.get("failures") or 0),
+                avg_latency_ms=float(persisted.get("avg_latency_ms") or 0.0),
+                last_error=str(persisted.get("last_error") or ""),
+                last_success_at=float(persisted.get("last_success_at") or 0.0),
+            )
+        return mode_stats[provider]
 
     def _record_success(self, mode: str, provider: str, latency_ms: float) -> None:
         metrics = self._metrics(mode, provider)
@@ -202,6 +228,8 @@ class LLMRouter:
         metrics.successes += 1
         metrics.last_success_at = time.time()
         metrics.last_error = ""
+        if self.trace_store:
+            self.trace_store.record_provider_attempt(mode, provider, True, latency_ms)
         if metrics.successes == 1:
             metrics.avg_latency_ms = latency_ms
             return
@@ -213,6 +241,8 @@ class LLMRouter:
         metrics.attempts += 1
         metrics.failures += 1
         metrics.last_error = str(exc)[:240]
+        if self.trace_store:
+            self.trace_store.record_provider_attempt(mode, provider, False, latency_ms, type(exc).__name__)
         if metrics.avg_latency_ms <= 0:
             metrics.avg_latency_ms = latency_ms
             return
@@ -221,14 +251,22 @@ class LLMRouter:
 
     def _provider_score(self, mode: str, provider: str, base_index: int) -> float:
         metrics = self._metrics(mode, provider)
+        quality = self.trace_store.quality_metrics(mode, provider) if self.trace_store else {}
+        quality_samples = int(quality.get("samples") or 0)
+        quality_bonus = 0.0
+        if quality_samples:
+            evidence_weight = min(quality_samples / 8.0, 1.0)
+            normalized_quality = min(max(float(quality.get("avg_quality_score") or 0.0) / 100.0, 0.0), 1.0)
+            validation_rate = float(quality.get("validation_successes") or 0) / quality_samples
+            quality_bonus = ((normalized_quality * 0.38) + (validation_rate * 0.12)) * evidence_weight
         if metrics.attempts == 0:
-            return 0.5 - base_index * 0.001
+            return 0.5 - base_index * 0.001 + quality_bonus
         success_rate = metrics.successes / max(metrics.attempts, 1)
         latency_penalty = min(metrics.avg_latency_ms / 3000.0, 1.2)
         failure_penalty = min(metrics.failures / max(metrics.attempts, 1), 1.0)
         recency_bonus = 0.08 if metrics.last_success_at and (time.time() - metrics.last_success_at) < 900 else 0.0
         stability_bonus = 0.05 if metrics.failures == 0 and metrics.successes >= 3 else 0.0
-        return (success_rate * 1.45) - (latency_penalty * 0.25) - (failure_penalty * 0.7) + recency_bonus + stability_bonus
+        return (success_rate * 1.45) - (latency_penalty * 0.25) - (failure_penalty * 0.7) + recency_bonus + stability_bonus + quality_bonus
 
     def _mock_response(self, prompt: str, mode: str, choice: ProviderChoice, has_visual: bool = False) -> dict[str, Any]:
         summary = textwrap.shorten(" ".join(prompt.split()), width=260, placeholder="...")
@@ -374,6 +412,31 @@ class LLMRouter:
             response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
+        return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
+
+    async def _ollama(self, prompt: str, choice: ProviderChoice, mode: str) -> dict[str, Any]:
+        """Rota local sem cobrança; funciona com Ollama no host ou na rede local."""
+        import httpx
+
+        base_url = str(self.settings.ollama_base_url or "").rstrip("/")
+        if not base_url:
+            raise RuntimeError("OLLAMA_BASE_URL nao configurada")
+        payload = {
+            "model": choice.model,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": self._system_prompt("ollama", mode)},
+                {"role": "user", "content": prompt},
+            ],
+            "options": {"temperature": 0.1},
+        }
+        async with httpx.AsyncClient(timeout=self._http_timeout()) as client:
+            response = await client.post(f"{base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        content = str((data.get("message") or {}).get("content") or "").strip()
+        if not content:
+            raise ValueError("Ollama retornou resposta vazia")
         return {"provider": choice.name, "model": choice.model, "raw": content, "files": [], "diff": content}
 
     async def _gemini(

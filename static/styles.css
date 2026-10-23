@@ -417,6 +417,22 @@ svg {
   font-size: 15px;
 }
 
+.auth-text-btn {
+  width: fit-content;
+  padding: 2px 0;
+  margin: -2px 0 2px auto;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.auth-text-btn:hover {
+  text-decoration: underline;
+  transform: none;
+}
+
 #authSubmit:hover,
 #homeRunBtn:hover,
 #runBtn:hover,
@@ -430,6 +446,13 @@ svg {
   display: block;
   margin-top: 12px;
   color: var(--danger);
+  font-weight: 650;
+}
+
+.form-success {
+  min-height: 18px;
+  display: block;
+  color: var(--accent-strong);
   font-weight: 650;
 }
 

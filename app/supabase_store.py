@@ -314,3 +314,34 @@ class SupabaseStore:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(f"{self.url}/auth/v1/token?grant_type=password", headers=headers, json=payload)
             return response.is_success
+
+    async def request_password_reset(self, email: str, redirect_to: str) -> bool:
+        """Solicita um link de recuperação sem revelar se a conta existe."""
+        if not (self.url and self.settings.supabase_anon_key):
+            return False
+        headers = {"apikey": self.settings.supabase_anon_key, "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                f"{self.url}/auth/v1/recover",
+                headers=headers,
+                params={"redirect_to": redirect_to},
+                json={"email": email},
+            )
+            return response.is_success
+
+    async def update_password_with_token(self, access_token: str, password: str) -> bool:
+        """Define a senha usando o token temporário do link de recuperação."""
+        if not (self.url and self.settings.supabase_anon_key and access_token):
+            return False
+        headers = {
+            "apikey": self.settings.supabase_anon_key,
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.put(
+                f"{self.url}/auth/v1/user",
+                headers=headers,
+                json={"password": password},
+            )
+            return response.is_success

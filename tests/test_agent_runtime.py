@@ -55,6 +55,22 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         evaluation = DeliveryEvaluator().evaluate(result)
         self.assertLess(evaluation["score"], 85)
 
+    def test_delivery_evaluator_measures_literal_request_adherence(self):
+        result = {
+            "raw": '<kemy_artifact><file path="preview.html"><aside>Orion</aside></file></kemy_artifact>',
+            "request_contract": {
+                "exact_terms": ["Orion"],
+                "colors": ["#6D28D9"],
+                "features": ["sidebar", "busca"],
+            },
+        }
+        evaluation = DeliveryEvaluator().evaluate(result)
+        report = evaluation["request_contract"]
+        self.assertEqual(report["met"], 2)
+        self.assertEqual(report["total"], 4)
+        self.assertIn("#6D28D9", report["missing"])
+        self.assertIn("busca", report["missing"])
+
 
 if __name__ == "__main__":
     unittest.main()
