@@ -21,6 +21,16 @@ const state = {
   unauthorizedNotified: false,
   canceledJobsNotified: new Set(),
   activeSurface: localStorage.getItem("kemy.surface") || "studio",
+  focusActive: false,
+  focusDeadline: 0,
+  focusTimerHandle: null,
+  focusSoundEnabled: localStorage.getItem("kemy.focusSound") !== "off",
+  focusAudioContext: null,
+  focusMusicHandle: null,
+  clapStream: null,
+  clapFrame: null,
+  clapPeaks: [],
+  clapNoiseFloor: 0.015,
 };
 
 const REASONING_PATTERNS = [
@@ -46,6 +56,25 @@ const on = (id, event, handler) => {
   element.addEventListener(event, handler);
 };
 
+function showToast(message, type = "info") {
+  let region = document.querySelector(".toast-region");
+  if (!region) {
+    region = document.createElement("div");
+    region.className = "toast-region";
+    region.setAttribute("aria-live", "polite");
+    document.body.appendChild(region);
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  region.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("is-visible"));
+  setTimeout(() => {
+    toast.classList.remove("is-visible");
+    setTimeout(() => toast.remove(), 220);
+  }, 3600);
+}
+
 function updateThemeIcon(theme) {
   const sunIcon = document.querySelector(".icon-sun");
   const moonIcon = document.querySelector(".icon-moon");
@@ -63,6 +92,157 @@ function setTheme(theme) {
     toggle.setAttribute("title", theme === "dark" ? "Modo claro" : "Modo escuro");
   }
   updateThemeIcon(theme);
+}
+
+function updateFocusTimer() {
+  if (!state.focusActive) return;
+  const remaining = Math.max(0, state.focusDeadline - Date.now());
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  if ($("focusTimer")) $("focusTimer").textContent = `${minutes}:${seconds}`;
+  if (!remaining) {
+    exitFocusMode();
+    showToast("Ciclo de foco concluído.", "success");
+  }
+}
+
+function scheduleFocusTone() {
+  if (!state.focusActive || !state.focusSoundEnabled || !state.focusAudioContext) return;
+  const context = state.focusAudioContext;
+  const notes = [174.61, 220, 261.63, 220];
+  notes.forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = context.currentTime + index * 0.55;
+    oscillator.type = "sine";
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.025, start + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.5);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 1.6);
+  });
+}
+
+async function startFocusSound() {
+  if (!state.focusSoundEnabled) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  state.focusAudioContext ||= new AudioContextClass();
+  await state.focusAudioContext.resume();
+  clearInterval(state.focusMusicHandle);
+  scheduleFocusTone();
+  state.focusMusicHandle = setInterval(scheduleFocusTone, 3000);
+}
+
+function stopFocusSound() {
+  clearInterval(state.focusMusicHandle);
+  state.focusMusicHandle = null;
+}
+
+function enterFocusMode(minutes = 25) {
+  state.focusActive = true;
+  state.focusDeadline = Date.now() + minutes * 60 * 1000;
+  document.body.classList.add("focus-active");
+  $("focusOverlay")?.classList.remove("hidden");
+  clearInterval(state.focusTimerHandle);
+  state.focusTimerHandle = setInterval(updateFocusTimer, 1000);
+  updateFocusTimer();
+  startFocusSound().catch(() => {});
+}
+
+function exitFocusMode() {
+  state.focusActive = false;
+  state.focusDeadline = 0;
+  clearInterval(state.focusTimerHandle);
+  state.focusTimerHandle = null;
+  stopFocusSound();
+  document.body.classList.remove("focus-active");
+  $("focusOverlay")?.classList.add("hidden");
+}
+
+function toggleFocusMode() {
+  if (state.focusActive) exitFocusMode();
+  else enterFocusMode();
+}
+
+function updateClapUI(active, message = "") {
+  const button = $("clapToggleBtn");
+  if (button) button.textContent = active ? "Desativar palmas" : "Ativar palmas";
+  if ($("clapStatus")) $("clapStatus").textContent = message || (active ? "Ouvindo duas palmas" : "Microfone desligado");
+}
+
+function detectClaps(analyser) {
+  const samples = new Float32Array(analyser.fftSize);
+  let lastPeakAt = 0;
+  const inspect = () => {
+    analyser.getFloatTimeDomainData(samples);
+    let energy = 0;
+    let peak = 0;
+    for (const sample of samples) {
+      const absolute = Math.abs(sample);
+      energy += sample * sample;
+      peak = Math.max(peak, absolute);
+    }
+    const rms = Math.sqrt(energy / samples.length);
+    state.clapNoiseFloor = state.clapNoiseFloor * 0.97 + Math.min(rms, 0.08) * 0.03;
+    const now = performance.now();
+    const transient = rms > Math.max(0.07, state.clapNoiseFloor * 3.2) && peak > 0.35;
+    if (transient && now - lastPeakAt > 180) {
+      lastPeakAt = now;
+      state.clapPeaks = state.clapPeaks.filter((stamp) => now - stamp < 950);
+      state.clapPeaks.push(now);
+      if (state.clapPeaks.length >= 2) {
+        state.clapPeaks = [];
+        toggleFocusMode();
+      }
+    }
+    state.clapFrame = requestAnimationFrame(inspect);
+  };
+  inspect();
+}
+
+async function enableClapListener() {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microfone não suportado neste navegador.");
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false }, video: false });
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  const context = new AudioContextClass();
+  await context.resume();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  context.createMediaStreamSource(stream).connect(analyser);
+  state.clapStream = stream;
+  state.clapAudioContext = context;
+  localStorage.setItem("kemy.clapEnabled", "true");
+  updateClapUI(true);
+  detectClaps(analyser);
+}
+
+function disableClapListener() {
+  cancelAnimationFrame(state.clapFrame);
+  state.clapFrame = null;
+  state.clapPeaks = [];
+  state.clapStream?.getTracks().forEach((track) => track.stop());
+  state.clapStream = null;
+  state.clapAudioContext?.close().catch(() => {});
+  state.clapAudioContext = null;
+  localStorage.setItem("kemy.clapEnabled", "false");
+  updateClapUI(false);
+}
+
+async function toggleClapListener() {
+  if (state.clapStream) {
+    disableClapListener();
+    return;
+  }
+  try {
+    await enableClapListener();
+  } catch (error) {
+    updateClapUI(false, "Permissão de microfone necessária");
+    showToast(error.message || "Não foi possível acessar o microfone.", "error");
+  }
 }
 
 function sessionStorageKey(user = state.currentUser) {
@@ -401,6 +581,8 @@ async function forgotPassword() {
 
 async function logout() {
   await api("/api/auth/logout", { method: "POST", body: "{}" });
+  disableClapListener();
+  exitFocusMode();
   stopWorkspacePolling();
   clearWorkspaceStudio();
   clearPersistedSessionId();
@@ -1900,6 +2082,17 @@ on("cancelRecoveryBtn", "click", () => {
   setAuthMode("login");
 });
 on("themeToggle", "click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
+on("focusModeBtn", "click", toggleFocusMode);
+on("focusExitBtn", "click", exitFocusMode);
+on("focusResetBtn", "click", () => enterFocusMode(25));
+on("focusSoundBtn", "click", () => {
+  state.focusSoundEnabled = !state.focusSoundEnabled;
+  localStorage.setItem("kemy.focusSound", state.focusSoundEnabled ? "on" : "off");
+  $("focusSoundBtn").textContent = `Som ambiente: ${state.focusSoundEnabled ? "ligado" : "desligado"}`;
+  if (state.focusSoundEnabled) startFocusSound().catch(() => {});
+  else stopFocusSound();
+});
+on("clapToggleBtn", "click", () => toggleClapListener());
 on("logoutBtn", "click", () => logout().catch(console.error));
 on("newSessionBtn", "click", () => newSession({ openChat: true }).catch(console.error));
 on("backHomeBtn", "click", showHome);
@@ -2012,6 +2205,8 @@ setAuthMode(authHash.get("type") === "recovery" && authHash.get("access_token") 
 updatePreviewFullscreenUI();
 setPreviewTab("live");
 setSurface(state.activeSurface);
+if ($("focusSoundBtn")) $("focusSoundBtn").textContent = `Som ambiente: ${state.focusSoundEnabled ? "ligado" : "desligado"}`;
+updateClapUI(false, localStorage.getItem("kemy.clapEnabled") === "true" ? "Clique para reativar o microfone" : "Microfone desligado");
 clearWorkspaceStudio();
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
