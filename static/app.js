@@ -34,6 +34,11 @@ const state = {
   clapNoiseFloor: 0.015,
   speechRecognition: null,
   voiceListening: false,
+  wakeRecognition: null,
+  wakeEnabled: false,
+  wakePaused: false,
+  wakeAwaitingCommandUntil: 0,
+  wakeRestartHandle: null,
 };
 
 const REASONING_PATTERNS = [
@@ -141,6 +146,102 @@ function updateVoiceUI(listening) {
   button.title = listening ? "Parar ditado" : "Ditar comando";
 }
 
+function updateWakeWordUI(message = "") {
+  const button = $("wakeWordToggleBtn");
+  if (button) button.textContent = state.wakeEnabled ? "Desativar “Ei Kemy”" : "Ativar “Ei Kemy”";
+  if ($("wakeWordStatus")) {
+    $("wakeWordStatus").textContent = message || (state.wakeEnabled
+      ? "Ouvindo a palavra de ativação — o navegador pode usar seu serviço de voz"
+      : "Comando de voz contínuo desligado");
+  }
+}
+
+function stopWakeWord({ permanent = true } = {}) {
+  clearTimeout(state.wakeRestartHandle);
+  state.wakeRestartHandle = null;
+  if (permanent) {
+    state.wakeEnabled = false;
+    state.wakePaused = false;
+    state.wakeAwaitingCommandUntil = 0;
+  }
+  const recognition = state.wakeRecognition;
+  state.wakeRecognition = null;
+  try { recognition?.abort(); } catch (_error) {}
+  updateWakeWordUI();
+}
+
+function processWakeTranscript(transcript) {
+  const normalized = normalizedVoiceCommand(transcript);
+  const wakeIndex = normalized.indexOf("ei kemy");
+  if (wakeIndex >= 0) {
+    const command = normalized.slice(wakeIndex + "ei kemy".length).trim();
+    if (command) {
+      handleVoiceCommand(command);
+      return;
+    }
+    state.wakeAwaitingCommandUntil = Date.now() + 7000;
+    speakConfirmation("Estou ouvindo.");
+    updateWakeWordUI("Kemy acordou — diga o comando");
+    return;
+  }
+  if (Date.now() < state.wakeAwaitingCommandUntil) {
+    state.wakeAwaitingCommandUntil = 0;
+    handleVoiceCommand(transcript);
+    updateWakeWordUI();
+  }
+}
+
+function startWakeWord() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    updateWakeWordUI("Wake word indisponível neste navegador");
+    showToast("O navegador não oferece reconhecimento contínuo de voz.", "error");
+    return;
+  }
+  clearTimeout(state.wakeRestartHandle);
+  const recognition = new Recognition();
+  recognition.lang = "pt-BR";
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = () => updateWakeWordUI();
+  recognition.onresult = (event) => {
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      if (event.results[index].isFinal) processWakeTranscript(event.results[index][0]?.transcript || "");
+    }
+  };
+  recognition.onerror = (event) => {
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      stopWakeWord();
+      updateWakeWordUI("Permissão de microfone necessária");
+    }
+  };
+  recognition.onend = () => {
+    if (state.wakeRecognition === recognition) state.wakeRecognition = null;
+    if (state.wakeEnabled && !state.wakePaused) {
+      state.wakeRestartHandle = setTimeout(startWakeWord, 600);
+    }
+  };
+  state.wakeRecognition = recognition;
+  state.wakeEnabled = true;
+  state.wakePaused = false;
+  try {
+    recognition.start();
+    updateWakeWordUI();
+  } catch (_error) {
+    stopWakeWord();
+  }
+}
+
+function toggleWakeWord() {
+  if (state.wakeEnabled) {
+    stopWakeWord();
+    showToast("Palavra de ativação desligada.");
+  } else {
+    startWakeWord();
+  }
+}
+
 function toggleVoiceRecognition() {
   if (state.voiceListening && state.speechRecognition) {
     state.speechRecognition.stop();
@@ -152,12 +253,24 @@ function toggleVoiceRecognition() {
     return;
   }
   const recognition = new Recognition();
+  const resumeWakeAfter = state.wakeEnabled;
+  if (resumeWakeAfter) {
+    state.wakePaused = true;
+    try { state.wakeRecognition?.abort(); } catch (_error) {}
+    state.wakeRecognition = null;
+  }
   recognition.lang = "pt-BR";
   recognition.interimResults = false;
   recognition.continuous = false;
   recognition.maxAlternatives = 1;
   recognition.onstart = () => updateVoiceUI(true);
-  recognition.onend = () => updateVoiceUI(false);
+  recognition.onend = () => {
+    updateVoiceUI(false);
+    if (resumeWakeAfter && state.wakeEnabled) {
+      state.wakePaused = false;
+      state.wakeRestartHandle = setTimeout(startWakeWord, 500);
+    }
+  };
   recognition.onerror = (event) => {
     updateVoiceUI(false);
     const denied = event.error === "not-allowed" || event.error === "service-not-allowed";
@@ -704,6 +817,7 @@ async function logout() {
   exitFocusMode();
   state.speechRecognition?.abort();
   updateVoiceUI(false);
+  stopWakeWord();
   stopWorkspacePolling();
   clearWorkspaceStudio();
   clearPersistedSessionId();
@@ -2214,6 +2328,7 @@ on("focusSoundBtn", "click", () => {
   else stopFocusSound();
 });
 on("clapToggleBtn", "click", () => toggleClapListener());
+on("wakeWordToggleBtn", "click", toggleWakeWord);
 on("focusSpotifyToggle", "change", (event) => {
   state.focusSpotifyEnabled = Boolean(event.target.checked);
   localStorage.setItem("kemy.focusSpotify", state.focusSpotifyEnabled ? "on" : "off");
@@ -2333,6 +2448,7 @@ setSurface(state.activeSurface);
 if ($("focusSoundBtn")) $("focusSoundBtn").textContent = `Som ambiente: ${state.focusSoundEnabled ? "ligado" : "desligado"}`;
 if ($("focusSpotifyToggle")) $("focusSpotifyToggle").checked = state.focusSpotifyEnabled;
 updateClapUI(false, localStorage.getItem("kemy.clapEnabled") === "true" ? "Clique para reativar o microfone" : "Microfone desligado");
+updateWakeWordUI();
 clearWorkspaceStudio();
 checkAuth().catch(() => {
   $("loginView").classList.remove("hidden");
