@@ -560,6 +560,18 @@ svg {
   gap: 10px;
 }
 
+#voiceBtn.is-listening {
+  border-color: rgba(238, 78, 96, 0.72);
+  color: #d9344b;
+  background: rgba(238, 78, 96, 0.1);
+  box-shadow: 0 0 0 4px rgba(238, 78, 96, 0.08);
+  animation: voice-listening-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes voice-listening-pulse {
+  50% { box-shadow: 0 0 0 8px rgba(238, 78, 96, 0.03); }
+}
+
 
 .home-view {
   position: relative;

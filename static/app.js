@@ -32,6 +32,8 @@ const state = {
   clapFrame: null,
   clapPeaks: [],
   clapNoiseFloor: 0.015,
+  speechRecognition: null,
+  voiceListening: false,
 };
 
 const REASONING_PATTERNS = [
@@ -74,6 +76,103 @@ function showToast(message, type = "info") {
     toast.classList.remove("is-visible");
     setTimeout(() => toast.remove(), 220);
   }, 3600);
+}
+
+function speakConfirmation(message) {
+  if (!window.speechSynthesis || !message) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(message);
+  utterance.lang = "pt-BR";
+  utterance.rate = 1.04;
+  utterance.volume = 0.75;
+  window.speechSynthesis.speak(utterance);
+}
+
+function normalizedVoiceCommand(text) {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function handleVoiceCommand(transcript) {
+  const command = normalizedVoiceCommand(transcript);
+  if (!command) return;
+  if (/^(kemy )?(iniciar|ativar|abrir|comecar) (o )?modo foco$/.test(command)) {
+    enterFocusMode();
+    speakConfirmation("Modo foco iniciado.");
+    return;
+  }
+  if (/^(kemy )?(parar|encerrar|fechar|desativar) (o )?(modo )?foco$/.test(command)) {
+    exitFocusMode();
+    speakConfirmation("Modo foco encerrado.");
+    return;
+  }
+  if (command.includes("abrir spotify") || command.includes("wake up to reality")) {
+    openFocusSpotify();
+    speakConfirmation("Abrindo a playlist no Spotify.");
+    return;
+  }
+  const sendMatch = transcript.match(/^\s*(?:kemy\s+)?enviar\s+(?:mensagem\s+)?(.+)$/i);
+  if (sendMatch?.[1]) {
+    const prompt = sendMatch[1].trim();
+    if ($("prompt")) $("prompt").value = prompt;
+    runAgents(prompt, "chat").catch(showRunError);
+    return;
+  }
+  if ($("prompt")) {
+    const previous = $("prompt").value.trim();
+    $("prompt").value = previous ? `${previous} ${transcript}` : transcript;
+    $("prompt").focus();
+  }
+  showToast("Ditado inserido. Revise e toque em Enviar.", "success");
+}
+
+function updateVoiceUI(listening) {
+  state.voiceListening = listening;
+  const button = $("voiceBtn");
+  if (!button) return;
+  button.classList.toggle("is-listening", listening);
+  button.setAttribute("aria-pressed", String(listening));
+  button.textContent = listening ? "Ouvindo…" : "Voz";
+  button.title = listening ? "Parar ditado" : "Ditar comando";
+}
+
+function toggleVoiceRecognition() {
+  if (state.voiceListening && state.speechRecognition) {
+    state.speechRecognition.stop();
+    return;
+  }
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    showToast("Reconhecimento de voz não disponível neste navegador.", "error");
+    return;
+  }
+  const recognition = new Recognition();
+  recognition.lang = "pt-BR";
+  recognition.interimResults = false;
+  recognition.continuous = false;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = () => updateVoiceUI(true);
+  recognition.onend = () => updateVoiceUI(false);
+  recognition.onerror = (event) => {
+    updateVoiceUI(false);
+    const denied = event.error === "not-allowed" || event.error === "service-not-allowed";
+    showToast(denied ? "Permita o microfone para usar o ditado." : "Não consegui entender. Tente novamente.", "error");
+  };
+  recognition.onresult = (event) => {
+    const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+    if (transcript) handleVoiceCommand(transcript);
+  };
+  state.speechRecognition = recognition;
+  try {
+    recognition.start();
+  } catch (_error) {
+    updateVoiceUI(false);
+  }
 }
 
 function updateThemeIcon(theme) {
@@ -603,6 +702,8 @@ async function logout() {
   await api("/api/auth/logout", { method: "POST", body: "{}" });
   disableClapListener();
   exitFocusMode();
+  state.speechRecognition?.abort();
+  updateVoiceUI(false);
   stopWorkspacePolling();
   clearWorkspaceStudio();
   clearPersistedSessionId();
@@ -2150,7 +2251,7 @@ on("openSessionsBtn", "click", async () => {
 });
 on("plusBtn", "click", () => $("chatFileInput")?.click());
 on("homeAttachBtn", "click", () => $("homeFileInput")?.click());
-on("voiceBtn", "click", () => appendMessage("assistant", "Módulo de voz será ativado no próximo update. A infraestrutura de STT/TTS precisa ser conectada ao WebSocket primeiro."));
+on("voiceBtn", "click", toggleVoiceRecognition);
 on("closePreviewBtn", "click", hidePreview);
 on("previewFullscreenBtn", "click", togglePreviewFullscreen);
 on("previewTabLive", "click", () => setPreviewTab("live"));
