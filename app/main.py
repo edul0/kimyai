@@ -46,7 +46,7 @@ from .supabase_store import SupabaseStore
 from .github_service import GitHubService
 
 settings = get_settings()
-storage = Storage(settings.redis_url)
+storage = Storage(settings.redis_url, settings.storage_path)
 auth_limiter = AuthAttemptLimiter(storage)
 jobs = JobManager(storage, settings)
 supabase_auth = SupabaseStore(settings)

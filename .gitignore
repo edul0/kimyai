@@ -26,6 +26,9 @@ errors.txt
 progresso_extracao.json
 relatorio_otimizacao.json
 generated_documents/
+kemy_state.db
+kemy_state.db-shm
+kemy_state.db-wal
 
 # Links coletados (podem conter dados sensíveis de conta)
 links_anuncios.txt

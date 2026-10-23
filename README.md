@@ -1,13 +1,13 @@
 # Kimi AI
 
-Plataforma de agentes para coding, arquitetura, auditoria e deploy, com backend em FastAPI, interface web simples e persistencia opcional em Supabase e Redis.
+Plataforma de agentes para coding, arquitetura, auditoria e deploy, com backend em FastAPI, interface web simples e persistencia em SQLite local, Supabase e Redis.
 
 ## Visao geral
 
 - O projeto roda com entrypoint compativel em `agencia_kemy.py` e app principal em `app/main.py`.
 - A execucao acontece por jobs assíncronos em `POST /api/comando` com acompanhamento em `GET /api/jobs/{id}`.
 - O deploy principal foi pensado para GitHub + Render.
-- O sistema aceita Redis como cache/persistencia curta e Supabase como persistencia remota de sessoes, mensagens e jobs.
+- Sem Redis, o sistema usa SQLite local automaticamente para preservar sessoes, limites e aprendizado entre reinicializacoes. Redis continua sendo a opcao recomendada para multiplas instancias, e Supabase fornece persistencia remota de sessoes, mensagens e jobs.
 - A memoria local do Render e tratada apenas como cache. Sessoes, mensagens, jobs e artefatos recuperaveis devem ficar no Supabase.
 - Cada novo comando salva o turno do usuario em tempo real por conta antes mesmo do job terminar, evitando perda de contexto em quedas/deploy.
 - Quando houver dois projetos Supabase no ecossistema, use as variaveis `KIMI_SUPABASE_*` para o Kimi AI e deixe o Kanban isolado no projeto dele.

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     free_only: bool = Field(default=True, alias="FREE_ONLY")
     cors_origins: str = Field(default="*", alias="ORIGENS_CORS")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
+    storage_path: str | None = Field(default="generated_documents/kemy_state.db", alias="KEMY_STORAGE_PATH")
     job_ttl_seconds: int = Field(default=86400, alias="JOB_TTL_SECONDS")
     session_ttl_seconds: int = Field(default=604800, alias="SESSION_TTL_SECONDS")
     max_prompt_chars: int = Field(default=12000, alias="MAX_PROMPT_CHARS")
