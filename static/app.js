@@ -25,6 +25,7 @@ const state = {
   focusDeadline: 0,
   focusTimerHandle: null,
   focusSoundEnabled: localStorage.getItem("kemy.focusSound") !== "off",
+  focusSpotifyEnabled: localStorage.getItem("kemy.focusSpotify") !== "off",
   focusAudioContext: null,
   focusMusicHandle: null,
   clapStream: null,
@@ -142,6 +143,20 @@ function stopFocusSound() {
   state.focusMusicHandle = null;
 }
 
+function openFocusSpotify() {
+  const playlistId = "2p4dZysyDO3A0pZDuEzE0F";
+  let launcher = document.querySelector("iframe[data-kemy-spotify-launcher]");
+  if (!launcher) {
+    launcher = document.createElement("iframe");
+    launcher.dataset.kemySpotifyLauncher = "true";
+    launcher.hidden = true;
+    launcher.setAttribute("aria-hidden", "true");
+    document.body.appendChild(launcher);
+  }
+  launcher.src = `spotify:playlist:${playlistId}`;
+  showToast("Abrindo Wake Up to Reality no Spotify…", "success");
+}
+
 function enterFocusMode(minutes = 25) {
   state.focusActive = true;
   state.focusDeadline = Date.now() + minutes * 60 * 1000;
@@ -150,7 +165,12 @@ function enterFocusMode(minutes = 25) {
   clearInterval(state.focusTimerHandle);
   state.focusTimerHandle = setInterval(updateFocusTimer, 1000);
   updateFocusTimer();
-  startFocusSound().catch(() => {});
+  if (state.focusSpotifyEnabled) {
+    stopFocusSound();
+    openFocusSpotify();
+  } else {
+    startFocusSound().catch(() => {});
+  }
 }
 
 function exitFocusMode() {
@@ -2093,6 +2113,10 @@ on("focusSoundBtn", "click", () => {
   else stopFocusSound();
 });
 on("clapToggleBtn", "click", () => toggleClapListener());
+on("focusSpotifyToggle", "change", (event) => {
+  state.focusSpotifyEnabled = Boolean(event.target.checked);
+  localStorage.setItem("kemy.focusSpotify", state.focusSpotifyEnabled ? "on" : "off");
+});
 on("logoutBtn", "click", () => logout().catch(console.error));
 on("newSessionBtn", "click", () => newSession({ openChat: true }).catch(console.error));
 on("backHomeBtn", "click", showHome);
@@ -2206,6 +2230,7 @@ updatePreviewFullscreenUI();
 setPreviewTab("live");
 setSurface(state.activeSurface);
 if ($("focusSoundBtn")) $("focusSoundBtn").textContent = `Som ambiente: ${state.focusSoundEnabled ? "ligado" : "desligado"}`;
+if ($("focusSpotifyToggle")) $("focusSpotifyToggle").checked = state.focusSpotifyEnabled;
 updateClapUI(false, localStorage.getItem("kemy.clapEnabled") === "true" ? "Clique para reativar o microfone" : "Microfone desligado");
 clearWorkspaceStudio();
 checkAuth().catch(() => {

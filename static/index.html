@@ -265,6 +265,10 @@
           </div>
           <button id="clapToggleBtn" class="secondary-btn" type="button">Ativar palmas</button>
           <span id="clapStatus" class="focus-setting-status">Microfone desligado</span>
+          <label class="focus-spotify-setting">
+            <input id="focusSpotifyToggle" type="checkbox" checked />
+            Abrir a playlist Wake up to Reality no Spotify ao iniciar
+          </label>
         </section>
       </dialog>
 
@@ -274,6 +278,7 @@
         <h2 id="focusTimer">25:00</h2>
         <p id="focusMessage">Respire. Uma tarefa de cada vez.</p>
         <div class="focus-controls">
+          <a id="focusSpotifyLink" class="secondary-btn" href="https://open.spotify.com/playlist/2p4dZysyDO3A0pZDuEzE0F" target="_blank" rel="noreferrer">Abrir Wake Up to Reality</a>
           <button id="focusSoundBtn" class="secondary-btn" type="button">Som ambiente: ligado</button>
           <button id="focusResetBtn" class="secondary-btn" type="button">Reiniciar 25 min</button>
           <button id="focusExitBtn" type="button">Encerrar foco</button>

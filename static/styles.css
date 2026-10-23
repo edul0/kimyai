@@ -2356,6 +2356,22 @@ body.drag-active::after {
   font-size: 11px;
 }
 
+.focus-spotify-setting {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-strong);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.focus-spotify-setting input {
+  width: 16px;
+  height: 16px;
+  accent-color: #1ed760;
+}
+
 .focus-overlay {
   position: fixed;
   inset: 0;
@@ -2395,6 +2411,12 @@ body.drag-active::after {
 .focus-controls button {
   min-height: 42px;
   border-radius: 999px;
+}
+
+.focus-controls a {
+  min-height: 42px;
+  border-radius: 999px;
+  text-decoration: none;
 }
 
 .focus-orb {
