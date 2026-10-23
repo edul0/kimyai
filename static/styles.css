@@ -1261,6 +1261,36 @@ svg {
   background: rgba(var(--surface-rgb), 0.5);
 }
 
+.result-feedback {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.result-feedback button {
+  min-width: 38px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(var(--surface-rgb), 0.7);
+  color: var(--ink-strong);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.result-feedback button:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.result-feedback.is-sent {
+  color: var(--accent);
+}
+
 .code-file-table {
   display: grid;
   gap: 8px;

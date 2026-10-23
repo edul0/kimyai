@@ -72,6 +72,16 @@ class LearningRuntimeTests(unittest.TestCase):
         self.assertEqual(gemini["quality"]["samples"], 8)
         self.assertEqual(gemini["quality"]["avg_quality_score"], 95.0)
 
+    def test_human_feedback_is_private_and_idempotent(self):
+        storage = Storage()
+        traces = LearningTraceStore(storage)
+        self.assertTrue(traces.record_feedback("job-1", "coding", "ollama", "coder", "helpful"))
+        self.assertFalse(traces.record_feedback("job-1", "coding", "ollama", "coder", "unhelpful"))
+        quality = traces.quality_metrics("coding", "ollama")
+        self.assertEqual(quality["helpful_feedback"], 1)
+        self.assertEqual(quality["unhelpful_feedback"], 0)
+        self.assertNotIn("prompt", str(storage.get_json("learning:feedback-receipt:job-1")))
+
 
 if __name__ == "__main__":
     unittest.main()

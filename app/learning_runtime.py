@@ -190,6 +190,33 @@ class LearningTraceStore:
         }
         self.storage.set_json(quality_key, payload, ttl=self.ttl_seconds)
 
+    def record_feedback(self, job_id: str, mode: str, provider: str, model: str, rating: str) -> bool:
+        normalized = str(rating).strip().lower()
+        if normalized not in {"helpful", "unhelpful"}:
+            raise ValueError("rating invalido")
+        receipt_key = f"learning:feedback-receipt:{job_id}"
+        if self.storage.get_json(receipt_key):
+            return False
+        quality_key = f"learning:quality:{mode}:{provider}"
+        quality = self.storage.get_json(quality_key, {}) or {}
+        helpful = int(quality.get("helpful_feedback") or 0) + int(normalized == "helpful")
+        unhelpful = int(quality.get("unhelpful_feedback") or 0) + int(normalized == "unhelpful")
+        quality.update({
+            "helpful_feedback": helpful,
+            "unhelpful_feedback": unhelpful,
+            "feedback_score": round((helpful + 1) / (helpful + unhelpful + 2), 4),
+            "updated_at": time.time(),
+        })
+        self.storage.set_json(quality_key, quality, ttl=self.ttl_seconds)
+        self.storage.set_json(receipt_key, {
+            "rating": normalized,
+            "mode": mode,
+            "provider": provider,
+            "model": model,
+            "ts": time.time(),
+        }, ttl=self.ttl_seconds)
+        return True
+
     def snapshot(self) -> dict[str, Any]:
         traces = list(self.storage.get_json("learning:delivery-traces", []) or [])
         return {

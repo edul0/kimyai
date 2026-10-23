@@ -259,6 +259,11 @@ class LLMRouter:
             normalized_quality = min(max(float(quality.get("avg_quality_score") or 0.0) / 100.0, 0.0), 1.0)
             validation_rate = float(quality.get("validation_successes") or 0) / quality_samples
             quality_bonus = ((normalized_quality * 0.38) + (validation_rate * 0.12)) * evidence_weight
+        feedback_total = int(quality.get("helpful_feedback") or 0) + int(quality.get("unhelpful_feedback") or 0)
+        if feedback_total:
+            feedback_weight = min(feedback_total / 5.0, 1.0)
+            feedback_score = float(quality.get("feedback_score") or 0.5)
+            quality_bonus += (feedback_score - 0.5) * 0.7 * feedback_weight
         if metrics.attempts == 0:
             return 0.5 - base_index * 0.001 + quality_bonus
         success_rate = metrics.successes / max(metrics.attempts, 1)

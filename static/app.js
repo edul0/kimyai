@@ -915,7 +915,7 @@ function renderJob(job) {
     const inferredMode = job.modo || inferModeFromResult(job.resultado, state.lastOutput);
     if (inferredMode) state.lastResultMode = inferredMode;
     if (inferredMode) setSurface(inferSurfaceFromMode(inferredMode));
-    appendResult(job.resultado, state.lastOutput);
+    appendResult(job.resultado, state.lastOutput, job.job_id);
     state.renderedJobs.add(job.job_id);
     if (job.resultado.git_output) {
       const chatLog = $("chatLog");
@@ -1382,9 +1382,10 @@ function appendMessage(role, text) {
   
   $("chatLog").appendChild(node);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
+  return node;
 }
 
-function appendResult(result, fallbackText) {
+function appendResult(result, fallbackText, jobId = "") {
   const downloadableFiles = prioritizeFiles((result.files || []).filter((file) => file.download_url));
   const inlinePreview = extractPreviewHtml(result, fallbackText);
   const previewUrl = extractPreviewUrl(result);
@@ -1418,6 +1419,7 @@ function appendResult(result, fallbackText) {
     node.querySelector("[data-open-inline-preview]")?.addEventListener("click", () => showPreview(inlinePreview));
     node.querySelector("[data-publish-site]")?.addEventListener("click", () => launchPublishedSite("internal"));
     node.querySelector("[data-publish-vercel]")?.addEventListener("click", () => launchPublishedSite("vercel"));
+    attachResultFeedback(node, jobId);
     if (inlinePreview) showPreview(inlinePreview);
     else if (previewUrl) showPreviewUrl(previewUrl);
     node.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -1456,6 +1458,7 @@ function appendResult(result, fallbackText) {
       $("chatLog").appendChild(node);
       node.querySelector("[data-publish-site]")?.addEventListener("click", () => launchPublishedSite("internal"));
       node.querySelector("[data-publish-vercel]")?.addEventListener("click", () => launchPublishedSite("vercel"));
+      attachResultFeedback(node, jobId);
       node.scrollIntoView({ block: "end", behavior: "smooth" });
       return;
     }
@@ -1476,11 +1479,12 @@ function appendResult(result, fallbackText) {
       `;
       $("chatLog").appendChild(node);
       node.querySelector("[data-open-inline-preview]")?.addEventListener("click", () => showPreview(inlinePreview));
+      attachResultFeedback(node, jobId);
       showPreview(inlinePreview);
       node.scrollIntoView({ block: "end", behavior: "smooth" });
       return;
     }
-    appendMessage("assistant", fallbackText);
+    attachResultFeedback(appendMessage("assistant", fallbackText), jobId);
     return;
   }
   const node = document.createElement("div");
@@ -1498,7 +1502,37 @@ function appendResult(result, fallbackText) {
     </div>
   `;
   $("chatLog").appendChild(node);
+  attachResultFeedback(node, jobId);
   node.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+function attachResultFeedback(node, jobId) {
+  if (!node || !jobId) return;
+  const bar = document.createElement("div");
+  bar.className = "result-feedback";
+  bar.innerHTML = `
+    <span>Esta entrega ajudou?</span>
+    <button type="button" data-rating="helpful" aria-label="Marcar como útil">Sim</button>
+    <button type="button" data-rating="unhelpful" aria-label="Marcar como não útil">Não</button>
+  `;
+  node.appendChild(bar);
+  bar.querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (bar.dataset.sent) return;
+      try {
+        const response = await api(`/api/jobs/${jobId}/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rating: button.dataset.rating }),
+        });
+        bar.dataset.sent = "true";
+        bar.classList.add("is-sent");
+        bar.innerHTML = `<span>${escapeHtml(response.message || "Obrigado. A Kemy vai aprender com isso.")}</span>`;
+      } catch (error) {
+        showToast(error.message || "Não foi possível registrar o feedback.", "error");
+      }
+    });
+  });
 }
 
 function extractImageSource(result) {

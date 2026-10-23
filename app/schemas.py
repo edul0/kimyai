@@ -44,6 +44,10 @@ class JobCreateResponse(BaseModel):
     status_url: str
 
 
+class JobFeedbackRequest(BaseModel):
+    rating: Literal["helpful", "unhelpful"]
+
+
 class SitePublishRequest(BaseModel):
     session_id: str | None = None
     slug: str | None = Field(default=None, max_length=80)

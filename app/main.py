@@ -34,6 +34,7 @@ from .jobs import JobManager, utcnow
 from .schemas import (
     ComandoRequest,
     JobCreateResponse,
+    JobFeedbackRequest,
     JobState,
     NovoAgente,
     SitePublishRequest,
@@ -1609,6 +1610,30 @@ async def cancel_job(job_id: str, request: Request):
         "job_id": job_id,
         "job_status": updated.status,
         "message": "Cancelamento solicitado.",
+    }
+
+
+@app.post("/api/jobs/{job_id}/feedback")
+async def job_feedback(job_id: str, payload: JobFeedbackRequest, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    job = await _load_job(job_id)
+    if not job or job.status != "done" or not job.resultado:
+        raise HTTPException(404, "Resultado nao encontrado.")
+    session = await _load_session_for_owner(job.session_id, owner)
+    if not session:
+        raise HTTPException(404, "Sessao nao encontrada.")
+    if session.get("owner") and session.get("owner") != owner:
+        raise HTTPException(403, "Sessao de outro usuario.")
+    provider = str(job.resultado.get("provider") or "unknown")
+    model = str(job.resultado.get("model") or "")
+    trace_store = jobs.router.trace_store
+    if not trace_store:
+        raise HTTPException(503, "Aprendizado indisponivel.")
+    accepted = trace_store.record_feedback(job_id, job.modo, provider, model, payload.rating)
+    return {
+        "status": "ok",
+        "accepted": accepted,
+        "message": "Feedback registrado." if accepted else "Feedback ja registrado para esta entrega.",
     }
 
 
