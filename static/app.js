@@ -22,10 +22,13 @@ const state = {
   canceledJobsNotified: new Set(),
   activeSurface: localStorage.getItem("kemy.surface") || "studio",
   focusActive: false,
+  focusPhase: "focus",
+  focusDurationMinutes: 25,
   focusDeadline: 0,
   focusTimerHandle: null,
   focusSoundEnabled: localStorage.getItem("kemy.focusSound") !== "off",
   focusSpotifyEnabled: localStorage.getItem("kemy.focusSpotify") !== "off",
+  focusNotificationsEnabled: localStorage.getItem("kemy.focusNotifications") === "on",
   focusAudioContext: null,
   focusMusicHandle: null,
   clapStream: null,
@@ -106,6 +109,13 @@ function normalizedVoiceCommand(text) {
 function handleVoiceCommand(transcript) {
   const command = normalizedVoiceCommand(transcript);
   if (!command) return;
+  const timedFocus = command.match(/(?:iniciar|ativar|comecar) (?:o )?(?:modo )?foco (?:por |de )?(\d{1,3}) minutos?/);
+  if (timedFocus) {
+    const minutes = Math.min(Math.max(Number(timedFocus[1]), 1), 180);
+    enterFocusMode(minutes);
+    speakConfirmation(`Modo foco iniciado por ${minutes} minutos.`);
+    return;
+  }
   if (/^(kemy )?(iniciar|ativar|abrir|comecar) (o )?modo foco$/.test(command)) {
     enterFocusMode();
     speakConfirmation("Modo foco iniciado.");
@@ -315,9 +325,61 @@ function updateFocusTimer() {
   const seconds = String(totalSeconds % 60).padStart(2, "0");
   if ($("focusTimer")) $("focusTimer").textContent = `${minutes}:${seconds}`;
   if (!remaining) {
-    exitFocusMode();
-    showToast("Ciclo de foco concluído.", "success");
+    completeFocusPhase();
   }
+}
+
+function focusStatsKey() {
+  const today = new Date();
+  return `kemy.focusStats:${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+}
+
+function getFocusStats() {
+  try { return JSON.parse(localStorage.getItem(focusStatsKey()) || "{}") || {}; }
+  catch (_error) { return {}; }
+}
+
+function renderFocusStats() {
+  const stats = getFocusStats();
+  const cycles = Number(stats.cycles || 0);
+  const minutes = Number(stats.minutes || 0);
+  if ($("focusStats")) {
+    $("focusStats").textContent = cycles
+      ? `Hoje: ${cycles} ${cycles === 1 ? "ciclo" : "ciclos"} · ${minutes} min de foco.`
+      : "Hoje: nenhum ciclo concluído.";
+  }
+}
+
+function recordCompletedFocus() {
+  const stats = getFocusStats();
+  stats.cycles = Number(stats.cycles || 0) + 1;
+  stats.minutes = Number(stats.minutes || 0) + state.focusDurationMinutes;
+  localStorage.setItem(focusStatsKey(), JSON.stringify(stats));
+  renderFocusStats();
+}
+
+function sendFocusNotification(title, body) {
+  if (!state.focusNotificationsEnabled || window.Notification?.permission !== "granted") return;
+  try { new Notification(title, { body, tag: "kemy-focus" }); } catch (_error) {}
+}
+
+function completeFocusPhase() {
+  if (state.focusPhase === "focus") {
+    recordCompletedFocus();
+    state.focusPhase = "break";
+    state.focusDeadline = Date.now() + 5 * 60 * 1000;
+    if ($("focusMessage")) $("focusMessage").textContent = "Pausa de 5 minutos. Levante, respire e beba água.";
+    stopFocusSound();
+    sendFocusNotification("Foco concluído", "Hora de uma pausa de 5 minutos.");
+    speakConfirmation("Ciclo concluído. Hora de uma pausa.");
+    showToast("Ciclo concluído. Pausa de 5 minutos iniciada.", "success");
+    updateFocusTimer();
+    return;
+  }
+  sendFocusNotification("Pausa concluída", "Você está pronto para o próximo ciclo.");
+  speakConfirmation("Pausa concluída.");
+  exitFocusMode();
+  showToast("Pausa concluída. Pronto para o próximo ciclo.", "success");
 }
 
 function scheduleFocusTone() {
@@ -371,12 +433,16 @@ function openFocusSpotify() {
 
 function enterFocusMode(minutes = 25) {
   state.focusActive = true;
-  state.focusDeadline = Date.now() + minutes * 60 * 1000;
+  state.focusPhase = "focus";
+  state.focusDurationMinutes = Math.min(Math.max(Number(minutes) || 25, 1), 180);
+  state.focusDeadline = Date.now() + state.focusDurationMinutes * 60 * 1000;
   document.body.classList.add("focus-active");
   $("focusOverlay")?.classList.remove("hidden");
   clearInterval(state.focusTimerHandle);
   state.focusTimerHandle = setInterval(updateFocusTimer, 1000);
   updateFocusTimer();
+  renderFocusStats();
+  if ($("focusMessage")) $("focusMessage").textContent = "Respire. Uma tarefa de cada vez.";
   if (state.focusSpotifyEnabled) {
     stopFocusSound();
     openFocusSpotify();
@@ -388,6 +454,7 @@ function enterFocusMode(minutes = 25) {
 function exitFocusMode() {
   state.focusActive = false;
   state.focusDeadline = 0;
+  state.focusPhase = "focus";
   clearInterval(state.focusTimerHandle);
   state.focusTimerHandle = null;
   stopFocusSound();
@@ -2320,6 +2387,21 @@ on("themeToggle", "click", () => setTheme(document.documentElement.dataset.theme
 on("focusModeBtn", "click", toggleFocusMode);
 on("focusExitBtn", "click", exitFocusMode);
 on("focusResetBtn", "click", () => enterFocusMode(25));
+on("focusLongBtn", "click", () => enterFocusMode(50));
+on("focusNotifyBtn", "click", async () => {
+  if (!("Notification" in window)) {
+    showToast("Notificações não são suportadas neste navegador.", "error");
+    return;
+  }
+  if (!state.focusNotificationsEnabled) {
+    const permission = await Notification.requestPermission();
+    state.focusNotificationsEnabled = permission === "granted";
+  } else {
+    state.focusNotificationsEnabled = false;
+  }
+  localStorage.setItem("kemy.focusNotifications", state.focusNotificationsEnabled ? "on" : "off");
+  $("focusNotifyBtn").textContent = `Notificações: ${state.focusNotificationsEnabled ? "ligadas" : "desligadas"}`;
+});
 on("focusSoundBtn", "click", () => {
   state.focusSoundEnabled = !state.focusSoundEnabled;
   localStorage.setItem("kemy.focusSound", state.focusSoundEnabled ? "on" : "off");
@@ -2447,6 +2529,8 @@ setPreviewTab("live");
 setSurface(state.activeSurface);
 if ($("focusSoundBtn")) $("focusSoundBtn").textContent = `Som ambiente: ${state.focusSoundEnabled ? "ligado" : "desligado"}`;
 if ($("focusSpotifyToggle")) $("focusSpotifyToggle").checked = state.focusSpotifyEnabled;
+if ($("focusNotifyBtn")) $("focusNotifyBtn").textContent = `Notificações: ${state.focusNotificationsEnabled ? "ligadas" : "desligadas"}`;
+renderFocusStats();
 updateClapUI(false, localStorage.getItem("kemy.clapEnabled") === "true" ? "Clique para reativar o microfone" : "Microfone desligado");
 updateWakeWordUI();
 clearWorkspaceStudio();

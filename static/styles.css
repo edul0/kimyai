@@ -2410,6 +2410,12 @@ body.drag-active::after {
 }
 
 .focus-overlay p { color: rgba(239, 255, 248, 0.7); }
+.focus-overlay .focus-stats {
+  margin: 2px 0 0;
+  color: rgba(126, 245, 197, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+}
 .focus-overlay small { margin-top: 18px; color: rgba(239, 255, 248, 0.45); }
 
 .focus-controls {
