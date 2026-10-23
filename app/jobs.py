@@ -178,12 +178,17 @@ class JobManager:
         if self._is_cancel_requested(job.job_id):
             raise JobCanceledError("Execucao cancelada pelo usuario.")
 
-    def list_recent(self) -> list[dict[str, Any]]:
+    def list_recent(self, owner: str | None = None) -> list[dict[str, Any]]:
         jobs = []
         for key in self.storage.keys("job:"):
             data = self.storage.get_json(key)
-            if data:
-                jobs.append(data)
+            if not data:
+                continue
+            if owner is not None:
+                session = self.storage.get_json(f"session:{data.get('session_id')}", {}) or {}
+                if not session.get("owner") or session.get("owner") != owner:
+                    continue
+            jobs.append(data)
         return sorted(jobs, key=lambda item: item.get("updated_at", ""), reverse=True)[:30]
 
     async def run(self, job_id: str) -> None:

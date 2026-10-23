@@ -361,7 +361,7 @@ async def _hydrate_session_from_supabase(session_id: str, owner: str | None) -> 
 async def _load_session_for_owner(session_id: str, owner: str | None) -> dict | None:
     data = storage.get_json(f"session:{session_id}")
     if data:
-        if data.get("owner") and owner and data.get("owner") != owner:
+        if owner is not None and data.get("owner") != owner:
             return None
         return data
     return await _hydrate_session_from_supabase(session_id, owner)
@@ -1291,7 +1291,7 @@ async def listar_sessoes(request: Request):
     sessions_by_id = {}
     for key in storage.keys("session:"):
         data = storage.get_json(key)
-        if not data or (data.get("owner") and data.get("owner") != owner):
+        if not data or data.get("owner") != owner:
             continue
         history = data.get("historico", [])
         preview = _preview_from_history(history)
@@ -1550,8 +1550,9 @@ async def vision_analyze(payload: VisionAnalyzeRequest, request: Request):
 
 
 @app.get("/api/jobs")
-async def listar_jobs():
-    return {"jobs": jobs.list_recent()}
+async def listar_jobs(request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
+    return {"jobs": jobs.list_recent(owner=owner)}
 
 
 @app.get("/api/cache/status")
@@ -1583,9 +1584,13 @@ async def session_analytics(sid: str, request: Request):
 
 
 @app.get("/api/jobs/{job_id}")
-async def job_status(job_id: str):
+async def job_status(job_id: str, request: Request):
+    owner = token_subject(request.cookies.get(COOKIE_NAME), settings)
     job = await _load_job(job_id)
     if not job:
+        raise HTTPException(404, "Job nao encontrado.")
+    session = await _load_session_for_owner(job.session_id, owner)
+    if not session or session.get("owner") != owner:
         raise HTTPException(404, "Job nao encontrado.")
     return job.model_dump()
 

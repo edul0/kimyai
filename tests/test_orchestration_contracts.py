@@ -8,6 +8,21 @@ from app.storage import Storage
 
 
 class OrchestrationContractsTests(unittest.TestCase):
+    def test_recent_jobs_are_isolated_by_session_owner(self):
+        storage = Storage()
+        manager = JobManager(storage, Settings())
+        storage.set_json("session:alice-session", {"session_id": "alice-session", "owner": "alice@example.com"})
+        storage.set_json("session:bob-session", {"session_id": "bob-session", "owner": "bob@example.com"})
+        storage.set_json("session:legacy-session", {"session_id": "legacy-session"})
+        manager.create("alice-session", "pedido alice", "coding")
+        manager.create("bob-session", "pedido bob", "coding")
+        manager.create("legacy-session", "pedido legado", "coding")
+
+        alice_jobs = manager.list_recent(owner="alice@example.com")
+        self.assertEqual(len(alice_jobs), 1)
+        self.assertEqual(alice_jobs[0]["session_id"], "alice-session")
+        self.assertFalse(any(item["session_id"] == "legacy-session" for item in alice_jobs))
+
     def test_daily_request_routes_to_planning_mode(self):
         mode = classify_request_mode("organize um checklist para minha rotina de estudos", "coding")
         self.assertEqual(mode, "planejamento")
